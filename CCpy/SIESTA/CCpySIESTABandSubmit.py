@@ -381,8 +381,13 @@ def load_system_config(system_dir: Path, mode: str, config_path=None):
     cfg["moiety"] = list(DEFAULTS["moiety"])
     cfg["steps"] = MODES[mode]["steps"]
 
-    def _apply_yaml(yml_path: Path) -> None:
-        if not yml_path.exists():
+    def _apply_yaml(yml_path: Optional[Path]) -> None:
+        # DEFAULT_SHARED_CONFIG is resolve_sibling(...), which returns None when
+        # the companion yaml is nowhere to be found - e.g. an environment
+        # installed before SIESTA/*yaml was added to setup.py package_data.
+        # Keep the "skip what isn't there" behaviour rather than blowing up on
+        # None.exists().
+        if yml_path is None or not yml_path.exists():
             return
         with open(yml_path) as f:
             user_cfg = yaml.safe_load(f) or {}
