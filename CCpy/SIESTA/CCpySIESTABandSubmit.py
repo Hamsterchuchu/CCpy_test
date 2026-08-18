@@ -178,12 +178,14 @@ def submit_and_show_jobid(qsub_cmd: str) -> None:
 def installed_siesta_dir() -> Optional[Path]:
     """CCpy/SIESTA/ inside the installed CCpy package, or None if unavailable.
 
-    siesta_band_config.yaml lives next to this file *in the source tree*, but
-    the copy that actually runs does not: setup.py lists this script in
-    `scripts=`, so `pip install .` copies it into <env>/bin/ (and the older
-    easy_install/egg route ran it out of EGG-INFO/scripts/). Either way
-    Path(__file__).parent is <env>/bin, not CCpy/SIESTA/ - so the package
-    directory has to be found by importing CCpy instead.
+    siesta_band_config.yaml and siesta_band_workflow.py live next to this file
+    *in the source tree*, but the copy that actually runs does not: setup.py
+    lists this script in `scripts=`, so `pip install .` copies it into
+    <env>/bin/ (and the older easy_install/egg route ran it out of
+    EGG-INFO/scripts/). Either way Path(__file__).parent is <env>/bin, not
+    CCpy/SIESTA/ - so the package directory has to be found by importing CCpy
+    instead. siesta_band_workflow.py in particular is not registered in
+    CCpy/bin/, so it exists *only* as a package module.
     """
     try:
         import CCpy
@@ -424,7 +426,14 @@ class SiestaBandJobSubmit(JS):
 
     def __init__(self, inputfile, queue, n_of_cpu, node=None, script_dir=None):
         super().__init__(inputfile, queue, n_of_cpu, node=node)
-        self.script_dir = script_dir or str(Path(__file__).resolve().parent)
+        # _build_pipeline_cmd() looks for siesta_band_workflow.py under this
+        # directory, and that file is only ever a package module - it is not in
+        # CCpy/bin/, so it never lands in <env>/bin/ next to this script. Same
+        # lookup as the shared yaml: source-tree sibling first, installed
+        # package second.
+        workflow = resolve_sibling("siesta_band_workflow.py")
+        self.script_dir = script_dir or str(
+            workflow.parent if workflow else Path(__file__).resolve().parent)
 
     def _build_pipeline_cmd(self, label: str, cfg: dict) -> str:
         """Build the 'python siesta_band_workflow.py pipeline ...' command line for one system."""
