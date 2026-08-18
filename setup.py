@@ -1,27 +1,48 @@
-from distutils.core import setup
-from setuptools import setup, find_packages
 import os
+from setuptools import setup, find_packages
 
 bin_path = "./CCpy/bin/"
 script_files = [bin_path + f for f in os.listdir(bin_path)]
 script_files.sort()
 
+# -- Runtime dependencies -------------------------------------------------------
+# NOTE: this list was previously built but never handed to setup(), so it had no
+# effect at all; it also lost an entry to a missing comma ('matplotlib' 'pandas'
+# concatenates into the nonexistent package 'matplotlibpandas').
+#
+# Only packages that CCpy imports on ordinary use are listed. Optional, heavy or
+# currently-unused extras live in extras_require below, so a plain
+# `pip install .` never drags them in.
 install_requires = [
-    'matplotlib'
-    'pandas',
     'numpy',
+    'pandas',
+    'matplotlib',
     'pymatgen',
-    'tables',
+    'pymatgen-analysis-diffusion',   # diffusion/AIMD analysis (split off pymatgen)
+    'custodian',                     # VASP error handling (VASPio, VASPOptLoop)
+    'PyYAML',                        # queue_config.yaml, vasp_default.yaml, INCAR presets
+    'prettytable',                   # analyze_aimd result tables
+    'ase',                           # structure engine of CCpyAlloyGen
+    'spglib',                        # symmetry (also pulled in by pymatgen)
 ]
+
+# Not installed by default: these back commands that are not in routine use, and
+# 'tables'/'netCDF4' in particular are heavy builds that the lab environments
+# have deliberately gone without.
+extras_require = {
+    'atk': ['tables', 'netCDF4'],                     # CCpy/ATK/*
+    'extras': ['scikit-image', 'seekpath', 'mpld3'],  # 3D Brillouin zone, band paths, GaussSum plots
+}
+
 setup(
     name='CCpy',
     version='1.21',
-    #packages=['CCpy','CCpy/ATAT','CCpy/ATK','CCpy/CASM','CCpy/Gaussian', 'CCpy/Gaussian/myGausssum',
-    #          'CCpy/IKST','CCpy/Package','CCpy/Qchem','CCpy/Queue','CCpy/Tools','CCpy/VASP'],
     packages=find_packages(),
     package_data={'CCpy': ['Queue/queue_config.yaml', 'VASP/*yaml', 'VASP/vdw_kernel.bindat',
                            'SIESTA/*yaml']},
     include_package_data=True,
+    install_requires=install_requires,
+    extras_require=extras_require,
     url='https://github.com/91bsjun/CCpy',
     license='',
     author='Byeongsun Jun',
