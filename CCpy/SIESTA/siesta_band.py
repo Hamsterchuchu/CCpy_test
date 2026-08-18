@@ -1,7 +1,7 @@
 #!/home/shared/anaconda3/envs/siesta/bin/python
 # -*- coding: utf-8 -*-
 """
-siesta_band_workflow.py
+siesta_band.py
 ========================
 
 Single consolidated driver for the SIESTA Band / FatBand / DOS workflow.
@@ -30,7 +30,7 @@ script, so any existing usage/notes transfer directly - just prefix the
 command with the sub-command name, e.g.:
 
     OLD: python siesta_bandplot.py -e -2 -E 2 --lw-band 1
-    NEW: python siesta_band_workflow.py plot-band -e -2 -E 2 --lw-band 1
+    NEW: python -m CCpy.SIESTA.siesta_band plot-band -e -2 -E 2 --lw-band 1
 
 Running with no sub-command prints the menu below and exits (same
 convention as CCpyJobSubmit.py in this lab's CCpy framework).
@@ -106,7 +106,7 @@ def bootstrap_reexec_if_needed() -> None:
             continue
         if probe.returncode != 0:
             continue
-        print(f"[siesta_band_workflow] current python is missing numpy/matplotlib; "
+        print(f"[siesta_band] current python is missing numpy/matplotlib; "
               f"relaunching under {candidate}", file=sys.stderr)
         sys.stderr.flush()
         os.environ[_REEXEC_GUARD_ENV] = "1"
@@ -957,7 +957,7 @@ def add_genfdf_subparser(subparsers):
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=
         " -------------------------------------------------------------------------------------------------- \n"
-        " python siesta_band_workflow.py genfdf --mode all \\\n"
+        " python -m CCpy.SIESTA.siesta_band genfdf --mode all \\\n"
         "        --fatbands --ef-window 15 --bandpath 1d --axis c --carfile CAR_POSCAR/SWNT7-6W.car \n"
         " -------------------------------------------------------------------------------------------------- \n"
         " Note: this sub-command only writes files (fdf + directories); it does not submit anything to\n"
@@ -1479,9 +1479,9 @@ def add_fatband_subparser(subparsers):
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=
         " -------------------------------------------------------------------------------------------------------------------- \n"
-        " python siesta_band_workflow.py fatband --element  \n"
-        " python siesta_band_workflow.py fatband --list-atoms --list-cols 12  \n"
-        " python siesta_band_workflow.py fatband --moiety-decomp --moiety Tube:1-508 --moiety Ads:509-511  \n"
+        " python -m CCpy.SIESTA.siesta_band fatband --element  \n"
+        " python -m CCpy.SIESTA.siesta_band fatband --list-atoms --list-cols 12  \n"
+        " python -m CCpy.SIESTA.siesta_band fatband --moiety-decomp --moiety Tube:1-508 --moiety Ads:509-511  \n"
         " -------------------------------------------------------------------------------------------------------------------- \n"
         " Atom indices for --moiety are always entered manually (use --list-atoms to look them up) - \n"
         " automatic bond-based detection was tried and dropped: chemisorbed adsorbates sit close enough \n"
@@ -1966,7 +1966,7 @@ def add_plot_band_subparser(subparsers):
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=
         " ----------------------------------------------------------------------------------------------- \n"
-        " python siesta_band_workflow.py plot-band -e -3 -E 3 --lw-band 2  \n"
+        " python -m CCpy.SIESTA.siesta_band plot-band -e -3 -E 3 --lw-band 2  \n"
         " ----------------------------------------------------------------------------------------------- \n"
     )
     ap.add_argument("--basename", default=None, help="basename for <basename>.bands (default: auto-detect)")
@@ -2264,7 +2264,7 @@ def add_plot_fatband_subparser(subparsers):
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=
         " -------------------------------------------------------------------------------------------------------------------------------- \n"
-        " python siesta_band_workflow.py plot-fatband --fat-auto -e -2 -E 2 --lw-band 1 --each --fat-cmap inferno [--fat-only] \n"
+        " python -m CCpy.SIESTA.siesta_band plot-fatband --fat-auto -e -2 -E 2 --lw-band 1 --each --fat-cmap inferno [--fat-only] \n"
         "   --basename option: shown as k-symbol labels on the x-axis \n"
         " -------------------------------------------------------------------------------------------------------------------------------- \n"
     )
@@ -2507,7 +2507,7 @@ def add_plot_dos_subparser(subparsers):
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=
         " --------------------------------------------------------------------------- \n"
-        "  python siesta_band_workflow.py plot-dos   \n"
+        "  python -m CCpy.SIESTA.siesta_band plot-dos   \n"
         " --------------------------------------------------------------------------- \n"
     )
     ap.add_argument("dos", nargs="?", default=None, help="SIESTA DOS file (default: auto-detect *.DOS)")
@@ -2619,7 +2619,7 @@ def add_pipeline_subparser(subparsers):
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=
         " -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- \n"
-        " python siesta_band_workflow.py pipeline --label SWNT7-6W --carfile CAR_POSCAR/SWNT7-6W.car \\\n"
+        " python -m CCpy.SIESTA.siesta_band pipeline --label SWNT7-6W --carfile CAR_POSCAR/SWNT7-6W.car \\\n"
         "        --moiety Tube:1-508 --moiety Ads:700-786 --mpi-run srun \n"
         " -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- \n"
         f" Steps (in order, default=all): {', '.join(PIPELINE_STEPS)} \n"
@@ -2885,7 +2885,7 @@ _PARSER: Optional[argparse.ArgumentParser] = None
 
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
-        prog="siesta_band_workflow.py",
+        prog="python -m CCpy.SIESTA.siesta_band",
         description="Unified SIESTA Band / FatBand / DOS workflow (see module docstring for details).",
         formatter_class=argparse.RawTextHelpFormatter,
     )
@@ -2902,7 +2902,7 @@ def build_parser() -> argparse.ArgumentParser:
 def print_menu():
     print("""
 --------------------------------------------------------------------------------------
-    How to use: siesta_band_workflow.py <command> [options]
+    How to use: python -m CCpy.SIESTA.siesta_band <command> [options]
 --------------------------------------------------------------------------------------
 < Commands >
     genfdf         : generate Band-DOS/{BANDS,DOS} dirs + patched fdf (BandLines, fatbands)
@@ -2913,7 +2913,7 @@ def print_menu():
     pipeline       : run the full workflow end-to-end (equivalent to WorkFlow_FatBandDOS.sh)
                      use --steps to run only a subset, e.g. --steps genfdf,fatband
 
-Run `siesta_band_workflow.py <command> --help` for the options of each command.
+Run `python -m CCpy.SIESTA.siesta_band <command> --help` for the options of each command.
 --------------------------------------------------------------------------------------
 """)
 

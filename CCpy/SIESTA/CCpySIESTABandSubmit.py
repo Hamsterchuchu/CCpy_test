@@ -4,9 +4,10 @@
 CCpySIESTABandSubmit.py
 ========================
 
-Queue-submit script for the SIESTA Band / FatBand / DOS workflow
-(see siesta_band_workflow.py, which must sit in the same directory or be
-found via --script-dir).
+Queue-submit script for the SIESTA Band / FatBand / DOS workflow (see
+CCpy/SIESTA/siesta_band.py). It is run as `python -m CCpy.SIESTA.siesta_band`,
+so it is located by import rather than by path; --script-dir overrides that
+with an explicit file path when you want a specific copy.
 
 This is a companion to CCpyJobSubmit.py / CCpyJobControl.py from the CCpy
 lab framework: it reuses the same ~/.CCpy/queue_config.yaml and
@@ -79,7 +80,7 @@ Interactive settings review (before submitting):
 Fatband moiety groups (-moiety=NAME:IDXSEL):
     Atom indices for each moiety are entered manually, e.g.
     -moiety=Tube:1-508 -moiety=Ads:509-511. To look up the indices, run
-    `python siesta_band_workflow.py fatband --list-atoms` directly inside
+    `python -m CCpy.SIESTA.siesta_band fatband --list-atoms` directly inside
     Band-DOS/BANDS (after a band-calc has completed). (Automatic bond-based
     detection was tried and dropped: chemisorbed adsorbates often sit close
     enough to the surface to end up in the same bonded fragment as the
@@ -126,7 +127,7 @@ class bcolors:
 
 
 # -----------------------------------------------------------------------------
-# Mode -> default --steps preset (see siesta_band_workflow.py PIPELINE_STEPS
+# Mode -> default --steps preset (see siesta_band.py PIPELINE_STEPS
 # for the full ordered list: genfdf, band-calc, fatband, plot-band,
 # plot-fatband, dos-calc, plot-dos).
 # -----------------------------------------------------------------------------
@@ -175,17 +176,20 @@ def submit_and_show_jobid(qsub_cmd: str) -> None:
     print(m.group(0) if m else out)
 
 
+# The workflow half of this pipeline, run as a subprocess on the compute node.
+# Addressed as a module rather than a file - see _workflow_target().
+WORKFLOW_MODULE = "CCpy.SIESTA.siesta_band"
+
+
 def installed_siesta_dir() -> Optional[Path]:
     """CCpy/SIESTA/ inside the installed CCpy package, or None if unavailable.
 
-    siesta_band_config.yaml and siesta_band_workflow.py live next to this file
-    *in the source tree*, but the copy that actually runs does not: setup.py
-    lists this script in `scripts=`, so `pip install .` copies it into
-    <env>/bin/ (and the older easy_install/egg route ran it out of
-    EGG-INFO/scripts/). Either way Path(__file__).parent is <env>/bin, not
-    CCpy/SIESTA/ - so the package directory has to be found by importing CCpy
-    instead. siesta_band_workflow.py in particular is not registered in
-    CCpy/bin/, so it exists *only* as a package module.
+    siesta_band_config.yaml lives next to this file *in the source tree*, but
+    the copy that actually runs does not: setup.py lists this script in
+    `scripts=`, so `pip install .` copies it into <env>/bin/ (and the older
+    easy_install/egg route ran it out of EGG-INFO/scripts/). Either way
+    Path(__file__).parent is <env>/bin, not CCpy/SIESTA/ - so the package
+    directory has to be found by importing CCpy instead.
     """
     try:
         import CCpy
@@ -226,7 +230,7 @@ DEFAULTS = dict(
     moiety=[],
     element=True,
     bandpath="1d",
-    axis=None,  # None = let siesta_band_workflow.py auto-detect from kgrid_Monkhorst_Pack
+    axis=None,  # None = let siesta_band.py auto-detect from kgrid_Monkhorst_Pack
     ef_window=15,
     extra_bands=50,
     dos_emin=-25.0, dos_emax=25.0, dos_broad=0.05, dos_npts=2000,
@@ -426,18 +430,30 @@ class SiestaBandJobSubmit(JS):
 
     def __init__(self, inputfile, queue, n_of_cpu, node=None, script_dir=None):
         super().__init__(inputfile, queue, n_of_cpu, node=node)
-        # _build_pipeline_cmd() looks for siesta_band_workflow.py under this
-        # directory, and that file is only ever a package module - it is not in
-        # CCpy/bin/, so it never lands in <env>/bin/ next to this script. Same
-        # lookup as the shared yaml: source-tree sibling first, installed
-        # package second.
-        workflow = resolve_sibling("siesta_band_workflow.py")
-        self.script_dir = script_dir or str(
-            workflow.parent if workflow else Path(__file__).resolve().parent)
+        # Left as None normally: the workflow is invoked as `python -m
+        # WORKFLOW_MODULE`, so there is no path to locate. Only set when
+        # --script-dir asks for a specific copy (dev / debugging).
+        self.script_dir = script_dir
+
+    def _workflow_target(self) -> str:
+        """The `python ...` argument that runs the workflow.
+
+        Default is `-m CCpy.SIESTA.siesta_band`: siesta_band.py is a package
+        module and is not registered in CCpy/bin/, so it never lands in
+        <env>/bin/ next to this script - and this script *does* run from
+        <env>/bin/ (setup.py lists it in `scripts=`). Letting the import
+        machinery find it beats guessing a path, and it works the same for a
+        wheel, an egg, an editable install or a source checkout.
+
+        --script-dir overrides this with an explicit file path.
+        """
+        if self.script_dir:
+            return str(Path(self.script_dir) / "siesta_band.py")
+        return f"-m {WORKFLOW_MODULE}"
 
     def _build_pipeline_cmd(self, label: str, cfg: dict) -> str:
-        """Build the 'python siesta_band_workflow.py pipeline ...' command line for one system."""
-        pyscript = str(Path(self.script_dir) / "siesta_band_workflow.py")
+        """Build the 'python -m CCpy.SIESTA.siesta_band pipeline ...' command line for one system."""
+        pyscript = self._workflow_target()
 
         moiety = cfg.get("moiety") or []
         if isinstance(moiety, str):
@@ -499,7 +515,7 @@ echo "WORKDIR: $(pwd)"
 
 # Best-effort: activate the siesta conda env if conda is available in this
 # (non-interactive) shell - helps the siesta/fat/gnubands binaries find their
-# runtime libs. Not a hard requirement: siesta_band_workflow.py auto-detects
+# runtime libs. Not a hard requirement: siesta_band.py auto-detects
 # and relaunches itself under the right python for numpy/matplotlib/sisl
 # regardless of what's active here, so we never hard-fail the job over this.
 if command -v conda >/dev/null 2>&1; then
@@ -512,7 +528,7 @@ cd "{workdir}"
 {pipeline_cmd}
 
 rc=$?
-echo "siesta_band_workflow.py exit code: $rc"
+echo "siesta_band.py exit code: $rc"
 echo "===== END: $(date) ====="
 
 # Move the SLURM stdout/stderr logs into {log_subdir}/ now that it's
@@ -586,7 +602,7 @@ echo "===== START: $(date) ====="
 
 # Best-effort: activate the siesta conda env if conda is available in this
 # (non-interactive) shell - see comment in siesta_band_fatband_dos(). Never
-# hard-fails the job over this; siesta_band_workflow.py's own bootstrap
+# hard-fails the job over this; siesta_band.py's own bootstrap
 # re-exec covers the python-package side regardless.
 if command -v conda >/dev/null 2>&1; then
     eval "$(conda shell.bash hook)" 2>/dev/null
@@ -645,7 +661,7 @@ def print_help_and_quit():
                        1d/hex/manual/plain-seekpath-fallback all derive the
                        lattice directly from the system's own fdf instead)
     -moiety=[N:SEL]    moiety NAME:INDEX-SELECTION (1-based), repeatable - look up
-                       indices with `siesta_band_workflow.py fatband --list-atoms`
+                       indices with `python -m CCpy.SIESTA.siesta_band fatband --list-atoms`
                        ex) -moiety=Tube:1-508 -moiety=Ads:700-786
     -bandpath=[..]     seekpath | 1d | hex | manual        (default: 1d)
     -axis=[a|b|c]      1d bandpath axis  (default: auto-detected from the base fdf's

@@ -1,6 +1,6 @@
 # siesta_band_config.yaml
 #
-# Per-system settings for CCpySIESTABandSubmit.py / siesta_band_workflow.py.
+# Per-system settings for CCpySIESTABandSubmit.py / siesta_band.py.
 # Place a copy of this file (renamed to `siesta_band_config.yaml`) inside a
 # SIESTA system directory (next to <label>.fdf) to pin its Band/FatBand/DOS
 # settings, instead of typing them as -key=value suboptions every time.
