@@ -7,6 +7,8 @@ from collections import OrderedDict
 from CCpy.VASP.VASPio import VASPInput
 from CCpy.Tools.CCpyTools import selectInputs, selectVASPInputs, selectVASPOutputs, linux_command, bcolors
 from pathlib import Path
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 version = sys.version
 if version[0] == '3':

@@ -29,6 +29,7 @@ version = sys.version
 if version[0] == '3':
     raw_input = input
 
+
 class VASPInput():
     def __init__(self, filename=None, dirname=None, preset_yaml=None, additional_dir=False, refine_poscar=False, keep_files=[]):
         """
@@ -42,8 +43,12 @@ class VASPInput():
         self.additional_dir = additional_dir
         if additional_dir:
             jobname = dirname
-            structure = pmgIS.from_file(dirname + "/CONTCAR")
-            dirname = dirname + "/" + additional_dir
+#            structure = pmgIS.from_file(dirname + "/CONTCAR")
+#            path = os.path.join(dirname, "CONTCAR")
+            path = os.path.join("CONTCAR")            
+            print("DEBUG: trying to read", os.getcwd(), "->", path, "exists?", os.path.exists(path))
+            structure = pmgIS.from_file(path)
+
             self.additional_calc = True
         else:
             if not filename:
@@ -154,7 +159,12 @@ class VASPInput():
         self.kpt_linemode_file = kpt_linemode_file
         self.kpt_linemode_use_all_path = kpt_linemode_use_all_path
         self.kpt_linemode_show_brill = kpt_linemode_show_brill
-        
+
+        # -- POTCAR pseudopotential mapping
+        #    yaml 파일에 "POTCAR:" 섹션 (예: {Nb: Nb_sv, Ti: Ti_sv, Fe: Fe, ...})을
+        #    미리 정의해두면, -pseudo= 옵션 없이도 원소별 기본 pseudopotential을
+        #    자동으로 매핑해서 사용한다. preset_yaml에 POTCAR 섹션이 없으면
+        #    default.yaml의 POTCAR 섹션으로 폴백한다.
         try:
             potcar_pseudo_potential = load_yaml(yaml_file, "POTCAR")
         except:
@@ -168,7 +178,7 @@ class VASPInput():
             self.keep_files = load_yaml(yaml_file)["KEEP_FILES"]
         else:
             self.keep_files = keep_files
-         
+
 
 
     # ------------------------------------------------------------------------------#
@@ -283,7 +293,7 @@ class VASPInput():
             mag_string = incar_dict['MAGMOM']
 
         if mag:
-            incar_dict = update_incar(incar_dict, {"MAGMOM": mag_string}) 
+            incar_dict = update_incar(incar_dict, {"MAGMOM": mag_string})
         elif 'MAGMOM' in incar_dict.keys() or '# MAGMOM' in incar_dict.keys():
             incar_dict = update_incar(incar_dict, {"MAGMOM": mag_string}, maintain_block=True)
 
@@ -330,7 +340,7 @@ class VASPInput():
         if self.additional_calc and 'LDAUJ' in incar_dict.keys():
             LDAUJ_string = incar_dict['LDAUJ']
 
-        if "LDAU" in incar_dict.keys() or "# LDAU" in incar_dict.keys():  
+        if "LDAU" in incar_dict.keys() or "# LDAU" in incar_dict.keys():
             val_ldau = incar_dict["LDAU"] if "LDAU" in incar_dict.keys() else incar_dict["# LDAU"]
             val_lmix = incar_dict["LMAXMIX"] if "LMAXMIX" in incar_dict.keys() else incar_dict["# LMAXMIX"]
             val_ldau_type = incar_dict["LDAUTYPE"] if "LDAUTYPE" in incar_dict.keys() else incar_dict["# LDAUTYPE"]
@@ -413,6 +423,13 @@ class VASPInput():
             kpoints = str(Kpoints.automatic_density_by_vol(structure, self.kpt_density))
 
         ## -------------------------------- POTCAR -------------------------------- ##
+        # -- [PATCH] ported from cms2's VASPio.py:
+        #    -pseudo= 옵션이 없을 때, 그냥 원소 기호(elements)를 쓰는 대신
+        #    __init__에서 로드해둔 self.potcar_pseudo_potential (yaml "POTCAR" 섹션)
+        #    에서 원소별 기본 pseudopotential을 찾아 매핑한다.
+        #    주의: 구조에 포함된 모든 원소가 yaml POTCAR 섹션에 정의돼 있어야 하며,
+        #    빠진 원소가 있으면 KeyError가 발생한다 (MAGMOM/LDAU처럼 조용히
+        #    fallback 값을 쓰는 방식이 아님).
         if "POTCAR" in self.keep_files:
             potcar = ""
         else:
@@ -524,11 +541,10 @@ class VASPInput():
         prev_files =["CHGCAR", "CONTCAR", "INCAR", "KPOINTS", "POSCAR", "POTCAR"]
         for pf in prev_files:
             if pf in os.listdir("../"):
-                shutil.copy("../" + pf, " ./")
+                shutil.copy("../" + pf, "./")
         os.rename("POSCAR", "POSCAR.orig")
         os.rename("CONTCAR", "POSCAR")
-
-
+        """
         ## --------------------------------- INCAR --------------------------------- ##
         f = open("INCAR", "r").read()
         lines = f.split("\n")
@@ -546,6 +562,47 @@ class VASPInput():
                 else:
                     key = tmp[0].replace(" ", "")
                 key_val.append((key, tmp[1][1:]))
+
+        incar_dict = OrderedDict(key_val)
+        incar_keys = incar_dict.keys()
+        """
+
+        ## --------------------------------- INCAR --------------------------------- ##
+
+        f = open("INCAR", "r").read()
+        lines = f.split("\n")
+        key_val = []
+        for l in lines:
+            l = l.strip()
+            # 완전히 빈 줄은 건너뛰기
+            if not l:
+                continue
+
+            # "#1 ..." 처럼 번호 달린 주석 줄은 그대로 유지
+            if l.startswith("#") and len(l) > 1 and l[1].isdigit():
+                key_val.append((l, ""))
+                continue
+
+            # '=' 가 없는 줄은 파싱 대상에서 제외 (순수 주석/기타 라인)
+            if "=" not in l:
+                continue
+
+            # 좌변/우변으로 나누기 (최대 1번만 split)
+            tmp = l.split("=", 1)
+            left = tmp[0]
+            right = tmp[1]
+
+            # 키 처리
+            if "#" in left:
+                key = left.replace(" ", "").replace("#", "")
+                key = "# " + key
+            else:
+                key = left.replace(" ", "")
+
+            # 값 처리: 앞 공백 잘라주기 (기존 tmp[1][1:] 역할)
+            val = right.lstrip()
+
+            key_val.append((key, val))
 
         incar_dict = OrderedDict(key_val)
         incar_keys = incar_dict.keys()
@@ -779,8 +836,8 @@ class VASPInput():
         file_writer("KPOINTS",str(kpoints))
         os.chdir("../")
         sys.stdout.write(" Done !\n")
-        
-    
+
+
 
     def MIT_relax_set(self):
         structure = self.structure
@@ -799,7 +856,7 @@ class VASPInput():
         dirname = self.dirname
         mp_hse_relax = MPHSERelaxSet(structure)
         mp_hse_relax.write_input(dirname)
-        
+
 
     def MP_static_set(self):
         structure = self.structure
@@ -813,7 +870,7 @@ class VASPInput():
         dirname = self.dirname
         mp_hse_band = MPHSEBSSet(structure,reciprocal_density=20)
         mp_hse_band.write_input(dirname)
-        
+
 
     def MIT_NEB_set(self):
         structure = self.structure
@@ -830,7 +887,7 @@ class VASPOutput():
 
     def getFinalStructure(self, filename="CONTCAR", target_name="None", path="../"):
         from pymatgen.io.cif import CifWriter
-        
+
         structure_object = pmgIS.from_file(filename)
         cif = CifWriter(structure_object)
 
@@ -1016,12 +1073,12 @@ class VASPOutput():
                 subset['max_ionic'] = ['%s F=' % (nsw)]
                 veh = VaspErrorHandler(errors_subset_to_catch=subset)
                 converged = str(not veh.check())
-                electronic_converged, ionic_converged = converged, converged           
+                electronic_converged, ionic_converged = converged, converged
                 if converged == "False":
                     err_msg = list(veh.errors)[0]
                     if err_msg == "max_ionic":
                         electronic_converged = "True"
-            
+
             '''
             # using vasprun.xml
             try:
@@ -1043,7 +1100,7 @@ class VASPOutput():
                         electronic_converged, ionic_converged = "True", "True"
                 except:
                     converged, electronic_converged, ionic_converged = "False", "False", "False"
-            
+
             '''
         # -- zipped or not
         out_files = ['CHG', 'CHGCAR', 'DOSCAR', 'OUTCAR', 'PROCAR', 'vasprun.xml', 'XDATCAR']
@@ -1125,7 +1182,7 @@ class VASPOutput():
             print("There are no jobs that have not been converged.")
         print("\n* Detail information saved in: 00_jobs_status.txt")
 
-   
+
     def vasp_error_handle(self, dirs):
         from custodian.vasp.handlers import VaspErrorHandler, UnconvergedErrorHandler
         import json
@@ -1239,7 +1296,7 @@ class VASPOutput():
             for f in file_list:
                 if f in os.listdir("./"):
                     os.remove(f)
-       
+
 
         total = len(dirs)
         cnt = 1
@@ -1315,12 +1372,12 @@ def incar_dict_to_str(incar_dict, incar_dict_desc=None, highlights=[], warnings=
                 description = ""
 
             if key in warnings or key.replace("# ", "") in warnings:
-                key = bcolors.WARNING + key + bcolors.ENDC 
-                val = bcolors.WARNING + val + bcolors.ENDC 
+                key = bcolors.WARNING + key + bcolors.ENDC
+                val = bcolors.WARNING + val + bcolors.ENDC
                 incar_string += key.ljust(25) + " = " + str(val).ljust(39) + "! " + description + "\n"
             elif key in highlights or key.replace("# ", "") in highlights:
-                key = bcolors.OKGREEN + key + bcolors.ENDC 
-                val = bcolors.OKGREEN + val + bcolors.ENDC 
+                key = bcolors.OKGREEN + key + bcolors.ENDC
+                val = bcolors.OKGREEN + val + bcolors.ENDC
                 incar_string += key.ljust(25) + " = " + str(val).ljust(39) + "! " + description + "\n"
             else:
                 incar_string += key.ljust(16) + " = " + str(val).ljust(30) + "! " + description + "\n"
@@ -1329,10 +1386,10 @@ def incar_dict_to_str(incar_dict, incar_dict_desc=None, highlights=[], warnings=
 
 def update_incar(incar_dict, input_option, maintain_block=False):
     """
-    1. block   -> block          # LDAUU =    --> # LDAUU = 
+    1. block   -> block          # LDAUU =    --> # LDAUU =
     2. blcok   -> unblock        # IVDW = 12  --> IVDW = 12
     3. unblock -> unblock        ISIF = 2     --> ISIF = 3
-    4. unblock -> block          IVDW = 12    --> # IVDW = 
+    4. unblock -> block          IVDW = 12    --> # IVDW =
     """
     # change_dict_key(ordered_dict, ori_key, new_key, new_val)
     for key in input_option:
@@ -1384,10 +1441,3 @@ def read_incar(incar_file):
             cnt += 1
 
     return params
-
-
-
-
-
-
-    

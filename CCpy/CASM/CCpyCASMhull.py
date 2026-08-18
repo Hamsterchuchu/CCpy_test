@@ -173,7 +173,7 @@ class CASMhull():
         subprocess.call(makejpg, shell=True)
         print("Figure saved : ./Data/" + jpg)
 
-        plt.show()
+#        plt.show()
 
         os.chdir("../")
 
@@ -246,7 +246,7 @@ class CASMhull():
         subprocess.call(makejpg, shell=True)
         print("Figure saved : ./Data/" + jpg)
 
-        plt.show()
+#        plt.show()
 
     def mainFlow(self, chempot=None):
         self.parsingData()

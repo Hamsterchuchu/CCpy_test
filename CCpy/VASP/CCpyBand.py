@@ -410,8 +410,8 @@ def main_run(dirname):
         cms_band.save_band_data(color=False)
         cms_band.save_band_structure()
         
-        if "n" not in sys.argv:
-            plt.show()
+#        if "n" not in sys.argv:
+#            plt.show()
 
     # -- color band
     elif sys.argv[1] == "2":
@@ -434,8 +434,8 @@ def main_run(dirname):
         cms_band.save_band_data(color=True)
         cms_band.save_band_structure()
         
-        if "n" not in sys.argv:
-            plt.show()
+#        if "n" not in sys.argv:
+#            plt.show()
 
     # -- blue band & elt DOS
     elif sys.argv[1] == "3":
@@ -469,8 +469,8 @@ def main_run(dirname):
         subprocess.call(makejpg, shell=True)
         print("* Save figure : " + figname + ", " + figname.replace(".png", ".jpg"))
 
-        if "n" not in sys.argv:
-            plt.show()
+#        if "n" not in sys.argv:
+#            plt.show()
 
     # -- color band & elt band
     elif sys.argv[1] == "4":
@@ -504,8 +504,8 @@ def main_run(dirname):
         subprocess.call(makejpg, shell=True)
         print("* Save figure : " + figname + ", " + figname.replace(".png", ".jpg"))
 
-        if "n" not in sys.argv:
-            plt.show()
+#        if "n" not in sys.argv:
+#            plt.show()
 
 
     # -- color band with spin
@@ -531,8 +531,8 @@ def main_run(dirname):
         print("* Save figure : " + figname + ", " + figname.replace(".png", ".jpg"))
 
         cms_band.save_band_data(color=True, savefig=False)
-        if "n" not in sys.argv:
-            plt.show()
+#        if "n" not in sys.argv:
+#            plt.show()
 
 
 if __name__=="__main__":

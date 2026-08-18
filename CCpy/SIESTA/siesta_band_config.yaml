@@ -1,0 +1,59 @@
+# siesta_band_config.yaml
+#
+# Per-system settings for CCpySIESTABandSubmit.py / siesta_band_workflow.py.
+# Place a copy of this file (renamed to `siesta_band_config.yaml`) inside a
+# SIESTA system directory (next to <label>.fdf) to pin its Band/FatBand/DOS
+# settings, instead of typing them as -key=value suboptions every time.
+#
+# Any key can be omitted; the built-in default is used instead
+# (see DEFAULTS in CCpySIESTABandSubmit.py). CLI suboptions passed to
+# CCpySIESTABandSubmit.py always win over the values here.
+#
+# NOTE: which pipeline steps run is controlled by the mode argument
+# (CCpySIESTABandSubmit.py <mode> <queue> ...), not by this file - a
+# "steps:" key here is ignored (with a warning). Use -steps=... on the
+# command line if you need to override a mode's default step list.
+
+# Materials Studio .car file used to build BandLines (relative to this
+# system directory, or absolute)
+car: CAR_POSCAR/SWNT7-6W.car
+
+# k-path generation
+bandpath: 1d      # seekpath | 1d | hex | manual
+# axis: c         # only used for bandpath: 1d. Leave commented out to
+                  # auto-detect the periodic axis from kgrid_Monkhorst_Pack
+                  # in the base fdf (falls back to 'c' if ambiguous). Set
+                  # explicitly (a/b/c) to override, e.g. if symmetrization
+                  # moved the tube axis.
+
+# Fatbands: bands window around EF (±ef_window bands are kept for WFSX)
+ef_window: 15
+extra_bands: 50
+
+# Element-decomposed fatbands (all elements in the structure)
+element: true
+
+# Moiety-decomposed fatbands: NAME:ATOM_INDEX_SELECTION (1-based, inclusive
+# ranges allowed, e.g. "1-508"). Leave empty ([]) to skip moiety decomposition.
+moiety:
+  - "Tube:1-508"
+  - "Ads:700-786"
+
+# DOS calculation window
+dos_emin: -25.0
+dos_emax: 25.0
+dos_broad: 0.05
+dos_npts: 2000
+
+# Plot energy window (band / fatband plots, relative to E_F)
+plot_emin: -2.0
+plot_emax: 2.0
+lw_band: 1.0
+fat_cmap: inferno
+
+# SIESTA installation
+bin_dir: /opt/siesta/siesta-5.4.2/siesta-mkl-mpi/bin
+# siesta_bin: /opt/siesta/siesta-5.4.2/siesta-mkl-mpi/bin/siesta   # optional override
+
+# SLURM walltime for the generated job
+time: "7-00:00:00"

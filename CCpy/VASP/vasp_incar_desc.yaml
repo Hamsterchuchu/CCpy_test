@@ -2,24 +2,24 @@ SYSTEM: Li7PS6
 
 
 SECTION1: '# -- Startparameter for this Run'
-NWRITE: LPETIM-F    write-flag & timer
-ISTART: job   0-new  1-contEcut  2-sameBS
-INIWAV: 0-jellium  1-random
-IWAVPR: prediction  0-non 1-charg 2-wave 3-comb
-ICHARG: 0-from WF  1-from CHGCAR  2-from atom  11-12-fixed
+NWRITE: 2-Default  LPETIM-F    write-flag & timer
+ISTART: 0-New  1-read WAVCAR 2-read WAVECAR and same Basis Set
+INIWAV: 1-Default  0-jellium  
+IWAVPR: 11-OPT (IBRION=1,2,3) 12-MD (IBRION=0) 13-combination
+ICHARG: 2-from atom chg (Default)  1-read CHGCAR (with ISTART=1 for Restart) 11-non-SCF for Band/DOS calc.
 LWAVE : determines write WAVECAR file
 LCHARG: determines write CHGCAR and CHG
 
 
 SECTION2: '# -- Electronic Relaxation 1'
-NELM: number of iterations
+NELM: number of SCF iterations
 EDIFF: stopping-criterion for ELM
-BMIX: sets the cutoff wave vector for Kerker mixing for the magnetization density
+BMIX: 1-Default sets the cutoff wave vector for Kerker mixing for the magnetization density
 ENCUT: Cut-Off Energy
 
 
 SECTION3: '# -- Electronic Relaxation 1'
-IALGO: algorithm for the e-relax
+IALGO: 38-default (ALGO=N), 48-Fast (ALGO=F), 53-Damped (ALTO=D), 58-All (ALTO=A) algorithm for the e-relax
 LDIAG: sub-space diagonalisation
 LREAL: real-space projection
 PREC: specifies the precision -mode.
@@ -30,10 +30,10 @@ SECTION4: '# -- Ionic Relaxation'
 NSW: number of steps for IOM
 NBLOCK: inner block
 KBLOCK: outer block
-IBRION: ionic relax  0-MD 1-quasi-New 2-CG
-ISIF: ion&cell relax   0-MD 2-ion&stress 3-ion&cell&stress
-ISYM: switch symmetry stuff ON (1 or 2) or OFF (0)
-SYMPREC: determines to which accuracy the positions in the POSCAR
+IBRION: 0-MD (NVT) 1-Quasi-Newton / Davidson (RMM-DIIS) 2-Conjugate Gradient (CG)  ionic relax
+ISIF: 3-ion&cell&stress  4-volum-fix(slab)  2-ion&stress  0-MD    ion&cell relax  
+ISYM: 2-ON  0-OFF   switch symmetry stuff ON (2) or OFF (0)
+SYMPREC: 1E-5_default  determines to which accuracy the positions in the POSCAR
 LCORR: Harris-correction to forces
 EDIFFG: Criterion for geom opt (eV/Ang)
 POTIM: time-step for ionic motion (fs)

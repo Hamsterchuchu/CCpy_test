@@ -1,9 +1,9 @@
+def NVTLoopQueScriptString():
+    string = """
 import os, sys
-from pathlib import Path
-import shutil
 import re
 import time
-import pickle, yaml
+import pickle
 import numpy as np
 import pandas as pd
 from pymatgen.io.vasp import Vasprun
@@ -20,39 +20,14 @@ temp = int(sys.argv[2])
 specie = sys.argv[3]
 screen = sys.argv[4]
 max_step = int(sys.argv[5])
-vdw = sys.argv[6]
 
-home = os.getenv("HOME")
-user_queue_config = f"{home}/.CCpy/queue_config.yaml"
-MODULE_DIR = Path(__file__).resolve().parent
-if not os.path.isfile(user_queue_config):    
-    default_queue_config = str(MODULE_DIR) + "/queue_config.yaml"
-    if ".CCpy" not in os.listdir(home):
-        os.mkdir(f"{home}/.CCpy")
-    os.system(f"cp {default_queue_config} {user_queue_config}")
-# -- read configs from queue_config.yaml
-yaml_string = open(user_queue_config, "r").read()
-queue_config = yaml.load(yaml_string)
-vasp_path = queue_config['vasp_path']
-mpi_run = queue_config['mpi_run']
-# >>>>>>>>>>>>>>>>>>>>>>> !!! modify below line up to your system !!! <<<<<<<<<<<<<<<<<<<<<<<<< #
-vasp_run = f"{mpirun} -launcher rsh -np $NP -machinefile $PBS_NODEFILE {vasp_path} < /dev/null > vasp.out" # !!!! <-- HMC vasp run type
-# vasp_run = f"{mpirun} -np $NSLOTS {vasp_path} < /dev/null > vasp.out" # !!!! <-- CMS vasp run type
-Mo_analyze_aimd = "/hpchome2/7230508/.conda/envs/cms_bjun/bin/analyze_aimd.py"    # !!!! <-- HMC
-# Mo_analyze_aimd = "analyze_aimd.py"    # !!!! <-- default type
-
-vasp_mpirun = vasp_run
-
-
-NCORE = 4
+# cms2 에서는 래퍼 스크립트를 쓰던 이력이 있음 -> vasp = "/opt/vasp/vasp_auto"
+vasp = "/opt/vasp/vasp.6.5.1/bin/vasp_std"
+NCORE = 16
+#user_incar = {"NCORE": NCORE, "ENCUT": 400, "LREAL": "Auto", "PREC": "Normal", "ALGO": "Fast", "EDIFF": 1E-05, "ICHARG": 0, "IALGO": 48}
 #user_incar = {"NCORE": NCORE, "PREC": "Normal", "ALGO": "Fast", "ICHARG": 0}
-user_incar = {"NCORE": NCORE}
-if vdw == 'd2':
-    user_incar = {"NCORE": NCORE, "IVDW": 1}
-elif vdw == 'optB88':
-    user_incar = {"NCORE": NCORE, "LUSE_VDW": "True", "AGGAC": 0.0, "GGA": "B0", "PARAM1": 0.1833333, "PARAM2": 0.22}
-elif vdw == 'optB86b':
-    user_incar = {"NCORE": NCORE, "LUSE_VDW": "True", "AGGAC": 0.0, "GGA": "MK", "PARAM1": 0.1234, "PARAM2": 1.0, "LASPH": "True"}
+#user_incar = {"NCORE": NCORE, "ICHARG": 0, "EDIFF": 1E-05, "ISIF": 2, "MDALGO": 3, "LANGEVIN_GAMMA": [10] * structure.ntypesp, "LANGEVIN_GAMMA_L": 1}   # Langevin NVT
+user_incar = {"NCORE": NCORE, "ICHARG": 0, "PREC": "Normal"}
 
 heating_nsw = 2000
 nsw = 1000
@@ -66,7 +41,7 @@ if screen == 'screen':
     min_step = 15
     min_RSD = 1
     min_ASD = 50
-    user_incar = {"NCORE": NCORE, "ICHARG": 0, "PREC": "Low", "NELM": 60}
+    user_incar = {"NCORE": NCORE, "ICHARG": 0, "PREC": "Normal", "NELM": 60}
 
 # -------------------------------------- #
 
@@ -90,7 +65,7 @@ def mkdir(dirname):
 
 def write_log(msg):
     f = open("log", "a")
-    f.write(msg + "\n")
+    f.write(msg + "\\n")
     f.close()
 
 
@@ -165,8 +140,6 @@ def running(temp, pre, crt):
         inputset = MITMDSet(structure, 100.0, float(temp), heating_nsw, user_incar_settings=user_incar)
         #inputset = MPMDSet(structure, 100.0, float(temp), int(heating_nsw / 4), user_incar_settings=user_incar)
         inputset.write_input(crt_dir)
-        if vdw == 'optB88' or vdw == 'optB86b':
-            os.system(f"cp {home}/.CCpy/vasp/vdw_kernel.bindat %s" % crt_dir)
     # -- run
     else:
         run = Vasprun("%s/vasprun.xml.gz" % pre_dir, parse_dos=False, parse_eigen=False)
@@ -178,12 +151,9 @@ def running(temp, pre, crt):
         #inputset = MPMDSet(structure, float(temp), float(temp), int(nsw / 4), user_incar_settings=user_incar)
         inputset.write_input(crt_dir)
         os.system("cp %s/WAVECAR %s" % (pre_dir, crt_dir))
-        if vdw == 'optB88' or vdw == 'optB86b':
-            os.system(f"cp {home}/.CCpy/vasp/vdw_kernel.bindat %s" % crt_dir)
     os.chdir(crt_dir)    
     os.system("rm -rf vasprun.xml vasprun.xml.gz")
-#    os.system("mpirun -np $NSLOTS %s < /dev/null > vasp.out" % vasp)
-    os.system(vasp_mpirun)
+    os.system("srun %s < /dev/null > vasp.out" % vasp)
     time.sleep(5)
     os.system("gzip vasprun.xml")
     write_log("try: %d" % total_try)
@@ -191,8 +161,7 @@ def running(temp, pre, crt):
     while not properly_terminated:
         total_try += 1
         os.system("rm -rf vasprun.xml vasprun.xml.gz")
-#        os.system("mpirun -np $NSLOTS %s < /dev/null > vasp.out" % vasp)
-        os.system(vasp_mpirun)
+        os.system("srun %s < /dev/null > vasp.out" % vasp)
         time.sleep(5)
         os.system("gzip vasprun.xml")
         write_log("try: %d" % total_try)
@@ -245,20 +214,20 @@ def write_data(crt):
             f = open("data_%sK.csv" % temp, "a")
             line = "%.10f,%.4f," % (diffusivity, conductivity)
             f.write(line)
-        f.write("\n")
+        f.write("\\n")
         f.close()
 
 
 def write_diffusivity_data(crt, specie, specie_distance, temp):
     start_num = 1
-    chg_data = {"Li": "+", "Na": "+", "K": "+", "Cu": "+", "Ag": "+", "H": "+"}
+    chg_data = {"Li": "+", "Na": "+", "K": "+", "Cu": "+", "Ag": "+"}
     if crt >= start_num:
-        os.system("%s diffusivity %s%s run 1 %d %.2f -msd msd_%dK.csv >> anal.log" % (Mo_analyze_aimd, specie, chg_data[specie], crt, specie_distance, temp))
+        os.system("analyze_aimd.py diffusivity %s%s run 1 %d %.2f -msd msd_%dK.csv >> anal.log" % (specie, chg_data[specie], crt, specie_distance, temp))
     datafilename = "Mo_%dK_data.csv" % temp
     bjunfilename = "bj_%dK_data.csv" % temp
     if datafilename not in os.listdir("./"):
         f = open("Mo_%dK_data.csv" % temp, "w")
-        f.write("step,RSD,diffusivity,diffusivity_err\n")
+        f.write("step,RSD,diffusivity,diffusivity_err\\n")
         f.close()
     df = pd.read_csv(datafilename)
     try:
@@ -361,7 +330,7 @@ if __name__ == "__main__":
         if "data_%sK.csv" % temp in os.listdir("./"):
             os.rename("data_%sK.csv" % temp, "data_%sK.csv~" % temp)
         f = open("data_%sK.csv" % temp, "w")
-        f.write("run step,timestep,diffusivity(F),conductivity(F),diffusivity(c),conductivity(c),diffusivity(m),conductivity(m)\n")
+        f.write("run step,timestep,diffusivity(F),conductivity(F),diffusivity(c),conductivity(c),diffusivity(m),conductivity(m)\\n")
         f.close()
     while "loop.done" not in os.listdir("./"):
         pre_step = crt_step - 1
@@ -374,5 +343,5 @@ if __name__ == "__main__":
             os.system("touch loop.done")
 
         crt_step += 1
-
-
+"""
+    return string
