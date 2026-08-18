@@ -6,4 +6,4 @@ vasp_path: /opt/vasp/vasp.6.5.1/bin/vasp_std
 g09_path: /opt/g09/bin/g09
 atk_path: /opt/Quantumwise/VNL-ATK-2021.06SP1/bin/atkpython
 lammps_path: lmp_g++
-siesta_path: siesta
+siesta_path: /opt/siesta/siesta-5.4.2/siesta-mkl-mpi/bin/siesta
