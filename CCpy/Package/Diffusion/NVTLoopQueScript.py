@@ -22,8 +22,13 @@ specie = sys.argv[3]
 screen = sys.argv[4]
 max_step = int(sys.argv[5])
 
-# -- 실행 경로는 ~/.CCpy/queue_config.yaml 에서 읽는다 (VASPOptLoop.py 와 같은 방식).
+# -- 실행 경로는 ~/.CCpy/queue_config.yaml 에서 읽는다.
 #    서버마다 vasp 바이너리가 다르기 때문에 여기에 박아두면 안 된다.
+#    VASPOptLoop.py 도 같은 파일을 읽지만, 그쪽은 파일이 없으면 패키지
+#    기본값을 복사해 만들어준다. 여기서는 복사하지 않고 바로 실패시킨다 --
+#    이 스크립트는 작업 제출 시점에 CCpyJobControl.py 가 이미 파일을
+#    만들어둔 뒤 계산 노드에서 실행되므로, 그 시점에 파일이 없다면
+#    조용히 기본값으로 도는 것보다 멈추는 편이 낫다.
 #      cms2   : /opt/vasp/vasp_auto  (노드에 따라 일반/AVX2 빌드를 골라주는 래퍼)
 #      node99 : /opt/vasp/vasp.6.5.1/bin/vasp_std
 _queue_config_path = os.path.join(os.path.expanduser("~"), ".CCpy", "queue_config.yaml")

@@ -175,17 +175,42 @@ def submit_and_show_jobid(qsub_cmd: str) -> None:
     print(m.group(0) if m else out)
 
 
+def installed_siesta_dir() -> Optional[Path]:
+    """CCpy/SIESTA/ inside the installed CCpy package, or None if unavailable.
+
+    siesta_band_config.yaml lives next to this file *in the source tree*, but
+    the copy that actually runs does not: setup.py lists this script in
+    `scripts=`, so `pip install .` copies it into <env>/bin/ (and the older
+    easy_install/egg route ran it out of EGG-INFO/scripts/). Either way
+    Path(__file__).parent is <env>/bin, not CCpy/SIESTA/ - so the package
+    directory has to be found by importing CCpy instead.
+    """
+    try:
+        import CCpy
+        return Path(CCpy.__file__).resolve().parent / "SIESTA"
+    except Exception:
+        return None
+
+
+def resolve_sibling(filename: str) -> Optional[Path]:
+    """Find a CCpy/SIESTA/ companion file: next to this .py first (running
+    from a source checkout), then in the installed package."""
+    for d in (Path(__file__).resolve().parent, installed_siesta_dir()):
+        if d is not None and (d / filename).exists():
+            return d / filename
+    return None
+
+
 # Shared, lab-wide siesta_band_config.yaml - used whenever a system directory
 # doesn't have its own siesta_band_config.yaml and -config=PATH wasn't given.
 # Lets everyone default to one common set of settings instead of copying the
 # yaml into every system directory by hand.
 #
-# Resolved next to this module, so it follows wherever CCpy is installed. The
-# old value was a literal path pinning python3.8 and a .egg layout; under any
-# other interpreter it simply pointed at a file that does not exist, and
+# The original value was a literal path pinning python3.8 and a .egg layout.
+# Under any other interpreter it pointed at a file that does not exist, and
 # _apply_yaml() skips missing files silently - so the shared defaults were
 # dropped without any warning.
-DEFAULT_SHARED_CONFIG = Path(__file__).resolve().parent / "siesta_band_config.yaml"
+DEFAULT_SHARED_CONFIG = resolve_sibling("siesta_band_config.yaml")
 
 # -----------------------------------------------------------------------------
 # Default pipeline settings ("steps" itself comes from the mode argument, see

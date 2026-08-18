@@ -10,7 +10,7 @@ __author__ = "Hoijung Jung"
 
 
 def vanhove_use(DaDa,spe,where_a):
-    van = VanHoveAnalysis(DaDa, avg_nsteps=50, ngrid=201, rmax=5.0, step_skip=10, sigma=0.1, cellrange=1, species=spe,indices=None)
+    van = VanHoveAnalysis(DaDa, avg_nsteps=50, ngrid=201, rmax=5.0, step_skip=10, sigma=0.1, cell_range=1, species=spe,indices=None)
     plt = van.get_1d_plot(type='distinct', times=[0.0, 1.0, 2.0, 3.0, 4.0, 5.0], colors=None)
     plt.savefig("v01"+where_a+"distinct.png")
     plt_3 = van.get_3d_plot(figsize=(12, 8), type='distinct')

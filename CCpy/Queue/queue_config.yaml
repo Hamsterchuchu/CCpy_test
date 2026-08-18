@@ -1,67 +1,9 @@
-# ===========================================================================
-#  CCpy 실행 환경 설정
-#
-#  이 파일은 CCpy 를 처음 실행할 때 ~/.CCpy/queue_config.yaml 로 복사된다.
-#  실제로 쓰이는 것은 그 개인 사본이며, 여기(패키지 안의 원본)를 고쳐도
-#  이미 사본을 갖고 있는 사용자에게는 반영되지 않는다.
-#
-#  ★ 값은 서버마다 다르다. 새로 설치했다면 ~/.CCpy/queue_config.yaml 을
-#     열어 자기 서버에 맞게 고칠 것. 아래 주석의 예시를 참고.
-# ===========================================================================
-
-# -- 작업 제출 명령
 qsub: qsub
-
-# -- 계산 노드에서 실행될 파이썬.
-#    AIMD 루프, VASP sequence job, SIESTA band workflow 가 이 경로를 쓴다.
-#    ★ CCpy 를 설치한 환경의 python 이어야 한다. 옛 환경을 가리키면
-#      pymatgen.analysis.diffusion 등을 못 찾아 계산 노드에서 실패한다.
 python_path: /home/shared/anaconda3/envs/CCpy/bin/python
-
-# -- MPI 실행 명령
 mpi_run: srun
-
-# ---------------------------------------------------------------------------
-#  VASP
-# ---------------------------------------------------------------------------
-# 노드마다 다른 빌드를 써야 하면 래퍼 스크립트를 지정해도 된다.
-#   예) cms2   : /opt/vasp/vasp_auto
-#                (hostname 을 보고 일반 빌드 / AVX2 빌드를 골라주는 래퍼)
-#       node99 : /opt/vasp/vasp.6.5.1/bin/vasp_std
-vasp_path: /opt/vasp/vasp.6.5.1/bin/vasp_std
-
-# ---------------------------------------------------------------------------
-#  SIESTA
-# ---------------------------------------------------------------------------
-siesta_path: /opt/siesta/siesta-5.4.2/siesta-mkl-mpi/bin/siesta
-
-# ---------------------------------------------------------------------------
-#  LAMMPS
-# ---------------------------------------------------------------------------
-# 공용 LAMMPS 설치 후 그 경로로 바꿀 것. 일단은 기존 기본값 그대로 둔다.
-# (lammps_path 키 자체는 코드가 반드시 읽으므로 지우지 말 것 —
-#  값이 비면 작업 스크립트에 None 이 찍힌다)
-lammps_path: lmp_g++
-
-# 아래 두 개는 선택 항목이다. 적지 않으면 각각 mpi_run 과 빈 문자열이 쓰인다.
-# 공용 LAMMPS 가 정상이면 둘 다 필요 없다. 개별 빌드에 문제가 있을 때만
-# 그 사용자가 자기 ~/.CCpy/queue_config.yaml 에 임시로 추가해서 쓴다.
-#
-# lammps_mpi_run : LAMMPS 만 다른 MPI 실행 방식이 필요할 때.
-#                  vasp / siesta / atk 의 mpi_run 은 건드리지 않는다.
-#                  예) lammps_mpi_run: srun --mpi=pmi2
-#
-# lammps_env     : LAMMPS 실행 전에 넣을 환경 설정. 여러 줄 가능.
-#                  예) lammps_env: |
-#                        export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/some/path/lib
-
-# ---------------------------------------------------------------------------
-#  Gaussian / ATK  (사용 빈도 낮음)
-# ---------------------------------------------------------------------------
-g09_path: /opt/g09/bin/g09
-
-# ATK 는 서버마다 설치 버전이 다를 수 있다.
-#   예) cms2   : /opt/Quantumwise/VNL-ATK-2019.12SP1/bin/atkpython
-#       node99 : /opt/Quantumwise/VNL-ATK-2021.06SP1/bin/atkpython
-atk_path: /opt/Quantumwise/VNL-ATK-2021.06SP1/bin/atkpython
 atk_mpi_run: /opt/intel/compilers_and_libraries_2018.1.163/linux/mpi/intel64/bin/mpirun
+vasp_path: /opt/vasp/vasp.6.5.1/bin/vasp_std
+g09_path: /opt/g09/bin/g09
+atk_path: /opt/Quantumwise/VNL-ATK-2021.06SP1/bin/atkpython
+lammps_path: lmp_g++
+siesta_path: siesta
