@@ -4,6 +4,7 @@ import os, sys
 import re
 import time
 import pickle
+import yaml
 import numpy as np
 import pandas as pd
 from pymatgen.io.vasp import Vasprun
@@ -21,8 +22,18 @@ specie = sys.argv[3]
 screen = sys.argv[4]
 max_step = int(sys.argv[5])
 
-# cms2 에서는 래퍼 스크립트를 쓰던 이력이 있음 -> vasp = "/opt/vasp/vasp_auto"
-vasp = "/opt/vasp/vasp.6.5.1/bin/vasp_std"
+# -- 실행 경로는 ~/.CCpy/queue_config.yaml 에서 읽는다 (VASPOptLoop.py 와 같은 방식).
+#    서버마다 vasp 바이너리가 다르기 때문에 여기에 박아두면 안 된다.
+#      cms2   : /opt/vasp/vasp_auto  (노드에 따라 일반/AVX2 빌드를 골라주는 래퍼)
+#      node99 : /opt/vasp/vasp.6.5.1/bin/vasp_std
+_queue_config_path = os.path.join(os.path.expanduser("~"), ".CCpy", "queue_config.yaml")
+try:
+    _queue_config = yaml.load(open(_queue_config_path, "r"), Loader=yaml.FullLoader)
+    vasp = _queue_config["vasp_path"]
+    mpi_run = _queue_config.get("mpi_run", "srun")
+except Exception as e:
+    print("Error: cannot read vasp_path from %s (%s)" % (_queue_config_path, e))
+    sys.exit(1)
 NCORE = 16
 #user_incar = {"NCORE": NCORE, "ENCUT": 400, "LREAL": "Auto", "PREC": "Normal", "ALGO": "Fast", "EDIFF": 1E-05, "ICHARG": 0, "IALGO": 48}
 #user_incar = {"NCORE": NCORE, "PREC": "Normal", "ALGO": "Fast", "ICHARG": 0}
@@ -153,7 +164,7 @@ def running(temp, pre, crt):
         os.system("cp %s/WAVECAR %s" % (pre_dir, crt_dir))
     os.chdir(crt_dir)    
     os.system("rm -rf vasprun.xml vasprun.xml.gz")
-    os.system("srun %s < /dev/null > vasp.out" % vasp)
+    os.system("%s %s < /dev/null > vasp.out" % (mpi_run, vasp))
     time.sleep(5)
     os.system("gzip vasprun.xml")
     write_log("try: %d" % total_try)
@@ -161,7 +172,7 @@ def running(temp, pre, crt):
     while not properly_terminated:
         total_try += 1
         os.system("rm -rf vasprun.xml vasprun.xml.gz")
-        os.system("srun %s < /dev/null > vasp.out" % vasp)
+        os.system("%s %s < /dev/null > vasp.out" % (mpi_run, vasp))
         time.sleep(5)
         os.system("gzip vasprun.xml")
         write_log("try: %d" % total_try)
