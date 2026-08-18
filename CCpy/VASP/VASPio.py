@@ -29,6 +29,15 @@ version = sys.version
 if version[0] == '3':
     raw_input = input
 
+# -- ENCUT 자동 지정 관련 설정
+#    ENCUT_SCALE       : POTCAR 에서 ENMAX 를 직접 읽어 쓸 때 곱하는 배율.
+#                        yaml "ENCUT:" 표의 값에도 이미 이 배율이 반영되어 있다.
+#    ENCUT_TABLE_FUNCTIONAL : yaml "ENCUT:" 표가 어느 POTCAR set 기준으로
+#                        만들어졌는지. 이 functional 일 때만 표를 참조하고,
+#                        다른 functional 이면 POTCAR 에서 직접 읽는다.
+ENCUT_SCALE = 1.3
+ENCUT_TABLE_FUNCTIONAL = "PBE_54"
+
 
 class VASPInput():
     def __init__(self, filename=None, dirname=None, preset_yaml=None, additional_dir=False, refine_poscar=False, keep_files=[]):
@@ -171,6 +180,29 @@ class VASPInput():
             potcar_pseudo_potential = load_yaml(default_yaml_file, "POTCAR")
         self.potcar_pseudo_potential = potcar_pseudo_potential
 
+        # -- ENCUT reference table
+        #    yaml 파일의 최상위 "ENCUT:" 섹션 (예: {Fe_sv: 507.725, C: 520.000, ...})은
+        #    POTCAR 이름별 권장 ENCUT 값이며, 이미 ENMAX x 1.3 이 반영된 수치이다.
+        #    cms_vasp_set() 에서 이번 계산에 실제로 쓰이는 POTCAR 들의 값을 조회해
+        #    그 중 최댓값을 ENCUT 으로 지정하는 데 사용한다.
+        #    preset_yaml -> ~/.CCpy/vasp/default.yaml -> 패키지 동봉 vasp_default.yaml
+        #    순으로 폴백한다. 세 번째 단계가 필요한 이유: ~/.CCpy/vasp/default.yaml 은
+        #    처음 실행할 때 한 번만 복사되므로, 기존 사용자의 홈 설정에는 ENCUT 섹션이
+        #    없을 수 있다. 이 경우에도 패키지에 동봉된 표로 자동 지정이 동작하게 한다.
+        #    (홈 설정에 ENCUT 섹션을 직접 넣으면 그쪽이 우선한다.)
+        #    셋 다 없으면 빈 dict 로 두어 자동 지정을 비활성화한다.
+        try:
+            encut_table = load_yaml(yaml_file, "ENCUT")
+        except:
+            try:
+                encut_table = load_yaml(default_yaml_file, "ENCUT")
+            except:
+                try:
+                    encut_table = load_yaml(MODULE_DIR + '/vasp_default.yaml', "ENCUT")
+                except:
+                    encut_table = OrderedDict()
+        self.encut_table = encut_table
+
         self.yaml_file = yaml_file
         self.default_incar_dict = default_incar_dict
         self.incar_dict_desc = load_yaml(MODULE_DIR + '/vasp_incar_desc.yaml')
@@ -179,6 +211,63 @@ class VASPInput():
         else:
             self.keep_files = keep_files
 
+
+    # ------------------------------------------------------------------------------#
+    #                         ENCUT from POTCAR (auto setting)                      #
+    # ------------------------------------------------------------------------------#
+    def set_encut(self, incar_dict, potcar, pot_elt, functional=ENCUT_TABLE_FUNCTIONAL):
+        """
+        이번 계산에 쓰이는 POTCAR 들의 권장 ENCUT 중 가장 큰 값을 INCAR 에 지정한다.
+
+        값을 구하는 경로는 두 가지다.
+          1) yaml "ENCUT:" 표  -- POTCAR 이름 -> 권장 ENCUT (이미 ENMAX x 1.3 이
+             반영된 값). 이 표는 potpaw PBE_54 기준으로 만들어졌으므로
+             functional 이 PBE_54 일 때만 사용한다.
+          2) POTCAR 직접 읽기  -- POTCAR 의 ENMAX 에 1.3 을 곱해서 계산.
+             functional 이 PBE_54 가 아니거나(표 값이 그 POTCAR 와 맞지 않음),
+             PBE_54 라도 그 이름이 표에 없으면 이 방식을 쓴다.
+
+        여기서 정한 값은 yaml INCAR 섹션의 ENCUT 값을 덮어쓴다 (주석 처리된
+        '# ENCUT' 이었다면 주석을 풀고 값을 넣는다). 자동값이 마음에 들지 않으면
+        이어지는 INCAR 확인 단계에서 ENCUT=xxx 로 다시 바꿀 수 있다.
+
+        :param incar_dict: 수정할 INCAR dict
+        :param potcar: pymatgen Potcar object (pot_elt 와 순서가 같아야 함)
+        :param pot_elt: POTCAR 이름 리스트 (ex: ['Li_sv', 'Fe_sv', 'O'])
+        :param functional: POTCAR functional. PBE_54 일 때만 yaml 표를 참조한다.
+                           None 이면 (이전 계산에서 물려받은 POTCAR 처럼 functional 을
+                           알 수 없는 경우) 항상 POTCAR 에서 직접 읽는다.
+        :return: ENCUT 이 반영된 incar_dict
+        """
+        use_table = bool(self.encut_table) and functional == ENCUT_TABLE_FUNCTIONAL
+
+        encut_of_pot = OrderedDict()
+        detail = []
+        for i in range(len(pot_elt)):
+            p = pot_elt[i]
+            if use_table and p in self.encut_table:
+                value = float(self.encut_table[p])
+                source = "yaml"
+            else:
+                try:
+                    value = round(float(potcar[i].enmax) * ENCUT_SCALE, 3)
+                except Exception:
+                    print(bcolors.FAIL + "* ENCUT error: cannot read ENMAX of %s from POTCAR." % p + bcolors.ENDC)
+                    print("  Add \"%s\" to the \"ENCUT\" section of %s, then run again." % (p, self.yaml_file))
+                    quit()
+                source = "POTCAR"
+            encut_of_pot[p] = value
+            detail.append("%s=%s(%s)" % (p, num_to_str(value), source))
+
+        if len(encut_of_pot) == 0:
+            return incar_dict
+
+        max_pot = max(encut_of_pot, key=encut_of_pot.get)
+        encut = num_to_str(encut_of_pot[max_pot])
+        incar_dict = update_incar(incar_dict, {"ENCUT": encut})
+        print(bcolors.OKGREEN + "* ENCUT = %s  (largest of %s)" % (encut, ", ".join(detail)) + bcolors.ENDC)
+
+        return incar_dict
 
 
     # ------------------------------------------------------------------------------#
@@ -432,6 +521,20 @@ class VASPInput():
         #    fallback 값을 쓰는 방식이 아님).
         if "POTCAR" in self.keep_files:
             potcar = ""
+            # -- 이전 계산의 POTCAR 를 그대로 물려받는 경우.
+            #    그 POTCAR 가 어떤 functional 로 만들어졌는지 알 수 없으므로 yaml 표는
+            #    쓰지 않고, 파일에서 ENMAX 를 직접 읽어 ENCUT 을 정한다.
+            #    (파일 위치는 keep_files 를 복사할 때 쓰는 경로와 동일한 규칙)
+            prev_potcar_file = os.path.join(pre_dir, "POTCAR")
+            try:
+                prev_potcar = Potcar.from_file(prev_potcar_file)
+            except Exception:
+                prev_potcar = None
+                print(bcolors.WARNING + "* ENCUT: cannot read %s. Keep the ENCUT value of the previous INCAR."
+                      % prev_potcar_file + bcolors.ENDC)
+            if prev_potcar:
+                incar_dict = self.set_encut(incar_dict, prev_potcar,
+                                            [p.symbol for p in prev_potcar], functional=None)
         else:
             if pseudo:
                 pot_elt = []
@@ -449,6 +552,7 @@ class VASPInput():
                     pot_elt.append(self.potcar_pseudo_potential[e])
             potcar = Potcar(symbols=pot_elt, functional=functional)
 
+            incar_dict = self.set_encut(incar_dict, potcar, pot_elt, functional=functional)
 
         ## --------------------------- Update INCAR  values -------------------------- ##
         if batch:
@@ -457,7 +561,7 @@ class VASPInput():
         else:
             # -- INCAR
             print(dirname)
-            highlights = ["NSW", "ISPIN", "ISIF", "PREC", "EDIFF", "EDIFFG", "IVDW"]
+            highlights = ["NSW", "ISPIN", "ISIF", "PREC", "EDIFF", "EDIFFG", "IVDW", "ENCUT"]
             warnings = []
             if not get_pre_incar:        # This process is for avoiding multiple inputs generation.
                 print(bcolors.OKGREEN + "\n# ---------- Read INCAR option from %s ---------- #" % self.yaml_file + bcolors.ENDC)
@@ -1357,6 +1461,16 @@ def load_yaml(yaml_file, key=None):
     dict = OrderedDict(dict[key]) if key else OrderedDict(dict)
 
     return dict
+
+def num_to_str(value):
+    """
+    yaml 에서 읽은 실수를 INCAR 에 쓰기 좋은 문자열로 바꾼다.
+    표에 적힌 값을 그대로 유지하되 의미 없는 뒤쪽 0 만 정리한다.
+      507.725 -> "507.725",  520.000 -> "520",  1103.214 -> "1103.214"
+    """
+    string = ("%f" % float(value)).rstrip("0").rstrip(".")
+
+    return string
 
 def incar_dict_to_str(incar_dict, incar_dict_desc=None, highlights=[], warnings=[]):
     if not incar_dict_desc:
