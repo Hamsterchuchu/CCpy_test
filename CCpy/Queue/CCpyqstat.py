@@ -1,10 +1,11 @@
+#!/usr/bin/env python
 """
 서버별 qstat 구현 선택기 (dispatcher).
 
 cms2 와 node99 는 큐 상태를 읽는 방식이 완전히 다르다.
 
-    cms2   : PBS 형식 `qstat -f` 출력 파싱   -> CCpyqstat_cms2.py
-    node99 : SLURM `squeue` 출력 파싱        -> CCpyqstat_node99.py
+    cms2   : PBS 형식 'qstat -f' 출력 파싱   -> CCpyqstat_cms2.py
+    node99 : SLURM 'squeue' 출력 파싱        -> CCpyqstat_node99.py
 
 두 구현 모두 CCpyqstat / get_empty_nodes / get_waiting_nodes 라는
 같은 인터페이스를 갖고 있으므로, 여기서 서버에 맞는 쪽을 골라 그대로 노출한다.

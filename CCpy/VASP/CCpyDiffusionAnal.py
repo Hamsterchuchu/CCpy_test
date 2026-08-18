@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 from pymatgen.analysis.diffusion.analyzer import DiffusionAnalyzer as DA
 from pymatgen.analysis.diffusion.aimd.van_hove import VanHoveAnalysis
 from pymatgen.analysis.diffusion.aimd.pathway import ProbabilityDensityAnalysis

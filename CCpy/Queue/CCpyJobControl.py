@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 import os, sys
 from subprocess import call as shl
 from collections import OrderedDict
