@@ -1,4 +1,4 @@
-#!/home/shared/anaconda3/envs/CCpy/bin/python
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 CCpySIESTABandSubmit.py
