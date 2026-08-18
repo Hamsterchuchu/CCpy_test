@@ -179,10 +179,13 @@ def submit_and_show_jobid(qsub_cmd: str) -> None:
 # doesn't have its own siesta_band_config.yaml and -config=PATH wasn't given.
 # Lets everyone default to one common set of settings instead of copying the
 # yaml into every system directory by hand.
-DEFAULT_SHARED_CONFIG = Path(
-    "/home/shared/anaconda3/envs/CCpy/lib/python3.8/site-packages/"
-    "CCpy-1.21-py3.8.egg/CCpy/SIESTA/siesta_band_config.yaml"
-)
+#
+# Resolved next to this module, so it follows wherever CCpy is installed. The
+# old value was a literal path pinning python3.8 and a .egg layout; under any
+# other interpreter it simply pointed at a file that does not exist, and
+# _apply_yaml() skips missing files silently - so the shared defaults were
+# dropped without any warning.
+DEFAULT_SHARED_CONFIG = Path(__file__).resolve().parent / "siesta_band_config.yaml"
 
 # -----------------------------------------------------------------------------
 # Default pipeline settings ("steps" itself comes from the mode argument, see
