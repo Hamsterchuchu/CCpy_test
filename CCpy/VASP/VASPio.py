@@ -493,7 +493,15 @@ class VASPInput():
                 incar = incar_string
 
         # save current options, for rest inputs
-        yaml_str = yaml.dump(incar_dict, default_flow_style=False)
+        # [PATCH 2026-08-18] dump as a plain dict, not an OrderedDict.
+        # yaml.dump(OrderedDict) emits a
+        # '!!python/object/apply:collections.OrderedDict' tag, which the
+        # FullLoader used to read this file back (get_pre_incar, line ~231)
+        # refuses under PyYAML >= 5.4/6.x (python-object tags are blocked for
+        # security) -> multi-input INCAR reuse crashed on the 2nd structure.
+        # A plain dict keeps insertion order on Python 3.7+, and
+        # sort_keys=False keeps the INCAR key order in the dumped file.
+        yaml_str = yaml.dump(dict(incar_dict), default_flow_style=False, sort_keys=False)
         file_writer(".prev_incar.yaml", yaml_str)
 
 
