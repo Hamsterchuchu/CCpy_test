@@ -57,6 +57,14 @@ ex) CCpyVASPInputGen.py 1 -isif=2 -spin -mag -kp=4,4,2 -vdw=D3damp, -pseudo=Nb_s
                   Possible potentials = PBE, PBE_52, PBE_54, LDA, LDA_52, LDA_54, PW91, LDA_US, PW91_US
     -pseudo=    : Select pseudo potential    (DEFAULT : normal)
                   ex) -pseudo=Nb_sv,Ti_sv    --> will use 'Nb_sv, Ti_sv' pseudo potential to 'Nb, Ti'
+    -encut=#   : Force this ENCUT for every structure/calc in this run, instead of the
+                  automatic POTCAR-based ENCUT. Use this when comparing energies across
+                  structures with different elements (formation energy, convex hull,
+                  adsorption energy, ...), where all structures must share one ENCUT.
+                  (Without -encut=, each structure still gets its own auto-detected ENCUT,
+                  including when reusing the same INCAR for multiple structures - unless
+                  you type ENCUT= yourself at the interactive prompt, which is then kept
+                  for the rest of that run.)
 
     < ADDITIONAL CALCULATION >
     when use option 'add', 
@@ -97,6 +105,7 @@ additional_dir = None
 pre_dir = "./"
 batch = False
 refine_poscar = False
+encut = None
 
 for arg in sys.argv:
     if "-sp" == arg:
@@ -119,6 +128,8 @@ for arg in sys.argv:
         pseudo = arg.split("=")[1].split(",")
     elif "-ismear" in arg:
         ismear = arg.split("=")[1]
+    elif "-encut=" in arg:
+        encut = arg.split("=")[1]
     elif "-preset" in arg:
         incar_preset = arg.split("=")[1]
         incar_preset = incar_preset + ".yaml"
@@ -147,7 +158,7 @@ if sys.argv[1] == "1":
         if chk:
             VI.cms_vasp_set(single_point=single_point, isif=isif, vdw=vdw, kpoints=kpoints, spin=spin, mag=mag, ldau=ldau,
                             functional=functional, pseudo=pseudo,
-                            get_pre_incar=None, batch=batch)
+                            get_pre_incar=None, batch=batch, encut=encut)
             if len(inputs) >= 2 and not batch:
                 same_inputs = raw_input(bcolors.OKGREEN + "\n* Use this INCAR to others? (y/n)" + bcolors.ENDC)
                 if same_inputs == "y":
@@ -157,7 +168,7 @@ if sys.argv[1] == "1":
         else:
             VI.cms_vasp_set(single_point=single_point,isif=isif,vdw=vdw,kpoints=kpoints,spin=spin,mag=mag,ldau=ldau,
                             pseudo=pseudo, functional=functional,
-                            get_pre_incar=".prev_incar.yaml", batch=True)
+                            get_pre_incar=".prev_incar.yaml", batch=True, encut=encut)
 
 elif sys.argv[1] == "2":
     inputs = selectVASPOutputs("./")
@@ -192,7 +203,7 @@ elif sys.argv[1] == "add":
         VI = VASPInput(additional_dir=additional_dir, dirname=each_input, preset_yaml=incar_preset, refine_poscar=refine_poscar)
         VI.cms_vasp_set(single_point=single_point, isif=isif, vdw=vdw, kpoints=kpoints, spin=spin, mag=mag, ldau=ldau,
                         functional=functional, pseudo=pseudo,
-                        get_pre_incar=None, batch=True, pre_dir=pre_dir)
+                        get_pre_incar=None, batch=True, pre_dir=pre_dir, encut=encut)
 
 
 

@@ -277,7 +277,7 @@ class VASPInput():
                      spin=False, mag=False, ldau=False,
                      functional="PBE_54", pseudo=None,
                      kpoints=False, get_pre_incar=None, pre_dir="./",
-                     batch=False):
+                     batch=False, encut=None):
         """
         Interactive VASP input generator
 
@@ -289,9 +289,18 @@ class VASPInput():
         :param kpoints: list [4,4,1]
         :param get_pre_incar: Load previous option when multiple input generation
         :param batch: in case of batch, avoid confirm menu (use default k-points = input_kpts)
+        :param encut: force this ENCUT value instead of auto-detecting from POTCAR/table.
+                      Applies uniformly to every structure/call in a multi-structure run
+                      (see -encut= in CCpyVASPInputGen.py).
 
         :return: no return, but write VASP input files at dirname
         """
+        # -- 이전 구조에서 사용자가 대화형으로 ENCUT 을 직접 타이핑했는지 표시하는 파일.
+        #    "다음 INCAR 도 동일하게?" 로 이어지는 구조들(get_pre_incar 지정)이 이 파일을
+        #    보고, 자기 자신의 POTCAR 로 자동 재계산할지 물려받은 값을 유지할지 정한다.
+        #    -encut= (encut 인자) 을 명시한 경우는 이 파일과 무관하게 항상 그 값이 최우선이다.
+        encut_lock_file = ".prev_incar_encut_locked"
+        user_locked_encut = bool(get_pre_incar) and encut is None and os.path.exists(encut_lock_file)
 
         structure = self.structure
         dirname = self.dirname
@@ -532,9 +541,16 @@ class VASPInput():
                 prev_potcar = None
                 print(bcolors.WARNING + "* ENCUT: cannot read %s. Keep the ENCUT value of the previous INCAR."
                       % prev_potcar_file + bcolors.ENDC)
-            if prev_potcar:
-                incar_dict = self.set_encut(incar_dict, prev_potcar,
-                                            [p.symbol for p in prev_potcar], functional=None)
+            if encut is not None:
+                incar_dict = update_incar(incar_dict, {"ENCUT": str(encut)})
+            elif prev_potcar:
+                # -- [PATCH] 부모 계산의 실제 ENCUT 을 그대로 물려받는다 (재계산하지 않음).
+                #    이전에는 여기서 항상 set_encut() 으로 ENMAX*1.3 을 다시 계산했는데,
+                #    부모가 사용자 지정 ENCUT(예: 여러 조성 비교를 위해 맞춰둔 값)으로 돌았을
+                #    경우 Band-DOS 등 후속 계산만 조용히 다른 ENCUT 으로 바뀌는 문제가 있었다.
+                #    부모의 실제 ENCUT 은 이미 위 pre_calc_incar 병합으로 incar_dict 에 들어와
+                #    있으므로, 별도로 다시 계산하지 않아도 그대로 유지된다.
+                pass
         else:
             if pseudo:
                 pot_elt = []
@@ -552,7 +568,15 @@ class VASPInput():
                     pot_elt.append(self.potcar_pseudo_potential[e])
             potcar = Potcar(symbols=pot_elt, functional=functional)
 
-            incar_dict = self.set_encut(incar_dict, potcar, pot_elt, functional=functional)
+            if encut is not None:
+                incar_dict = update_incar(incar_dict, {"ENCUT": str(encut)})
+            elif not user_locked_encut:
+                incar_dict = self.set_encut(incar_dict, potcar, pot_elt, functional=functional)
+            # else: 이전 구조에서 사용자가 ENCUT 을 직접 타이핑했다(encut_lock_file 참고).
+            #       get_pre_incar 로 물려받은 그 값을 그대로 쓰고, 이 구조 자신의 POTCAR
+            #       기준 자동 지정으로 덮어쓰지 않는다. ENCUT 을 건드리지 않은 경우라면
+            #       user_locked_encut 은 False 이므로 지금까지처럼 구조마다(Cu/Zn/Li 등)
+            #       각자의 POTCAR 로 독립적으로 자동 지정된다.
 
         ## --------------------------- Update INCAR  values -------------------------- ##
         if batch:
@@ -592,6 +616,18 @@ class VASPInput():
                 # make INCAR as string type
                 incar_string = incar_dict_to_str(incar_dict, incar_dict_desc)
                 incar = incar_string
+
+                # -- 이번 세션에서 사용자가 ENCUT 을 직접 타이핑했는지 기록해 둔다.
+                #    "다음 INCAR 도 동일하게?" 로 재사용되는 뒤이은 구조들이 이 표시를 보고
+                #    자동 지정을 건너뛸지 정한다 (위 encut_lock_file, user_locked_encut 참고).
+                #    -encut= 을 명시한 경우는 모든 구조가 이미 그 값으로 강제되므로 잠금이
+                #    필요 없다 (덮어쓸 일이 없다).
+                if encut is None:
+                    if "ENCUT" in warnings or "# ENCUT" in warnings:
+                        locked_value = incar_dict.get("ENCUT", incar_dict.get("# ENCUT", ""))
+                        file_writer(encut_lock_file, str(locked_value))
+                    elif os.path.exists(encut_lock_file):
+                        os.remove(encut_lock_file)
             else:
                 incar_string = incar_dict_to_str(incar_dict, incar_dict_desc)
                 incar = incar_string
