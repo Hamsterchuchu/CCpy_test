@@ -408,7 +408,7 @@ if __name__ == "__main__":
 Please check the example of scheduler config file at https://github.com/91bsjun/CCpy/tree/master/CCpy/Queue''')
         quit()
 
-    queue_info = yaml.load(open(CCpy_SCHEDULER_CONFIG, 'r'))
+    queue_info = yaml.load(open(CCpy_SCHEDULER_CONFIG, 'r'), Loader=yaml.FullLoader)
 
     # --- Queue name check
     queues = list(queue_info.keys())

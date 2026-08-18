@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from pymatgen.core.structure import IStructure
-from pymatgen.analysis.diffusion_analyzer import DiffusionAnalyzer
+from pymatgen.analysis.diffusion.analyzer import DiffusionAnalyzer
 
 from CCpy.SIESTA.SIESTAio import SIESTAMDset, SIESTAOutput
 

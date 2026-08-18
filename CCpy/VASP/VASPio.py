@@ -17,7 +17,7 @@ from CCpy.Tools.CCpyTools import file_writer, linux_command, change_dict_key, sa
 
 from pymatgen.core import IStructure as pmgIS
 from pymatgen.io.vasp import Vasprun
-from pymatgen.io.vasp.inputs import Incar, Poscar, Potcar, Kpoints, Kpoints_supported_modes
+from pymatgen.io.vasp.inputs import Incar, Poscar, Potcar, Kpoints, KpointsSupportedModes
 from pymatgen.io.vasp.sets import *
 from pymatgen.util.io_utils import clean_lines
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
@@ -228,7 +228,7 @@ class VASPInput():
 
         # -- Load previous option when multiple input generation
         if get_pre_incar:
-            incar_dict = OrderedDict(yaml.load(open(get_pre_incar)))
+            incar_dict = OrderedDict(yaml.load(open(get_pre_incar), Loader=yaml.FullLoader))
         # -- Load previous INCAR when additional calc and INCAR in keep_files
         elif self.additional_calc and 'INCAR' in self.keep_files:
             # 1. load default  -->  2. update using previous calc --> 3. update using preset_yaml
@@ -1345,7 +1345,7 @@ class VASPOutput():
         print("\nDone.")
 
 def load_yaml(yaml_file, key=None):
-    dict = yaml.load(open(yaml_file))
+    dict = yaml.load(open(yaml_file), Loader=yaml.FullLoader)
     dict = OrderedDict(dict[key]) if key else OrderedDict(dict)
 
     return dict

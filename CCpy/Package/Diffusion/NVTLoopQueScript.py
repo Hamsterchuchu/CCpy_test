@@ -9,7 +9,7 @@ import pandas as pd
 from pymatgen.io.vasp import Vasprun
 from pymatgen.io.vasp.sets import MITMDSet, MPMDSet
 from pymatgen.core.structure import IStructure, Structure
-from pymatgen.analysis.diffusion_analyzer import DiffusionAnalyzer
+from pymatgen.analysis.diffusion.analyzer import DiffusionAnalyzer
 import warnings
 warnings.filterwarnings("ignore")
 

@@ -102,7 +102,7 @@ if not os.path.isfile(user_queue_config):
     os.system(f"cp {default_queue_config} {user_queue_config}")
 # -- read configs from queue_config.yaml
 yaml_string = open(user_queue_config, "r").read()
-queue_config = yaml.load(yaml_string)
+queue_config = yaml.load(yaml_string, Loader=yaml.FullLoader)
 vasp_path = queue_config['vasp_path']
 mpirun = queue_config['mpi_run']
 # >>>>>>>>>>>>>>>>>>>>>>> !!! modify below line up to your system !!! <<<<<<<<<<<<<<<<<<<<<<<<< #

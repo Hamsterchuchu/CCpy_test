@@ -30,7 +30,7 @@ except:
 Please check the example of scheduler config file at https://github.com/91bsjun/CCpy/tree/master/CCpy/Queue''')
     quit()
 
-queue_info = yaml.load(open(CCpy_SCHEDULER_CONFIG, 'r'))
+queue_info = yaml.load(open(CCpy_SCHEDULER_CONFIG, 'r'), Loader=yaml.FullLoader)
 
 
 class JobSubmit:
@@ -62,7 +62,7 @@ class JobSubmit:
 
         # -- read configs from queue_config.yaml            
         yaml_string = open(user_queue_config, "r").read()
-        queue_config = yaml.load(yaml_string)
+        queue_config = yaml.load(yaml_string, Loader=yaml.FullLoader)
             
         self.qsub = queue_config['qsub']
 

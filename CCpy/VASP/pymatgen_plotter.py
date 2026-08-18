@@ -13,7 +13,7 @@ import numpy as np
 from monty.json import jsanitize
 from pymatgen.electronic_structure.core import Spin
 from pymatgen.electronic_structure.bandstructure import BandStructureSymmLine
-from pymatgen.util.plotting import add_fig_kwargs, get_ax3d_fig_plt
+from pymatgen.util.plotting import add_fig_kwargs, get_ax3d_fig
 
 from pymatgen.core.units import Energy
 from pymatgen.electronic_structure.boltztrap import BoltztrapError
@@ -1787,7 +1787,7 @@ def plot_wigner_seitz(lattice, ax=None, **kwargs):
     Returns:
         matplotlib figure and matplotlib ax
     """
-    ax, fig, plt = get_ax3d_fig_plt(ax)
+    ax, fig = get_ax3d_fig(ax)
 
     if "color" not in kwargs:
         kwargs["color"] = "k"
@@ -1795,7 +1795,7 @@ def plot_wigner_seitz(lattice, ax=None, **kwargs):
         kwargs["linewidth"] = 1
 
     bz = lattice.get_wigner_seitz_cell()
-    ax, fig, plt = get_ax3d_fig_plt(ax)
+    ax, fig = get_ax3d_fig(ax)
     for iface in range(len(bz)):
         for line in itertools.combinations(bz[iface], 2):
             for jface in range(len(bz)):
@@ -1819,7 +1819,7 @@ def plot_lattice_vectors(lattice, ax=None, **kwargs):
     Returns:
         matplotlib figure and matplotlib ax
     """
-    ax, fig, plt = get_ax3d_fig_plt(ax)
+    ax, fig = get_ax3d_fig(ax)
 
     if "color" not in kwargs:
         kwargs["color"] = "g"
@@ -1855,7 +1855,7 @@ def plot_path(line, lattice=None, coords_are_cartesian=False, ax=None, **kwargs)
         matplotlib figure and matplotlib ax
     """
 
-    ax, fig, plt = get_ax3d_fig_plt(ax)
+    ax, fig = get_ax3d_fig(ax)
 
     if "color" not in kwargs:
         kwargs["color"] = "r"
@@ -1892,7 +1892,7 @@ def plot_labels(labels, lattice=None, coords_are_cartesian=False, ax=None, **kwa
     Returns:
         matplotlib figure and matplotlib ax
     """
-    ax, fig, plt = get_ax3d_fig_plt(ax)
+    ax, fig = get_ax3d_fig(ax)
 
     if "color" not in kwargs:
         kwargs["color"] = "b"
@@ -1972,7 +1972,7 @@ def plot_points(points, lattice=None, coords_are_cartesian=False, fold=False, ax
     Returns:
         matplotlib figure and matplotlib ax
     """
-    ax, fig, plt = get_ax3d_fig_plt(ax)
+    ax, fig = get_ax3d_fig(ax)
 
     if "color" not in kwargs:
         kwargs["color"] = "b"
@@ -2121,7 +2121,7 @@ def plot_ellipsoid(hessian, center, lattice=None, rescale=1.0, ax=None, coords_a
             [x[i, j], y[i, j], z[i, j]] = np.dot([x[i, j], y[i, j], z[i, j]], rotation)*rescale + center
 
     # add the ellipsoid to the current axes
-    ax, fig, plt = get_ax3d_fig_plt(ax)
+    ax, fig = get_ax3d_fig(ax)
     ax.plot_wireframe(x, y, z,  **kwargs)
 
     return fig, ax

@@ -1,6 +1,6 @@
-from pymatgen.analysis.diffusion_analyzer import DiffusionAnalyzer as DA
-from pymatgen_diffusion.aimd.van_hove import VanHoveAnalysis
-from pymatgen_diffusion.aimd.pathway import ProbabilityDensityAnalysis
+from pymatgen.analysis.diffusion.analyzer import DiffusionAnalyzer as DA
+from pymatgen.analysis.diffusion.aimd.van_hove import VanHoveAnalysis
+from pymatgen.analysis.diffusion.aimd.pathway import ProbabilityDensityAnalysis
 import sys, os 
 import matplotlib
 

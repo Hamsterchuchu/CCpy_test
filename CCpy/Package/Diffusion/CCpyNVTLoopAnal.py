@@ -10,7 +10,7 @@ import collections
 import warnings
 warnings.filterwarnings("ignore")
 
-from pymatgen.analysis.diffusion_analyzer import DiffusionAnalyzer, fit_arrhenius, get_arrhenius_plot, get_extrapolated_conductivity, get_extrapolated_diffusivity
+from pymatgen.analysis.diffusion.analyzer import DiffusionAnalyzer, fit_arrhenius, get_arrhenius_plot, get_extrapolated_conductivity, get_extrapolated_diffusivity
 
 from CCpy.Tools.CCpyTools import plt_deco
 

@@ -26,7 +26,7 @@ except:
 Please check the example of scheduler config file at https://github.com/91bsjun/CCpy/tree/master/CCpy/Queue''')
     quit()
 
-queue_info = yaml.load(open(CCpy_SCHEDULER_CONFIG, 'r'))
+queue_info = yaml.load(open(CCpy_SCHEDULER_CONFIG, 'r'), Loader=yaml.FullLoader)
 
 
 def CCpyqstat(in_user="*", in_status="", node_check=False):
