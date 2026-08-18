@@ -1,4 +1,4 @@
-SYSTEM: Li7PS6                        
+SYSTEM: Li7PS6
 
 
 SECTION1: '# -- Startparameter for this Run'
@@ -19,7 +19,7 @@ ENCUT: Cut-Off Energy
 
 
 SECTION3: '# -- Electronic Relaxation 1'
-IALGO: 38-default (ALGO=N), 48-Fast (ALGO=F), 53-Damped (ALTO=D), 58-All (ALTO=A) algorithm for the e-relax
+ALGO: Normal-default, Fast, Damped, All algorithm for the electronic relaxation
 LDIAG: sub-space diagonalisation
 LREAL: real-space projection
 PREC: specifies the precision -mode.
@@ -31,14 +31,14 @@ NSW: number of steps for IOM
 NBLOCK: inner block
 KBLOCK: outer block
 IBRION: 0-MD (NVT) 1-Quasi-Newton / Davidson (RMM-DIIS) 2-Conjugate Gradient (CG)  ionic relax
-ISIF: 3-ion&cell&stress  4-volum-fix(slab)  2-ion&stress  0-MD    ion&cell relax  
+ISIF: 3-ion&cell&stress  4-volum-fix(slab)  2-ion&stress 8-shape-fix 0-MD    ion&cell relax  
 ISYM: 2-ON  0-OFF   switch symmetry stuff ON (2) or OFF (0)
 SYMPREC: 1E-5_default  determines to which accuracy the positions in the POSCAR
 LCORR: Harris-correction to forces
 EDIFFG: Criterion for geom opt (eV/Ang)
 POTIM: time-step for ionic motion (fs)
 SMASS: Nose mass-parameter (am)
-
+LATTICE_CONSTRAINTS: Lattic Relax for a b c (.TRUE. - relax .FALSE. - fix)
 
 SECTION5: '# -- DOS related values'
 ISMEAR: Broadening methode -5-tet -1-fermi 0-gaus 1-mp 2-mp2
