@@ -1489,7 +1489,9 @@ def incar_dict_to_str(incar_dict, incar_dict_desc=None, highlights=[], warnings=
             if key in incar_dict_desc.keys():
                 description = str(incar_dict_desc[key])
             elif "# " in key:
-                description = str(incar_dict_desc[key.replace("# ", "")])
+                # 주석 처리된 키(# XXX)의 설명은 desc yaml 에서 XXX 로 찾는데,
+                # 없을 때 KeyError 로 죽지 않도록 빈 문자열로 폴백한다.
+                description = str(incar_dict_desc.get(key.replace("# ", ""), ""))
             else:
                 description = ""
 
