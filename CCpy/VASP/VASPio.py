@@ -225,7 +225,7 @@ class VASPInput():
         max_pot = max(encut_of_pot, key=encut_of_pot.get)
         encut = num_to_str(encut_of_pot[max_pot])
         incar_dict = update_incar(incar_dict, {"ENCUT": encut})
-        print(bcolors.OKGREEN + "* ENCUT = %s  (largest of %s)" % (encut, ", ".join(detail)) + bcolors.ENDC)
+        print(bcolors.OKGREEN + "* ENCUT = %s  (ENCUT of %s)" % (encut, ", ".join(detail)) + bcolors.ENDC)
 
         return incar_dict
 
