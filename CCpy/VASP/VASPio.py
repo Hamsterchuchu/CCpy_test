@@ -30,13 +30,9 @@ if version[0] == '3':
     raw_input = input
 
 # -- ENCUT 자동 지정 관련 설정
-#    ENCUT_SCALE       : POTCAR 에서 ENMAX 를 직접 읽어 쓸 때 곱하는 배율.
-#                        yaml "ENCUT:" 표의 값에도 이미 이 배율이 반영되어 있다.
-#    ENCUT_TABLE_FUNCTIONAL : yaml "ENCUT:" 표가 어느 POTCAR set 기준으로
-#                        만들어졌는지. 이 functional 일 때만 표를 참조하고,
-#                        다른 functional 이면 POTCAR 에서 직접 읽는다.
+#    ENCUT_SCALE : POTCAR 에서 읽은 ENMAX 에 곱하는 배율.
+#                  ENCUT = max(ENMAX of POTCARs) x ENCUT_SCALE.
 ENCUT_SCALE = 1.3
-ENCUT_TABLE_FUNCTIONAL = "PBE_54"
 
 
 class VASPInput():
@@ -180,29 +176,6 @@ class VASPInput():
             potcar_pseudo_potential = load_yaml(default_yaml_file, "POTCAR")
         self.potcar_pseudo_potential = potcar_pseudo_potential
 
-        # -- ENCUT reference table
-        #    yaml 파일의 최상위 "ENCUT:" 섹션 (예: {Fe_sv: 507.725, C: 520.000, ...})은
-        #    POTCAR 이름별 권장 ENCUT 값이며, 이미 ENMAX x 1.3 이 반영된 수치이다.
-        #    cms_vasp_set() 에서 이번 계산에 실제로 쓰이는 POTCAR 들의 값을 조회해
-        #    그 중 최댓값을 ENCUT 으로 지정하는 데 사용한다.
-        #    preset_yaml -> ~/.CCpy/vasp/default.yaml -> 패키지 동봉 vasp_default.yaml
-        #    순으로 폴백한다. 세 번째 단계가 필요한 이유: ~/.CCpy/vasp/default.yaml 은
-        #    처음 실행할 때 한 번만 복사되므로, 기존 사용자의 홈 설정에는 ENCUT 섹션이
-        #    없을 수 있다. 이 경우에도 패키지에 동봉된 표로 자동 지정이 동작하게 한다.
-        #    (홈 설정에 ENCUT 섹션을 직접 넣으면 그쪽이 우선한다.)
-        #    셋 다 없으면 빈 dict 로 두어 자동 지정을 비활성화한다.
-        try:
-            encut_table = load_yaml(yaml_file, "ENCUT")
-        except:
-            try:
-                encut_table = load_yaml(default_yaml_file, "ENCUT")
-            except:
-                try:
-                    encut_table = load_yaml(MODULE_DIR + '/vasp_default.yaml', "ENCUT")
-                except:
-                    encut_table = OrderedDict()
-        self.encut_table = encut_table
-
         self.yaml_file = yaml_file
         self.default_incar_dict = default_incar_dict
         self.incar_dict_desc = load_yaml(MODULE_DIR + '/vasp_incar_desc.yaml')
@@ -215,49 +188,34 @@ class VASPInput():
     # ------------------------------------------------------------------------------#
     #                         ENCUT from POTCAR (auto setting)                      #
     # ------------------------------------------------------------------------------#
-    def set_encut(self, incar_dict, potcar, pot_elt, functional=ENCUT_TABLE_FUNCTIONAL):
+    def set_encut(self, incar_dict, potcar, pot_elt):
         """
-        이번 계산에 쓰이는 POTCAR 들의 권장 ENCUT 중 가장 큰 값을 INCAR 에 지정한다.
-
-        값을 구하는 경로는 두 가지다.
-          1) yaml "ENCUT:" 표  -- POTCAR 이름 -> 권장 ENCUT (이미 ENMAX x 1.3 이
-             반영된 값). 이 표는 potpaw PBE_54 기준으로 만들어졌으므로
-             functional 이 PBE_54 일 때만 사용한다.
-          2) POTCAR 직접 읽기  -- POTCAR 의 ENMAX 에 1.3 을 곱해서 계산.
-             functional 이 PBE_54 가 아니거나(표 값이 그 POTCAR 와 맞지 않음),
-             PBE_54 라도 그 이름이 표에 없으면 이 방식을 쓴다.
+        이번 계산에 쓰이는 POTCAR 들의 ENMAX 중 가장 큰 값에 ENCUT_SCALE (1.3) 을 곱해
+        INCAR 의 ENCUT 으로 지정한다. ENMAX 는 POTCAR 파일에서 직접 읽으므로
+        functional (PBE_54 / PBE_52 / LDA ...) 에 관계없이 그 POTCAR 의 실제 값이 쓰인다.
 
         여기서 정한 값은 yaml INCAR 섹션의 ENCUT 값을 덮어쓴다 (주석 처리된
         '# ENCUT' 이었다면 주석을 풀고 값을 넣는다). 자동값이 마음에 들지 않으면
         이어지는 INCAR 확인 단계에서 ENCUT=xxx 로 다시 바꿀 수 있다.
+        (-encut= 옵션을 준 경우에는 이 함수가 호출되지 않는다.)
 
         :param incar_dict: 수정할 INCAR dict
         :param potcar: pymatgen Potcar object (pot_elt 와 순서가 같아야 함)
         :param pot_elt: POTCAR 이름 리스트 (ex: ['Li_sv', 'Fe_sv', 'O'])
-        :param functional: POTCAR functional. PBE_54 일 때만 yaml 표를 참조한다.
-                           None 이면 (이전 계산에서 물려받은 POTCAR 처럼 functional 을
-                           알 수 없는 경우) 항상 POTCAR 에서 직접 읽는다.
         :return: ENCUT 이 반영된 incar_dict
         """
-        use_table = bool(self.encut_table) and functional == ENCUT_TABLE_FUNCTIONAL
-
         encut_of_pot = OrderedDict()
         detail = []
         for i in range(len(pot_elt)):
             p = pot_elt[i]
-            if use_table and p in self.encut_table:
-                value = float(self.encut_table[p])
-                source = "yaml"
-            else:
-                try:
-                    value = round(float(potcar[i].enmax) * ENCUT_SCALE, 3)
-                except Exception:
-                    print(bcolors.FAIL + "* ENCUT error: cannot read ENMAX of %s from POTCAR." % p + bcolors.ENDC)
-                    print("  Add \"%s\" to the \"ENCUT\" section of %s, then run again." % (p, self.yaml_file))
-                    quit()
-                source = "POTCAR"
+            try:
+                value = round(float(potcar[i].enmax) * ENCUT_SCALE, 3)
+            except Exception:
+                print(bcolors.FAIL + "* ENCUT error: cannot read ENMAX of %s from POTCAR." % p + bcolors.ENDC)
+                print("  Check the POTCAR of %s, or give the value directly with -encut= option." % p)
+                quit()
             encut_of_pot[p] = value
-            detail.append("%s=%s(%s)" % (p, num_to_str(value), source))
+            detail.append("%s=%s" % (p, num_to_str(value)))
 
         if len(encut_of_pot) == 0:
             return incar_dict
@@ -289,7 +247,7 @@ class VASPInput():
         :param kpoints: list [4,4,1]
         :param get_pre_incar: Load previous option when multiple input generation
         :param batch: in case of batch, avoid confirm menu (use default k-points = input_kpts)
-        :param encut: force this ENCUT value instead of auto-detecting from POTCAR/table.
+        :param encut: force this ENCUT value instead of auto-detecting from POTCAR.
                       Applies uniformly to every structure/call in a multi-structure run
                       (see -encut= in CCpyVASPInputGen.py).
 
@@ -531,8 +489,7 @@ class VASPInput():
         if "POTCAR" in self.keep_files:
             potcar = ""
             # -- 이전 계산의 POTCAR 를 그대로 물려받는 경우.
-            #    그 POTCAR 가 어떤 functional 로 만들어졌는지 알 수 없으므로 yaml 표는
-            #    쓰지 않고, 파일에서 ENMAX 를 직접 읽어 ENCUT 을 정한다.
+            #    부모 계산의 ENCUT 을 그대로 쓰기 위해 POTCAR 를 읽을 수 있는지만 확인한다.
             #    (파일 위치는 keep_files 를 복사할 때 쓰는 경로와 동일한 규칙)
             prev_potcar_file = os.path.join(pre_dir, "POTCAR")
             try:
@@ -571,7 +528,7 @@ class VASPInput():
             if encut is not None:
                 incar_dict = update_incar(incar_dict, {"ENCUT": str(encut)})
             elif not user_locked_encut:
-                incar_dict = self.set_encut(incar_dict, potcar, pot_elt, functional=functional)
+                incar_dict = self.set_encut(incar_dict, potcar, pot_elt)
             # else: 이전 구조에서 사용자가 ENCUT 을 직접 타이핑했다(encut_lock_file 참고).
             #       get_pre_incar 로 물려받은 그 값을 그대로 쓰고, 이 구조 자신의 POTCAR
             #       기준 자동 지정으로 덮어쓰지 않는다. ENCUT 을 건드리지 않은 경우라면
