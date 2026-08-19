@@ -180,12 +180,18 @@ except ImportError:
 if not have_pmg:
     skip("VASPio 관련 4항목", "pymatgen 미설치")
 else:
+    # 이 절의 목적은 preset yaml 을 어느 폴더에서 읽는지 하나뿐이다. 예전에는
+    # 여기서 vi.encut_table 길이도 함께 찍었는데, ENCUT 자동 지정이 POTCAR
+    # ENMAX 기준으로 일원화되면서(cb13db9) 그런 속성은 존재하지 않게 됐다.
+    # 자식 프로세스가 AttributeError 로 죽으면서 아래 5개 검사가 통째로
+    # 건너뛰어지고 있었으므로, 낡은 참조를 지우고 ENCUT 은 "계산 지점이
+    # 남아 있는지"만 확인한다 (실제 값 검증은 POTCAR 가 필요해 이 절의 범위 밖).
     code = (
         "import sys, os, json; sys.path.insert(0, %r)\n"
         "from CCpy.VASP.VASPio import VASPInput\n"
         "vi = VASPInput()\n"
         "print(json.dumps({'dir': vi.vasp_config_dir, 'yaml': vi.yaml_file,\n"
-        "                  'encut_keys': len(vi.encut_table)}))\n" % str(REPO)
+        "                  'has_set_encut': callable(getattr(vi, 'set_encut', None))}))\n" % str(REPO)
     )
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                           env=dict(os.environ), cwd=str(home))
@@ -203,6 +209,7 @@ else:
               and (home / ".CCpy_test" / "vasp" / "band_sample.yaml").is_file())
         check("읽는 yaml 이 그 사본이다", info["yaml"] == str(home / ".CCpy_test" / "vasp" / "default.yaml"))
         check("프로덕션 ~/.CCpy 를 만들지 않는다", not (home / ".CCpy").exists())
+        check("ENCUT 자동 지정 지점(set_encut)이 남아 있다", info.get("has_set_encut") is True)
 
         # preset_yaml 조회도 새 폴더에서 되는지
         shutil.copy(str(home / ".CCpy_test" / "vasp" / "default.yaml"),
