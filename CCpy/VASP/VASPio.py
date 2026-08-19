@@ -988,6 +988,86 @@ class VASPInput():
 
 
 
+# -- 에너지 / 원자수 파서 (get_energy_list 에서 사용)
+def energy_from_outcar(path="./"):
+    """
+    OUTCAR (또는 OUTCAR.gz) 에서 마지막 'free  energy   TOTEN' 값을 리턴. 못 찾으면 None.
+    """
+    plain = os.path.join(path, "OUTCAR")
+    gz = os.path.join(path, "OUTCAR.gz")
+    try:
+        if os.path.exists(plain):
+            with open(plain, "r") as f:
+                text = f.read()
+        elif os.path.exists(gz):
+            text = str(gzip.open(gz, "rb").read())
+        else:
+            return None
+    except Exception:
+        return None
+
+    strings = re.compile(r"free  energy   TOTEN  =\s+\S+", re.M).findall(text)
+    if not strings:
+        return None
+    try:
+        return float(strings[-1].split()[4])
+    except Exception:
+        return None
+
+
+def energy_from_oszicar(path="./"):
+    """
+    OSZICAR 에서 마지막 E0 값을 리턴. 못 찾으면 None.
+
+    주의: E0 는 sigma->0 외삽값이고 OUTCAR 의 TOTEN 은 smearing 자유에너지 F 다.
+    ISMEAR/SIGMA 에 따라 -TS 항만큼 다르므로 두 값을 섞어 쓰지 않는다.
+    OUTCAR 이 없을 때의 폴백으로만 쓴다.
+    """
+    fname = os.path.join(path, "OSZICAR")
+    if not os.path.exists(fname):
+        return None
+    last_E = None
+    try:
+        with open(fname, "r") as f:
+            for line in f:
+                if "E0=" in line:
+                    rest = line[line.find("E0=") + 3:].strip()
+                    try:
+                        last_E = float(rest.split()[0])
+                    except Exception:
+                        continue
+    except Exception:
+        return None
+    return last_E
+
+
+def natoms_from_poscar(path="./"):
+    """
+    POSCAR 에서 원자 수를 리턴. 못 읽으면 None.
+    6번째 줄 이후의 '숫자만 있는 줄' 을 원소별 개수 줄로 보고 합한다.
+    (pymatgen 으로 구조를 통째로 읽지 않으므로 디렉토리가 많아도 빠르고,
+     POSCAR 가 깨져 있어도 전체 실행이 죽지 않는다)
+    """
+    fname = os.path.join(path, "POSCAR")
+    if not os.path.exists(fname):
+        return None
+    try:
+        with open(fname, "r") as f:
+            lines = f.readlines()
+    except Exception:
+        return None
+    for line in lines[5:]:
+        tokens = line.split()
+        if not tokens:
+            continue
+        if all(tok.isdigit() for tok in tokens):
+            try:
+                return sum(int(tok) for tok in tokens)
+            except Exception:
+                continue
+    return None
+
+
 class VASPOutput():
     def __init__(self):
         pass
@@ -1054,88 +1134,118 @@ class VASPOutput():
             plt.show()
 
 
-    def get_energy_list(self, show_plot=True, dirs=None, sort=False):
-        # dirs = [d for d in os.listdir("./") if os.path.isdir(d)]
-        out_dirs = [d for d in dirs if "OUTCAR" in os.listdir(d) or "OUTCAR.gz" in os.listdir(d)]
-        out_dirs.sort()
+    def get_energy_list(self, show_plot=True, dirs=None, sort=False, figname="energy_list.png"):
+        """
+        VASP job 디렉토리들의 최종 에너지 목록을 만든다.
 
-        x = range(len(out_dirs))
-        energies = []
-        energies_per_atom = []
-        converged = []
-        status = []
+        - 화면에 표 출력 (Directory / Total energy / Energy/atom / Converged / Job Status)
+        - 03_<폴더>_FinalEnergies.csv / .txt 저장
+        - show_plot=True 면 figname 으로 그림 저장
+
+        에너지 기준은 OUTCAR 의 'free  energy   TOTEN' 이고, OUTCAR 이 없을 때만
+        OSZICAR 의 마지막 E0 를 폴백으로 쓴다 (두 값은 -TS 항만큼 다르다).
+
+        그림은 예전처럼 plt.show() 로 창을 띄우지 않고 파일로 저장한다.
+        X 가 없는 계산 서버에서는 show() 가 아무것도 남기지 않았다.
+        """
+        # -- 에너지를 읽을 근거가 있는 디렉토리만 대상으로 한다.
+        #    빠진 디렉토리는 조용히 버리지 않고 아래에서 이름을 찍는다.
+        target_dirs, skipped = [], []
+        for d in dirs:
+            files = os.listdir(d)
+            if "OUTCAR" in files or "OUTCAR.gz" in files or "OSZICAR" in files:
+                target_dirs.append(d)
+            else:
+                skipped.append(d)
+        target_dirs.sort()
+
+        if len(target_dirs) == 0:
+            print("No OUTCAR/OSZICAR found. Nothing to do.")
+            return None
+
         pwd = os.getcwd()
+        rows = []
+        no_energy = []
         print("\n    Parsing VASP jobs....")
-        cnt = 0
-        for o in out_dirs:
-            msg = "  [  " + str(cnt + 1).rjust(6) + " / " + str(len(dirs)).rjust(6) + "  ]"
-            cnt += 1
+        for cnt, d in enumerate(target_dirs):
+            msg = "  [  " + str(cnt + 1).rjust(6) + " / " + str(len(target_dirs)).rjust(6) + "  ]"
             sys.stdout.write(msg)
             sys.stdout.flush()
             sys.stdout.write("\b" * len(msg))
-            os.chdir(o)
-            if "OUTCAR.gz" in os.listdir("./"):
-                OUTCAR = gzip.open("OUTCAR.gz", "rb").read()
-                OUTCAR = str(OUTCAR)
-            else:
-                OUTCAR = open("OUTCAR", "r").read()
+
             # -- energy parsing
-            findE = re.compile("free  energy   TOTEN  =\s+\S+", re.M)
-            strings = findE.findall(OUTCAR)
-            e = []
-            for s in strings:
-                e.append(float(s.split()[4]))
+            e = energy_from_outcar(d)
+            if e is None:
+                e = energy_from_oszicar(d)
+            if e is None:
+                no_energy.append(d)
+
             # -- find number of atoms
-            st = pmgIS.from_file("POSCAR")
-            atoms = [str(i) for i in st.species]
-            if len(e) == 0:
-                energies.append(0)
-                energies_per_atom.append(0)
+            natoms = natoms_from_poscar(d)
+            if e is None or not natoms:
+                e_per_atom = None
             else:
-                energies.append(e[-1])
-                e_per_atom = float(e[-1]) / float(len(atoms))
-                energies_per_atom.append(e_per_atom)
+                e_per_atom = float(e) / float(natoms)
 
-            stat, done, cvgd, electronic_converged, ionic_converged, zipped, err_msg = self.vasp_status()
-            converged.append(cvgd)
-            status.append(stat)
-
+            # -- 수렴 여부 / 잡 상태는 해당 디렉토리 안에서 판정해야 한다.
+            os.chdir(d)
+            try:
+                stat, done, cvgd = self.vasp_status()[:3]
+            except Exception:
+                stat, cvgd = "Unknown", "Unknown"
             os.chdir(pwd)
 
-        energy_list = {}
-        energy_list['Directory'] = out_dirs
-        energy_list['Total energy (eV)'] = energies
-        energy_list['Energy/atom (eV)'] = energies_per_atom
-        energy_list['  Converged'] = converged
-        energy_list['  Job Status'] = status
+            rows.append({'Directory': d,
+                         'Total energy (eV)': e,
+                         'Energy/atom (eV)': e_per_atom,
+                         '  Converged': cvgd,
+                         '  Job Status': stat})
 
-        df = pd.DataFrame(energy_list)
-        #df = df[['Directory', 'Total energy (eV)', 'Energy/atom (eV)', '    Job end', '  Converged']]
-        df = df[['Directory', 'Total energy (eV)', 'Energy/atom (eV)','  Converged', '  Job Status']]
+        df = pd.DataFrame(rows)
+        df = df[['Directory', 'Total energy (eV)', 'Energy/atom (eV)', '  Converged', '  Job Status']]
         pd.set_option('display.max_rows', None)
         pd.set_option('expand_frame_repr', False)
         if sort == "tot":
-            df = df.sort_values(by='Total energy (eV)')
+            df = df.sort_values(by='Total energy (eV)').reset_index(drop=True)
         elif sort == "atom":
-            df = df.sort_values(by='Energy/atom (eV)')
+            df = df.sort_values(by='Energy/atom (eV)').reset_index(drop=True)
         print(df)
-        pwd = os.getcwd()
-        pwd = pwd.split("/")[-1]
-        csv_filename = "03_"+pwd+"_FinalEnergies.csv"
-        txt_filename = "03_"+pwd+"_FinalEnergies.txt"
+
+        dirname = pwd.split("/")[-1]
+        csv_filename = "03_" + dirname + "_FinalEnergies.csv"
+        txt_filename = "03_" + dirname + "_FinalEnergies.txt"
         df.to_csv(csv_filename)
         f = open(txt_filename, "w")
         f.write(df.to_string())
         f.close()
         print("Energy list files have been saved: " + csv_filename + ", " + txt_filename)
 
-        if show_plot:
-            fig = plt.figure(figsize=(8, 7))
-            plt.plot(x, energies, marker='o', color='#0054FF')
-            plt.xticks(x, out_dirs, rotation=45)
-            plt.tight_layout()
-            plt.grid()
-            plt.show()
+        if skipped:
+            print("* No OUTCAR/OSZICAR, excluded (%d): %s" % (len(skipped), ", ".join(skipped)))
+        if no_energy:
+            print("* Energy not found yet, listed as blank (%d): %s" % (len(no_energy), ", ".join(no_energy)))
+
+        if not show_plot:
+            return df
+
+        ycol = 'Energy/atom (eV)' if sort == "atom" else 'Total energy (eV)'
+        plot_df = df.dropna(subset=[ycol])
+        if len(plot_df) == 0:
+            print("* No energy data to plot.")
+            return df
+
+        x = range(len(plot_df))
+        fig = plt.figure(figsize=(8, 7))
+        plt.plot(x, plot_df[ycol].values, marker='o', color='#0054FF')
+        plt.xticks(x, plot_df['Directory'].tolist(), rotation=45, ha='right')
+        plt.ylabel(ycol)
+        plt.grid()
+        plt.tight_layout()
+        plt.savefig(figname, dpi=300)
+        plt.close(fig)
+        print("* Saved energy plot to " + figname)
+
+        return df
 
     def vasp_status(self):
         """

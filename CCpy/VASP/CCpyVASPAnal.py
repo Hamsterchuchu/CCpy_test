@@ -10,12 +10,11 @@ warnings.filterwarnings("ignore")
 import os, sys
 import time
 
-# ----- 여기 추가 -----
+# X 가 없는 계산 서버에서도 그림이 파일로 남게 Agg 백엔드로 고정한다.
+# pyplot 을 처음 import 하는 쪽(VASPio)보다 먼저 실행돼야 하므로
+# 아래 CCpy import 들보다 위에 있어야 한다.
 import matplotlib
-# X 없는 서버에서 쓰는 경우에는 Agg 백엔드가 안전
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-# ----------------------
 
 import pandas as pd
 from CCpy.VASP.VASPio import VASPOutput
@@ -25,48 +24,6 @@ version = sys.version
 if version[0] == '3':
     raw_input = input
 
-def get_energy_from_oszicar(path):
-    """
-    해당 디렉토리의 OSZICAR에서 마지막 E0 값을 읽어서 리턴.
-    못 찾으면 None.
-    """
-    fname = os.path.join(path, "OSZICAR")
-    if not os.path.exists(fname):
-        return None
-    last_E = None
-    with open(fname, "r") as f:
-        for line in f:
-            if "E0=" in line:
-                idx = line.find("E0=")
-                rest = line[idx+3:].strip()
-                try:
-                    val = float(rest.split()[0])
-                    last_E = val
-                except Exception:
-                    continue
-    return last_E
-
-def get_natoms_from_poscar(path):
-    """
-    해당 디렉토리의 POSCAR에서 원자 수를 추정.
-    숫자만 있는 첫 줄을 찾아서 합을 natoms로 사용.
-    """
-    fname = os.path.join(path, "POSCAR")
-    if not os.path.exists(fname):
-        return None
-    with open(fname, "r") as f:
-        lines = f.readlines()
-    # 6번째 줄 이후에서 '숫자만 있는 줄'을 찾는 방식
-    for line in lines[5:]:
-        tokens = line.split()
-        if not tokens:
-            continue
-        if all(tok.isdigit() for tok in tokens):
-            try:
-                return sum(int(tok) for tok in tokens)
-            except Exception:
-                continue
-    return None
 
 
 try:
@@ -175,93 +132,24 @@ elif sys.argv[1] == "1":
         os.chdir(pwd)
 
 elif sys.argv[1] == "2":
-    """
-    2번 옵션:
-    - CCpy 내부 plot을 쓰지 않고
-    - OSZICAR/POSCAR를 직접 읽어서
-    - energy_list.png 이미지 파일만 생성
-    """
-    # 서브 옵션 처리: 2 n 이면 plot 자체를 만들지 않음
-    print ("XXXXXXXXXX")
+    # -- Check show plot
+    #    show_plot=False (서브옵션 n) 이면 그림 파일을 만들지 않는다.
     show_plot = True
-    sort_mode = None  # "tot" or "atom"
+    sort = False
     try:
-        show_chk = sys.argv[2]
-        if show_chk == "n":
+        if sys.argv[2] == "n":
             show_plot = False
-    except Exception:
+    except IndexError:
         show_plot = True
 
     if "-st" in sys.argv:
-        sort_mode = "tot"
+        sort = "tot"
     elif "-sa" in sys.argv:
-        sort_mode = "atom"
+        sort = "atom"
 
-    # VASP 결과 디렉토리 목록
     dirs = selectVASPOutputs("./", ask=False, sub=sub, additional_dir=additional_dir)
-
-    data = []
-    for d in dirs:
-        E = get_energy_from_oszicar(d)
-        if E is None:
-            continue
-        nat = get_natoms_from_poscar(d)
-        if nat is None or nat == 0:
-            E_per_atom = None
-        else:
-            E_per_atom = E / nat
-        data.append({"dir": d, "E": E, "natoms": nat, "E_per_atom": E_per_atom})
-
-    if len(data) == 0:
-        print("No OSZICAR/POSCAR data found. Cannot make energy plot.")
-        quit()
-
-    df = pd.DataFrame(data)
-
-    # 정렬 옵션
-    if sort_mode == "tot":
-        df = df.sort_values(by="E").reset_index(drop=True)
-    elif sort_mode == "atom":
-        # per-atom 에너지가 없는 경우는 제외
-        df = df.dropna(subset=["E_per_atom"])
-        df = df.sort_values(by="E_per_atom").reset_index(drop=True)
-
-    # 정렬 후에도 데이터가 없는 경우
-    if len(df) == 0:
-        print("No valid energy data after sorting.")
-        quit()
-
-    # 에너지 리스트를 csv로도 저장
-    df.to_csv("energy_list.csv", index=False)
-    print("* Saved energy list to energy_list.csv")
-
-    # show_plot=False면 여기서 끝
-    if not show_plot:
-        quit()
-
-    # ---- 여기서부터 그림 그리기 (Agg backend, 창 안 뜸) ----
-    fig, ax = plt.subplots(figsize=(6, 4))
-
-    x = list(range(1, len(df) + 1))
-    if sort_mode == "atom":
-        y = df["E_per_atom"].values
-        ax.set_ylabel("Energy per atom (eV)")
-    else:
-        y = df["E"].values
-        ax.set_ylabel("Total energy (eV)")
-
-    ax.plot(x, y, marker="o")
-    ax.set_xlabel("Structure index (sorted)")
-    ax.grid(True)
-
-    # x축 tick을 간단히: 1,2,3,... (디렉토리 이름은 csv에서 확인)
-    ax.set_title("VASP total energy list")
-
-    outname = "energy_list.png"
-    fig.tight_layout()
-    fig.savefig(outname, dpi=300)
-    plt.close(fig)
-    print(f"* Saved energy plot to {outname}")
+    VO = VASPOutput()
+    VO.get_energy_list(show_plot=show_plot, dirs=dirs, sort=sort)
 
 elif sys.argv[1] == "3":
     # -- Check show plot
