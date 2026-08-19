@@ -29,7 +29,7 @@ add : User defined additional calculation from previous calculation
 ex) CCpyVASPInputGen.py 1 -isif=2 -spin -mag -kp=4,4,2 -vdw=D3damp, -pseudo=Nb_sv, -pot=LDA_54...
 
     < USE PRESET >
-    -preset=[NAME] : [NAME].yaml in ~/.CCpy/vasp/
+    -preset=[NAME] : [NAME].yaml in ~/.CCpy_test/vasp/
 
     < STRUCTURE OPTION >
     -refine_poscar : Use refined structure with space group (sym prec 0.1)
@@ -70,7 +70,7 @@ ex) CCpyVASPInputGen.py 1 -isif=2 -spin -mag -kp=4,4,2 -vdw=D3damp, -pseudo=Nb_s
     when use option 'add', 
     -dir=[DIRNAME]     : Additional calculation dir under previous run
     -pre_dir=[DIRNAME] : Previous directory name to copy CONTCAR, ... (default ./)
-    -preset=[NAME]     : [NAME].yaml in ~/.CCpy/vasp/
+    -preset=[NAME]     : [NAME].yaml in ~/.CCpy_test/vasp/
 
     < SEQUENTIAL JOB >
     This method can be used with CCpyJobSubmit.py without vasp input generation.
@@ -82,7 +82,7 @@ ex) CCpyVASPInputGen.py 1 -isif=2 -spin -mag -kp=4,4,2 -vdw=D3damp, -pseudo=Nb_s
  
 
 [preset options]
-~/.CCpy/vasp/___.yaml
+~/.CCpy_test/vasp/___.yaml
     '''
           )
     VI = VASPInput()

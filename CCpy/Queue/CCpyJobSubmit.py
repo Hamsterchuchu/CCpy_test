@@ -14,6 +14,7 @@ from CCpy.Queue.CCpyJobControl import JobSubmit as JS
 from CCpy.Tools.CCpyTools import selectInputs, selectVASPInputs, selectSIESTAInput
 from CCpy.Tools.CCpyTools import linux_command as lc
 from CCpy.Tools.CCpyTools import get_ip
+from CCpy.Tools import CCpyConfig as ccpy_config
 import warnings
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -391,8 +392,7 @@ if __name__ == "__main__":
 
     '''
               )
-        home = os.getenv("HOME")
-        print(bcolors.OKGREEN + "    *** Queue config file: %s/.CCpy/queue_config.yaml ***" % home + bcolors.ENDC)
+        print(bcolors.OKGREEN + "    *** Queue config file: %s ***" % ccpy_config.queue_config_path() + bcolors.ENDC)
         print("""    - User can modify software version (ex. vasp_beef, atk2019...)
     - This file is created when CCpyJobSubmit.py is executed without option.
     - Therefore, if you want to regenerate as the default option or 

@@ -17,7 +17,7 @@ add : User defined additional calculation from previous calculation
 ex) CCpyVASPInputGen.py 1 -isif=2 -spin -mag -kp=4,4,2 -vdw=D3damp, -pseudo=Nb_sv, -pot=LDA_54...
 
     < USE PRESET >
-    -preset=[NAME] : [NAME].yaml in ~/.CCpy/vasp/
+    -preset=[NAME] : [NAME].yaml in ~/.CCpy_test/vasp/
 
     < INCAR OPTION >
     -sp      : Single point calculation      (DEFAULT : NSW = 200)
@@ -45,21 +45,21 @@ ex) CCpyVASPInputGen.py 1 -isif=2 -spin -mag -kp=4,4,2 -vdw=D3damp, -pseudo=Nb_s
     when use option 'add', 
     -dir=[DIRNAME]     : Additional calculation dir under previous run
     -pre_dir=[DIRNAME] : Previous directory name to copy CONTCAR, ... (default ./)
-    -preset=[NAME]     : [NAME].yaml in ~/.CCpy/vasp/
+    -preset=[NAME]     : [NAME].yaml in ~/.CCpy_test/vasp/
  
 
 [preset options]
-~/.CCpy/vasp/___.yaml
+~/.CCpy_test/vasp/___.yaml
 
    
 
 </pre>
 ## 2.1.0. Preset input options
-Once you run <code>CCpyVASPInputGen.py</code>, <code>$HOME/.CCpy/vasp/default.yaml</code> will be created.   
+Once you run <code>CCpyVASPInputGen.py</code>, <code>$HOME/.CCpy_test/vasp/default.yaml</code> will be created.   
 This file contains general relaxation options.   
 When you run <code>CCpyVASPInputGen.py</code> without any <code>-preset=</code> option, the command will read that file.
 #### Use custom preset
-- Create <code>my_option.yaml</code> in <code>$HOME/.CCpy/vasp</code>
+- Create <code>my_option.yaml</code> in <code>$HOME/.CCpy_test/vasp</code>
 - Run command with <code>-preset=my_option</code>
 ## 2.1.1. Basic input generation
 Option '1' is a basic input generation. It detects structure file types in current directory.
@@ -85,7 +85,7 @@ Choose file : 1-3,6                   # Choose files using dash and comma
 </pre>
 #### It will return default INCAR options
 <pre>
-# ---------- Read INCAR option from /home/user/.CCpy/vasp/default.yaml ---------- #
+# ---------- Read INCAR option from /home/user/.CCpy_test/vasp/default.yaml ---------- #
 
 # ------------------------------------------------------------------ #
 #                 Here are the current INCAR options                 #
@@ -158,13 +158,13 @@ CHG     CONTCAR  EIGENVAL  INCAR    OSZICAR  PCDAT   POTCAR  vasp.done  vasprun.
 CHGCAR  DOSCAR   IBZKPT    KPOINTS  OUTCAR   POSCAR  REPORT  vasp.out   VTEST.e11948  VTEST.o11948  VTEST.pe11948  VTEST.po11948  WAVECAR
 
 </pre>
-Create preset files in <code>$HOME/.CCpy/vasp</code>
+Create preset files in <code>$HOME/.CCpy_test/vasp</code>
 <pre>
-[user@localhost test]$ ls ~/.CCpy/vasp/
+[user@localhost test]$ ls ~/.CCpy_test/vasp/
 default.yaml  phonon.yaml
 </pre>
 When you run <code>CCpyVASPInputGen.py add -dir=phonon_opt -preset=phonon</code> it will find finished jobs.   
-And create inputs using <code>$HOME/.CCpy/vasp/phonon.yaml</code> under <code>phonon_opt</code> directory.
+And create inputs using <code>$HOME/.CCpy_test/vasp/phonon.yaml</code> under <code>phonon_opt</code> directory.
 <pre>
 [user@localhost test]$ CCpyVASPInputGen.py add -dir=phonon_opt -preset=phonon
 1 : TEST
@@ -202,7 +202,7 @@ INCAR:
 CCpyJobSubmit.py 2 xeon2 -dir=phonon_opt
 </pre>
 ## 2.1.4. Generate Inputs for Band Structure Calculation
-Default preset file (<code>band_sample.yaml</code>) for band calculation will be generated after run <code>CCpyVASPInputGen.py</code> under <code>~/.CCpy/vasp/</code>
+Default preset file (<code>band_sample.yaml</code>) for band calculation will be generated after run <code>CCpyVASPInputGen.py</code> under <code>~/.CCpy_test/vasp/</code>
 ### <code>band_sample.yaml</code>
 <pre>
 KPOINTS:

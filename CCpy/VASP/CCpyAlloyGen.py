@@ -100,10 +100,10 @@ ex) CCpyAlloyGen.py 1 -i=Pt32.cif -re=Pt -comp=Fe4,Co4,Ni4,Cu4 -n=500 -vasp -pre
 
     < CCPY VASP INPUT GENERATION >   (same sub-options as CCpyVASPInputGen.py)
     -vasp          : after generation, write INCAR/KPOINTS/POTCAR into every
-                     structure folder via CCpy VASPInput (yaml presets in ~/.CCpy/vasp/).
+                     structure folder via CCpy VASPInput (yaml presets in ~/.CCpy_test/vasp/).
                      The first structure opens the INCAR confirm menu; the same
                      settings are then applied to all remaining structures.
-    -preset=[NAME] : [NAME].yaml in ~/.CCpy/vasp/  (DEFAULT : default.yaml)
+    -preset=[NAME] : [NAME].yaml in ~/.CCpy_test/vasp/  (DEFAULT : default.yaml)
     -sp            : single point calculation      (NSW = 0)
     -isif=#        : ISIF value
     -spin          : spin polarized calculation

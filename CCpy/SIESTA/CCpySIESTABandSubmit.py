@@ -10,7 +10,7 @@ so it is located by import rather than by path; --script-dir overrides that
 with an explicit file path when you want a specific copy.
 
 This is a companion to CCpyJobSubmit.py / CCpyJobControl.py from the CCpy
-lab framework: it reuses the same ~/.CCpy/queue_config.yaml and
+lab framework: it reuses the same ~/.CCpy_test/queue_config.yaml and
 $CCpy_SCHEDULER_CONFIG partition/node handling (via subclassing
 CCpy.Queue.CCpyJobControl.JobSubmit), but is dedicated to this one
 pipeline instead of the general software menu (Gaussian/VASP/ATK/...).
@@ -110,6 +110,7 @@ from typing import Optional
 import yaml
 
 from CCpy.Queue.CCpyJobControl import JobSubmit as JS
+from CCpy.Tools import CCpyConfig as ccpy_config
 
 if sys.version[0] == '3':
     raw_input = input
@@ -422,7 +423,7 @@ def load_system_config(system_dir: Path, mode: str, config_path=None):
 class SiestaBandJobSubmit(JS):
     """
     Extends CCpy's JobSubmit with the SIESTA Band/FatBand/DOS pipeline.
-    __init__ is inherited unchanged: it loads ~/.CCpy/queue_config.yaml and
+    __init__ is inherited unchanged: it loads ~/.CCpy_test/queue_config.yaml and
     sets self.partition_name / self.pe_request / self.node_assign /
     self.allot_node / self.qsub / self.python_path / self.mpi_run /
     self.siesta_path from it (see CCpyJobControl.py).
@@ -680,8 +681,7 @@ def print_help_and_quit():
     Suboptions override siesta_band_config.yaml, which overrides the built-in defaults.
 --------------------------------------------------------------------------------------
 """)
-    home = os.getenv("HOME")
-    print(bcolors.OKGREEN + f"    *** Queue config file: {home}/.CCpy/queue_config.yaml ***" + bcolors.ENDC)
+    print(bcolors.OKGREEN + f"    *** Queue config file: {ccpy_config.queue_config_path()} ***" + bcolors.ENDC)
     print("""    - Modify software version / binary paths there (siesta_path, python_path, mpi_run, qsub, ...).
     - This file is created automatically the first time any CCpy*.py script runs.
 """)
@@ -809,7 +809,7 @@ def maybe_review_settings(cfg: dict, mode: str, ask: bool) -> dict:
 
 
 def main():
-    # -- initiate ~/.CCpy/queue_config.yaml if missing (same as CCpyJobSubmit.py)
+    # -- initiate ~/.CCpy_test/queue_config.yaml if missing (same as CCpyJobSubmit.py)
     JS(None, None, None, init_only=True)
 
     if len(sys.argv) < 3:

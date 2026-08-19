@@ -8,7 +8,7 @@ into CCpy. Based on Gen-HEA-pomepaw_v8.py; the command-line front-end is
 CCpy/bin/CCpyAlloyGen.py (CCpy-style options). On top of the original
 generator, `generate_ccpy_vasp_inputs()` connects the generated structures
 to CCpy's VASPInput (CCpy.VASP.VASPio), so every structure folder can get a
-full INCAR / KPOINTS / POTCAR set from ~/.CCpy/vasp/ yaml presets - the same
+full INCAR / KPOINTS / POTCAR set from ~/.CCpy_test/vasp/ yaml presets - the same
 machinery used by CCpyVASPInputGen.py.
 
 Main improvements over the original Code500.py:
@@ -3404,7 +3404,7 @@ def generate_ccpy_vasp_inputs(
       and the inputs are written to `output_dir/<structure_id>/`.
 
     Parameters largely map 1:1 to the CCpyVASPInputGen.py sub-options:
-    preset (-preset, name of a yaml in ~/.CCpy/vasp/, '.yaml' optional),
+    preset (-preset, name of a yaml in ~/.CCpy_test/vasp/, '.yaml' optional),
     kpoints (-kp, list like [4, 4, 2]), functional (-pot), pseudo (-pseudo,
     list), single_point (-sp), isif (-isif), vdw (-vdw), spin (-spin),
     mag (-mag), ldau (-ldau), batch (-batch).
@@ -4278,7 +4278,7 @@ def run_wizard():
         _row("order", "# 목표 order parameter Q 레벨")
         print("  --- CCpy VASP inputs " + "-" * 51)
         _row("vasp", "# y면 INCAR/KPOINTS/POTCAR 자동 생성 (CCpyVASPInputGen과 동일)")
-        _row("preset", "# ~/.CCpy/vasp/*.yaml 이름 (비우면 default)")
+        _row("preset", "# ~/.CCpy_test/vasp/*.yaml 이름 (비우면 default)")
         _row("kp", "# 예: 4,4,1 (비우면 preset k-density 자동)")
         print("-" * 74)
         print("* 고급 키(미표시)도 key=value로 입력 가능: max_attempts, children, limit,")

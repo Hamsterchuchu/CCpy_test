@@ -8,6 +8,7 @@ from CCpy.Gaussian.Gaussianio import GaussianInput as GI
 from CCpy.Gaussian.Gaussianio import GaussianOutput as GO
 from CCpy.Tools.CCpyStructure import NonPeriodicCoordinates as npc
 from CCpy.Tools.CCpyTools import selectInputs
+from CCpy.Tools import CCpyConfig as ccpy_config
 
 try:
     chk = sys.argv[1]
@@ -61,10 +62,10 @@ elif sys.argv[1] == "4":
     input_marker = [".com"]
     inputs = selectInputs(input_marker, "./")
 
-home = os.getenv("HOME")
-if ".CCpy" not in os.listdir(home):
-    os.mkdir(home+"/.CCpy")
-configs = os.listdir(home+"/.CCpy")
+# -- 개인 설정 폴더는 CCpy/Tools/CCpyConfig.py 에서 한 곳으로 관리한다 (기본 ~/.CCpy_test)
+config_dir = ccpy_config.ensure_config_home()
+g09_preset_file = str(ccpy_config.config_path("g09_input.json"))
+configs = os.listdir(str(config_dir))
 
 preset_file = None
 if own_preset:
@@ -72,9 +73,9 @@ if own_preset:
     options = json.loads(jstring)
     preset_file = own_preset
 elif "g09_input.json" in configs:
-    jstring = open(home + "/.CCpy/g09_input.json", "r").read()
+    jstring = open(g09_preset_file, "r").read()
     options = json.loads(jstring)
-    preset_file = home + "/.CCpy/g09_input.json"
+    preset_file = g09_preset_file
 else:
     # -- option preset
     options = {"nproc":24, "mem":64, "functional":"B3LYP", "basis":"6-31G*",
@@ -149,7 +150,7 @@ options["options_under_coordinates"] = get_options
 chk = raw_input("Do you want to update preset option? (y/n)")
 if chk == "y":
     jstring = json.dumps(options, indent=4)
-    f = open(home + "/.CCpy/g09_input.json", "w")
+    f = open(g09_preset_file, "w")
     f.write(jstring)
     f.close()
 

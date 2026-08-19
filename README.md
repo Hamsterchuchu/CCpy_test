@@ -7,6 +7,28 @@
 - All codes do not contain research results or confidential methodologies.
 - All copyrights belong to the library developers and distribution for commercial use is prohibited.
 
+# 0. Personal config directory (this fork)
+
+This fork (`CCpy_test`) keeps its personal settings in **`~/.CCpy_test/`**, not in
+`~/.CCpy/` which the production CCpy uses. Both can therefore be installed for the
+same user without overwriting each other's `queue_config.yaml` / `vasp/default.yaml`.
+
+<pre>
+~/.CCpy_test/
+├── queue_config.yaml     qsub, python_path, vasp/lammps/siesta paths ...
+└── vasp/
+    ├── default.yaml      INCAR / KPOINTS / MAGMOM / LDAU / POTCAR presets
+    └── band_sample.yaml
+</pre>
+
+- The directory is created on first run. `queue_config.yaml` is **inherited from
+  `~/.CCpy/queue_config.yaml`** if that file exists, so per-user paths are not lost.
+  Check `python_path` after the inheritance - it may still point at the production
+  environment.
+- Override the location with `$CCpy_HOME` if needed:
+  `export CCpy_HOME=~/.CCpy_something`
+- The path is defined in one place: `CCpy/Tools/CCpyConfig.py`.
+
 # 1. Initial setup
 ### 1.1. Clone to your PC or Cluster
 <pre>
@@ -60,7 +82,7 @@ How to use : CCpyVASPInputGen.py [option] [sub_option1] [sub_option2..]
 ex) CCpyVASPInputGen.py 1 -isif=2 -spin -mag -kp=4,4,2 -vdw=D3damp, -pseudo=Nb_sv, -pot=LDA_54...
 
     < USE PRESET >
-    -preset=[NAME] : [NAME].yaml in ~/.CCpy/vasp/
+    -preset=[NAME] : [NAME].yaml in ~/.CCpy_test/vasp/
 
     < STRUCTURE OPTION >
     -refine_poscar : Use refined structure with space group (sym prec 0.1)
@@ -93,7 +115,7 @@ ex) CCpyVASPInputGen.py 1 -isif=2 -spin -mag -kp=4,4,2 -vdw=D3damp, -pseudo=Nb_s
     when use option 'add',
     -dir=[DIRNAME]     : Additional calculation dir under previous run
     -pre_dir=[DIRNAME] : Previous directory name to copy CONTCAR, ... (default ./)
-    -preset=[NAME]     : [NAME].yaml in ~/.CCpy/vasp/
+    -preset=[NAME]     : [NAME].yaml in ~/.CCpy_test/vasp/
 
     < SEQUENTIAL JOB >
     This method can be used with CCpyJobSubmit.py without vasp input generation.
@@ -105,7 +127,7 @@ ex) CCpyVASPInputGen.py 1 -isif=2 -spin -mag -kp=4,4,2 -vdw=D3damp, -pseudo=Nb_s
 
 
 [preset options]
-~/.CCpy/vasp/___.yaml
+~/.CCpy_test/vasp/___.yaml
 
 
 </pre>
@@ -238,7 +260,7 @@ Run <code>CCpyJobSubmit.py</code>
 
 
 
-    *** Queue config file: /hpchome2/7230508/.CCpy/queue_config.yaml ***
+    *** Queue config file: /hpchome2/7230508/.CCpy_test/queue_config.yaml ***
     - User can modify software version (ex. vasp_beef, atk2019...)
     - This file is created when CCpyJobSubmit.py is executed without option.
     - Therefore, if you want to regenerate as the default option or
@@ -247,7 +269,7 @@ Run <code>CCpyJobSubmit.py</code>
 </pre>
 
 ### 3.2. Modify queue config file
-If <code>CCpyJobSubmit.py</code> had been executed successfully, <code>queue_config.yaml</code> would have been created under <code>$HOME/.CCpy/</code>.
+If <code>CCpyJobSubmit.py</code> had been executed successfully, <code>queue_config.yaml</code> would have been created under <code>$HOME/.CCpy_test/</code>.
 <pre>
 qsub: qsub
 python_path: /home/user20/.conda/envs/ccpy/bin/python
