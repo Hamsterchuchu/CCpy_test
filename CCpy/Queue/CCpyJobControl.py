@@ -4,6 +4,7 @@ from subprocess import call as shl
 from collections import OrderedDict
 import yaml
 from CCpy.Queue.server_profile import get_node_profile
+from CCpy.Tools import CCpyConfig as ccpy_config
 def represent_dictionary_order(self, dict_data):
     return self.represent_mapping('tag:yaml.org,2002:map', dict_data.items())
 yaml.add_representer(OrderedDict, represent_dictionary_order)
@@ -36,15 +37,10 @@ queue_info = yaml.load(open(CCpy_SCHEDULER_CONFIG, 'r'), Loader=yaml.FullLoader)
 
 class JobSubmit:
     def __init__(self, inputfile, queue, n_of_cpu, node=None, init_only=False):
-        home = os.getenv("HOME")
-        user_queue_config = "%s/.CCpy/queue_config.yaml" % home
-        if not os.path.isfile(user_queue_config):
-            from pathlib import Path
-            MODULE_DIR = Path(__file__).resolve().parent
-            default_queue_config = str(MODULE_DIR) + "/queue_config.yaml"
-            if ".CCpy" not in os.listdir(home):
-                os.mkdir("%s/.CCpy" % home)
-            os.system('cp %s %s' % (default_queue_config, user_queue_config))
+        # -- 개인 설정 폴더는 CCpy/Tools/CCpyConfig.py 에서 한 곳으로 관리한다
+        #    (기본 ~/.CCpy_test). 파일이 없으면 만들고, 기존 ~/.CCpy/queue_config.yaml
+        #    이 있으면 그것을 복사해 승계한다 (서버·개인마다 다른 값을 잃지 않도록).
+        user_queue_config = str(ccpy_config.ensure_queue_config())
 
         if init_only:
             return

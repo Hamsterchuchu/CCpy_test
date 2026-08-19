@@ -14,6 +14,7 @@ from CCpy.VASP.VASPtools import line_kpts_generator
 from CCpy.Tools.CCpyStructure import PeriodicStructure as PS
 from CCpy.Tools.CCpyStructure import latticeGen
 from CCpy.Tools.CCpyTools import file_writer, linux_command, change_dict_key, save_json, load_json, progress_bar, bcolors
+from CCpy.Tools import CCpyConfig as ccpy_config
 
 from pymatgen.core import IStructure as pmgIS
 from pymatgen.io.vasp import Vasprun
@@ -95,15 +96,16 @@ class VASPInput():
         # ------------ Grimme's parameters ------------- #
         vdw_C6, vdw_R0 = vasp_grimme_parameters()
         # ------------ check preset config ------------- #
-        # home = os.getenv("HOME")
+        # -- 설정 폴더 경로는 CCpy/Tools/CCpyConfig.py 에서 한 곳으로 관리한다
+        #    (기본 ~/.CCpy_test, $CCpy_HOME 으로 변경 가능).
         home = os.path.expanduser('~')
-        vasp_config_dir = home + "/.CCpy/vasp/"
+        vasp_config_dir = str(ccpy_config.vasp_config_dir()) + "/"
         MODULE_DIR = str(Path(__file__).resolve().parent)
 
         self.home = home
         self.vasp_config_dir = vasp_config_dir
         if not os.path.isdir(vasp_config_dir):
-            os.makedirs(vasp_config_dir)
+            os.makedirs(vasp_config_dir, exist_ok=True)
             print("* Preset options will be saved under :" + vasp_config_dir)
         configs = os.listdir(vasp_config_dir)
 
@@ -185,8 +187,8 @@ class VASPInput():
         #    POTCAR 이름별 권장 ENCUT 값이며, 이미 ENMAX x 1.3 이 반영된 수치이다.
         #    cms_vasp_set() 에서 이번 계산에 실제로 쓰이는 POTCAR 들의 값을 조회해
         #    그 중 최댓값을 ENCUT 으로 지정하는 데 사용한다.
-        #    preset_yaml -> ~/.CCpy/vasp/default.yaml -> 패키지 동봉 vasp_default.yaml
-        #    순으로 폴백한다. 세 번째 단계가 필요한 이유: ~/.CCpy/vasp/default.yaml 은
+        #    preset_yaml -> ~/.CCpy_test/vasp/default.yaml -> 패키지 동봉 vasp_default.yaml
+        #    순으로 폴백한다. 세 번째 단계가 필요한 이유: ~/.CCpy_test/vasp/default.yaml 은
         #    처음 실행할 때 한 번만 복사되므로, 기존 사용자의 홈 설정에는 ENCUT 섹션이
         #    없을 수 있다. 이 경우에도 패키지에 동봉된 표로 자동 지정이 동작하게 한다.
         #    (홈 설정에 ENCUT 섹션을 직접 넣으면 그쪽이 우선한다.)

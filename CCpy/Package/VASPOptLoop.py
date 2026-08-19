@@ -2,6 +2,7 @@ import os, sys
 import re
 import yaml
 from pathlib import Path
+from CCpy.Tools import CCpyConfig as ccpy_config
 import time
 from pymatgen.core.structure import IStructure
 from pymatgen.io.vasp.inputs import Incar
@@ -92,14 +93,12 @@ def check_empty():
             os.system("touch loop.done")
             quit()
 
-home = os.getenv("HOME")
-user_queue_config = f"{home}/.CCpy/queue_config.yaml"
 MODULE_DIR = Path(__file__).resolve().parent
-if not os.path.isfile(user_queue_config):
-    default_queue_config = str(MODULE_DIR) + "/queue_config.yaml"
-    if ".CCpy" not in os.listdir(home):
-        os.mkdir(f"{home}/.CCpy")
-    os.system(f"cp {default_queue_config} {user_queue_config}")
+# -- 개인 설정 폴더는 CCpy/Tools/CCpyConfig.py 에서 한 곳으로 관리한다 (기본 ~/.CCpy_test).
+#    이전에는 여기서 같은 로직을 따로 구현했는데, 템플릿 경로를 CCpy/Package/queue_config.yaml
+#    로 잡고 있어서(실제 템플릿은 CCpy/Queue/queue_config.yaml) 파일이 없을 때 복사가
+#    실패하고 있었다. 이제 JobControl 과 같은 함수를 쓴다.
+user_queue_config = str(ccpy_config.ensure_queue_config())
 # -- read configs from queue_config.yaml
 yaml_string = open(user_queue_config, "r").read()
 queue_config = yaml.load(yaml_string, Loader=yaml.FullLoader)
