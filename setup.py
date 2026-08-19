@@ -2,7 +2,13 @@ import os
 from setuptools import setup, find_packages
 
 bin_path = "./CCpy/bin/"
-script_files = [bin_path + f for f in os.listdir(bin_path)]
+# NOTE: os.listdir() also returns directories ('__pycache__', left behind by
+# py_compile/linters) and editor backups ('*.py~'), which setuptools would then
+# try to install as commands - copying a directory fails outright. Every real
+# entry here is a .py file (a symlink into the package on Linux), so keep only
+# those. os.path.isfile() follows symlinks, so valid links still pass.
+script_files = [bin_path + f for f in os.listdir(bin_path)
+                if f.endswith(".py") and os.path.isfile(os.path.join(bin_path, f))]
 script_files.sort()
 
 # -- Runtime dependencies -------------------------------------------------------
