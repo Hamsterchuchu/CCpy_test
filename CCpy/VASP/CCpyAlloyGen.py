@@ -15,25 +15,31 @@ if version[0] == '3':
     raw_input = input
 
 
-# No arguments -> the interactive settings sheet (this is the normal way in).
-# `-h` / `--help` / `help` prints the option reference below.
-if len(sys.argv) <= 1:
-    from CCpy.VASP.AlloyGen import run_wizard
-    run_wizard()
-    quit()
-
-if sys.argv[1] in ("-h", "--help", "help", "-help"):
+# No arguments -> print this usage reference, the same habit as
+# CCpyVASPInputGen.py. Pick a mode (1-5 or w) to open the settings sheet.
+if len(sys.argv) <= 1 or sys.argv[1] in ("-h", "--help", "help", "-help"):
+    # The preset folder is resolved by CCpy/Tools/CCpyConfig.py, so the help
+    # text asks for it instead of hardcoding a path that can go stale.
+    from CCpy.VASP.AlloyGen import vasp_preset_dir_label
+    _PRESET_DIR = vasp_preset_dir_label()
     print("\nHow to use : " + sys.argv[0].split("/")[-1] + " [option] [sub_option1] [sub_option2..]")
     print('''--------------------------------------
-[options]
-(no option) : interactive settings sheet -- the normal way in (same as 'w')
+[options]   -- every option opens the settings sheet; the number just presets 'mode'
 1 : random     (fully random substitution)
 2 : spread     (same-element dispersed, spread-biased substitution)
 3 : layered    (layer-ordered parent -> disorder controlled by target Q)
 4 : domain     (top-view 2x2 domain / 5-element quincunx template)
 5 : exhaustive (enumerate all symmetry-unique configurations)
-w : wizard     (same as running with no option)
--h            : this help
+w : wizard     (settings sheet with no mode preset -- same as '1')
+
+(no option) : print this help.  -h does the same.
+
+Every option opens the one-screen settings sheet, where the input file is
+picked from a numbered list and every setting is shown at once. Sub-options
+pre-fill that sheet rather than running behind your back, so
+`CCpyAlloyGen.py 4 -n=100` opens it already set to domain mode with n=100.
+Edit anything with key=value, then enter "n" to run. Add -batch to skip every
+question and run immediately (then -i= is required).
 
 [sub_options]
 ex) CCpyAlloyGen.py 1 -i=Pt32.cif -re=Pt -comp=Fe4,Co4,Ni4,Cu4 -n=500 -vasp -preset=alloy
@@ -116,10 +122,11 @@ ex) CCpyAlloyGen.py 1 -i=Pt32.cif -re=Pt -comp=Fe4,Co4,Ni4,Cu4 -n=500 -vasp -pre
 
     < CCPY VASP INPUT GENERATION >   (same sub-options as CCpyVASPInputGen.py)
     -vasp          : after generation, write INCAR/KPOINTS/POTCAR into every
-                     structure folder via CCpy VASPInput (yaml presets in ~/.CCpy_test/vasp/).
+                     structure folder via CCpy VASPInput (yaml presets in
+                     [PRESET_DIR]).
                      The first structure opens the INCAR confirm menu; the same
                      settings are then applied to all remaining structures.
-    -preset=[NAME] : [NAME].yaml in ~/.CCpy_test/vasp/  (DEFAULT : default.yaml)
+    -preset=[NAME] : [NAME].yaml in [PRESET_DIR]  (DEFAULT : default.yaml)
     -sp            : single point calculation      (NSW = 0)
     -isif=#        : ISIF value
     -spin          : spin polarized calculation
@@ -129,14 +136,15 @@ ex) CCpyAlloyGen.py 1 -i=Pt32.cif -re=Pt -comp=Fe4,Co4,Ni4,Cu4 -n=500 -vasp -pre
     -kp=#,#,#      : Monkhorst-Pack grid           (DEFAULT : preset reciprocal density)
     -pot=[F]       : POTCAR functional             (DEFAULT : PBE_54)
     -pseudo=[..]   : ex) -pseudo=Nb_sv,Ti_sv
-    -batch         : skip the INCAR confirm menu of the first structure
+    -batch         : ask nothing -- skip the settings sheet and the INCAR confirm
+                     menu, and run immediately (-i= is required with it)
 
     < LEGACY VASP FILES (Gen-HEA style, only with -fmt=folder) >
     -template=[DIR]  : copy INCAR/KPOINTS/POTCAR from DIR into every structure folder
     -gen_potcar      : build POTCAR by concatenating a potpaw_PBE-style library
     -potcar_lib=[DIR]: potpaw library path          (DEFAULT : auto-detect)
     -potcar_var=[..] : variant overrides            ex) -potcar_var=Fe:Fe_sv,Co:Co_pv
---------------------------------------'''
+--------------------------------------'''.replace("[PRESET_DIR]", _PRESET_DIR)
           )
     quit()
 
@@ -151,6 +159,7 @@ if option not in mode_map:
 # ---------------------------------------------------------------------------
 # Parse sub options (CCpy style: exact match for flags, -key=value for values)
 # ---------------------------------------------------------------------------
+given = {}                 # sheet keys the user actually supplied
 input_file = None
 output_dir = None
 replace_element = None          # None -> derive from the chosen structure
@@ -203,94 +212,138 @@ for arg in sys.argv[2:]:
     # flags (exact match)
     if arg == "-keep_comp":
         keep_composition = True
+        given["comp"] = "keep"
     elif arg == "-overwrite":
         overwrite = True
+        given["overwrite"] = "y"
     elif arg == "-vasp":
         ccpy_vasp = True
+        given["vasp"] = "y"
     elif arg == "-sp":
         single_point = True
+        given["sp"] = "y"
     elif arg == "-spin":
         spin = True
+        given["spin"] = "y"
     elif arg == "-mag":
         mag = True
+        given["mag"] = "y"
     elif arg == "-ldau":
         ldau = True
+        given["ldau"] = "y"
     elif arg == "-batch":
         batch = True
+        given["batch"] = "y"
     elif arg == "-gen_potcar":
         generate_potcar = True
+        given["gen_potcar"] = "y"
     elif arg == "-surface":
         surface = ASK          # pick interactively (auto-detect + confirm)
+        given["surface"] = "auto"
     elif arg == "-redox":
         redox = ASK            # pick interactively from the atom listing
+        given["redox"] = "auto"
     # valued options (-key=value)
     elif arg.startswith("-i="):
         input_file = arg.split("=", 1)[1]
+        given["input"] = arg.split("=", 1)[1]
     elif arg.startswith("-o="):
         output_dir = arg.split("=", 1)[1]
+        given["output"] = arg.split("=", 1)[1]
     elif arg.startswith("-re="):
         replace_element = arg.split("=", 1)[1]
+        given["replace"] = arg.split("=", 1)[1]
     elif arg.startswith("-comp="):
         composition_str = arg.split("=", 1)[1]
+        given["comp"] = arg.split("=", 1)[1]
     elif arg.startswith("-n="):
         target = int(arg.split("=", 1)[1])
+        given["n"] = arg.split("=", 1)[1]
     elif arg.startswith("-seed="):
         seed = int(arg.split("=", 1)[1])
+        given["seed"] = arg.split("=", 1)[1]
     elif arg.startswith("-fmt="):
         out_fmt = arg.split("=", 1)[1].lower()
+        given["fmt"] = arg.split("=", 1)[1]
     elif arg.startswith("-surface="):
         surface = arg.split("=", 1)[1]
+        given["surface"] = arg.split("=", 1)[1]
     elif arg.startswith("-redox_max="):
         redox_max_sets = int(arg.split("=", 1)[1])
+        given["redox_max"] = arg.split("=", 1)[1]
     elif arg.startswith("-redox="):
         # spec string: numbers / element symbols / optional '/k'
         redox = arg.split("=", 1)[1]
+        given["redox"] = arg.split("=", 1)[1]
     elif arg.startswith("-symprec="):
         symprec = float(arg.split("=", 1)[1])
+        given["symprec"] = arg.split("=", 1)[1]
     elif arg.startswith("-max_attempts="):
         max_attempts = int(arg.split("=", 1)[1])
+        given["max_attempts"] = arg.split("=", 1)[1]
     elif arg.startswith("-axis="):
         layer_axis = arg.split("=", 1)[1]
+        given["axis"] = arg.split("=", 1)[1]
     elif arg.startswith("-view="):
         view_axis = arg.split("=", 1)[1]
+        given["view"] = arg.split("=", 1)[1]
     elif arg.startswith("-pattern="):
         domain_pattern = arg.split("=", 1)[1]
+        given["pattern"] = arg.split("=", 1)[1]
     elif arg.startswith("-order="):
         order_levels = arg.split("=", 1)[1]
+        given["order"] = arg.split("=", 1)[1]
     elif arg.startswith("-children="):
         children_per_parent = int(arg.split("=", 1)[1])
+        given["children"] = arg.split("=", 1)[1]
     elif arg.startswith("-limit="):
         exhaustive_limit = int(arg.split("=", 1)[1])
+        given["limit"] = arg.split("=", 1)[1]
     elif arg.startswith("-order_tol="):
         order_tolerance = float(arg.split("=", 1)[1])
+        given["order_tol"] = arg.split("=", 1)[1]
     elif arg.startswith("-order_steps="):
         order_search_steps = int(arg.split("=", 1)[1])
+        given["order_steps"] = arg.split("=", 1)[1]
     elif arg.startswith("-sro_cutoff="):
         sro_cutoff_factor = float(arg.split("=", 1)[1])
+        given["sro_cutoff"] = arg.split("=", 1)[1]
     elif arg.startswith("-sro_tol="):
         sro_tolerance = float(arg.split("=", 1)[1])
+        given["sro_tol"] = arg.split("=", 1)[1]
     elif arg.startswith("-sro_weight="):
         sro_weight = float(arg.split("=", 1)[1])
+        given["sro_weight"] = arg.split("=", 1)[1]
     elif arg.startswith("-bucket="):
         max_trials_per_bucket = int(arg.split("=", 1)[1])
+        given["bucket"] = arg.split("=", 1)[1]
     elif arg.startswith("-preset="):
         incar_preset = arg.split("=", 1)[1]
+        given["preset"] = arg.split("=", 1)[1]
     elif arg.startswith("-isif="):
         isif = int(arg.split("=", 1)[1])
+        given["isif"] = arg.split("=", 1)[1]
     elif arg.startswith("-vdw="):
         vdw = arg.split("=", 1)[1]
+        given["vdw"] = arg.split("=", 1)[1]
     elif arg.startswith("-kp="):
         kpoints = arg.split("=", 1)[1].split(",")
+        given["kp"] = arg.split("=", 1)[1]
     elif arg.startswith("-pot="):
         functional = arg.split("=", 1)[1]
+        given["pot"] = arg.split("=", 1)[1]
     elif arg.startswith("-pseudo="):
         pseudo = arg.split("=", 1)[1].split(",")
+        given["pseudo"] = arg.split("=", 1)[1]
     elif arg.startswith("-template="):
         template_dir = arg.split("=", 1)[1]
+        given["template"] = arg.split("=", 1)[1]
     elif arg.startswith("-potcar_lib="):
         potcar_library = arg.split("=", 1)[1]
+        given["potcar_lib"] = arg.split("=", 1)[1]
     elif arg.startswith("-potcar_var="):
         potcar_variants = arg.split("=", 1)[1]
+        given["potcar_var"] = arg.split("=", 1)[1]
     else:
         print("Unknown sub_option: %s  (run without arguments for help)" % arg)
         quit()
@@ -300,9 +353,15 @@ for arg in sys.argv[2:]:
 # ---------------------------------------------------------------------------
 mode = mode_map[option]
 
-if mode == "wizard":
+# The option number picks the generation mode and then hands over to the
+# settings sheet, the same way CCpyVASPInputGen shows its INCAR menu before
+# writing anything: sub-options given here just pre-fill the sheet. `-batch`
+# means "ask nothing" and runs straight through instead.
+if not batch:
     from CCpy.VASP.AlloyGen import run_wizard
-    run_wizard()
+    if mode != "wizard":
+        given["mode"] = mode
+    run_wizard(initial=given)
     quit()
 
 from collections import Counter
@@ -321,11 +380,10 @@ from CCpy.VASP.AlloyGen import (
 )
 
 if not input_file:
-    # No -i= given: list what is here and let the user pick by number
-    # (same habit as CCpyVASPInputGen's input selection).
-    input_file = select_structure_file_interactively()
-    if not input_file:
-        quit()
+    # -batch means no questions, so there is nothing to pick from here.
+    print("With -batch the input file must be given: -i=[FILE]")
+    print("(drop -batch to get the settings sheet with a file chooser)")
+    quit()
 if not os.path.isfile(input_file):
     print("Input structure file not found: %s" % input_file)
     quit()

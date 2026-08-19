@@ -8,8 +8,11 @@ into CCpy. Based on Gen-HEA-pomepaw_v8.py; the command-line front-end is
 CCpy/bin/CCpyAlloyGen.py (CCpy-style options). On top of the original
 generator, `generate_ccpy_vasp_inputs()` connects the generated structures
 to CCpy's VASPInput (CCpy.VASP.VASPio), so every structure folder can get a
-full INCAR / KPOINTS / POTCAR set from ~/.CCpy_test/vasp/ yaml presets - the same
-machinery used by CCpyVASPInputGen.py.
+full INCAR / KPOINTS / POTCAR set from the yaml presets in CCpy's personal
+config folder - the same machinery used by CCpyVASPInputGen.py. Where that
+folder lives is decided in one place, CCpy/Tools/CCpyConfig.py, and this
+module asks it at runtime (vasp_preset_dir_label()) instead of repeating the
+path in help text.
 
 Main improvements over the original Code500.py:
 1) Correct symmetry deduplication using canonical decoration keys.
@@ -26,10 +29,12 @@ Recommended entry point (installed CCpy command)
 -------------------------------------------------
    CCpyAlloyGen.py [option] [sub_options]     (see CCpy/bin/CCpyAlloyGen.py)
 
-Interactive usage (wizard)
---------------------------
-   CCpyAlloyGen.py w
-or run this module without arguments and answer the questions step by step:
+Interactive usage (settings sheet)
+---------------------------------
+   CCpyAlloyGen.py w          (or any mode number 1-5; the number presets 'mode')
+Running the CCpyAlloyGen.py command with no option prints its usage reference,
+the same habit as CCpyVASPInputGen.py. Running *this module* directly with no
+argument opens the sheet:
    python AlloyGen.py
 
 Direct module command-line examples (legacy argparse interface)
@@ -81,6 +86,32 @@ try:
     sys.stdout.reconfigure(line_buffering=True)
 except (AttributeError, ValueError):
     pass
+
+
+# -----------------------------------------------------------------------------
+# Where the yaml presets live
+# -----------------------------------------------------------------------------
+# CCpy copies the packaged yaml files into a personal config folder on first
+# run and reads that copy afterwards. The folder name is defined in exactly one
+# place -- CCpy/Tools/CCpyConfig.py (currently `~/.CCpy_test`, overridable with
+# $CCpy_HOME). Help text and sheet hints ask for it at runtime through the
+# function below, so renaming the folder can never leave stale paths behind
+# (which is what happened when `~/.CCpy` was hardcoded in five places).
+try:
+    from CCpy.Tools.CCpyConfig import vasp_config_dir as _ccpy_vasp_config_dir
+except Exception:                       # running the module standalone
+    _ccpy_vasp_config_dir = None
+
+
+def vasp_preset_dir_label():
+    """Display path of the preset yaml folder, e.g. '~/.CCpy_test/vasp/'."""
+    if _ccpy_vasp_config_dir is None:
+        return "the CCpy config folder (see CCpy/Tools/CCpyConfig.py)"
+    path = str(_ccpy_vasp_config_dir()).replace(os.sep, "/")
+    home = os.path.expanduser("~").replace(os.sep, "/")
+    if home and path.startswith(home):
+        path = "~" + path[len(home):]
+    return path.rstrip("/") + "/"
 
 
 # -----------------------------------------------------------------------------
@@ -1054,15 +1085,46 @@ def build_neighbor_map(atoms, variable_sites, cutoff_factor=1.20):
         raise ValueError("Could not determine a nonzero neighbor distance.")
     nearest = min(positive)
     cutoff = nearest * float(cutoff_factor)
-    neighbor_map = {
-        i: [j for j in sites if j != i and distances[i, j] <= cutoff]
-        for i in sites
-    }
+
+    def _map_at(radius):
+        return {
+            i: [j for j in sites if j != i and distances[i, j] <= radius]
+            for i in sites
+        }
+
+    neighbor_map = _map_at(cutoff)
+    # A site with no neighbor inside the first shell is normal whenever the
+    # substitution pool is not a single connected sublattice -- e.g. an
+    # adsorbate species included in the pool sits far above the slab. That used
+    # to abort the whole run with a traceback. Grow the shell a few times
+    # instead, and if a site is still isolated just leave its neighbor list
+    # empty (the Warren-Cowley average simply skips it) and say so once.
     if any(not neighbors for neighbors in neighbor_map.values()):
-        raise ValueError(
-            "Some variable sites have no first-shell neighbors. "
-            "Increase --sro-cutoff-factor or inspect the selected sublattice."
-        )
+        grown = cutoff
+        for _ in range(6):
+            grown *= 1.25
+            candidate_map = _map_at(grown)
+            if all(candidate_map.values()):
+                print("[notice] SRO first shell widened to %.6f Angstrom so every "
+                      "variable site has a neighbor (cutoff_factor %.2f -> %.2f)."
+                      % (grown, float(cutoff_factor), grown / nearest))
+                return candidate_map, nearest, grown
+        isolated = [i + 1 for i, neighbors in neighbor_map.items() if not neighbors]
+        if len(isolated) == len(sites):
+            raise ValueError(
+                "No variable site has a first-shell neighbor within %.6f Angstrom. "
+                "The substitution pool does not form a connected sublattice - check "
+                "-re= (or raise -sro_cutoff=)." % cutoff
+            )
+        preview = ", ".join("#%d" % n for n in isolated[:10])
+        if len(isolated) > 10:
+            preview += ", ... (%d atoms)" % len(isolated)
+        print("[notice] %d variable site(s) have no first-shell neighbor within "
+              "%.6f Angstrom and are skipped in the SRO average: %s"
+              % (len(isolated), cutoff, preview))
+        print("         They are usually pool atoms that sit off the main "
+              "sublattice (an adsorbate left in -re=). Raise -sro_cutoff= to "
+              "include them.")
     return neighbor_map, nearest, cutoff
 
 
@@ -3529,7 +3591,8 @@ def generate_ccpy_vasp_inputs(
       and the inputs are written to `output_dir/<structure_id>/`.
 
     Parameters largely map 1:1 to the CCpyVASPInputGen.py sub-options:
-    preset (-preset, name of a yaml in ~/.CCpy_test/vasp/, '.yaml' optional),
+    preset (-preset, name of a yaml in the CCpy config folder's vasp/, '.yaml'
+    optional; vasp_preset_dir_label() prints the resolved path),
     kpoints (-kp, list like [4, 4, 2]), functional (-pot), pseudo (-pseudo,
     list), single_point (-sp), isif (-isif), vdw (-vdw), spin (-spin),
     mag (-mag), ldau (-ldau), batch (-batch).
@@ -4302,9 +4365,14 @@ def _wizard_output_dir(input_file, suggested):
         return output_dir
 
 
-def run_wizard():
+def run_wizard(initial=None):
     """
     One-screen settings sheet (replaces the old step-by-step wizard).
+
+    `initial` pre-fills sheet keys from the command line, so
+    `CCpyAlloyGen.py 4 -n=100` opens the sheet already set to domain mode with
+    100 structures. Pre-filled keys count as user input, so the
+    structure-derived defaults never overwrite them.
 
     Every setting is shown at once with its current value. Edit any of them
     with `key=value` (several edits can be chained with commas, e.g.
@@ -4350,6 +4418,7 @@ def run_wizard():
         "sro_tol": "0.12",
         "sro_weight": "0.5",
         "bucket": "30",
+        "redox_max": "50",
         "batch": "n",
         "sp": "n",
         "isif": "",
@@ -4413,7 +4482,15 @@ def run_wizard():
             if counts:
                 s["comp"] = ",".join(f"{el}{counts[el]}" for el in sorted(counts))
 
-    if candidates:
+    for key, value in (initial or {}).items():
+        if key in s and value not in (None, ""):
+            s[key] = str(value)
+            if key != "input":
+                user_set.add(key)
+
+    if s["input"] and os.path.isfile(s["input"]):
+        _apply_structure_defaults()          # -i= was given on the command line
+    elif candidates:
         # Pick the structure first, the way CCpy's input pickers do, then show
         # the settings sheet for it.
         chosen = select_structure_file_interactively()
@@ -4452,11 +4529,11 @@ def run_wizard():
         _row("order", "# 목표 order parameter Q 레벨")
         print("  --- CCpy VASP inputs " + "-" * 51)
         _row("vasp", "# y면 INCAR/KPOINTS/POTCAR 자동 생성 (CCpyVASPInputGen과 동일)")
-        _row("preset", "# ~/.CCpy_test/vasp/*.yaml 이름 (비우면 default)")
+        _row("preset", "# %s*.yaml 이름 (비우면 default)" % vasp_preset_dir_label())
         _row("kp", "# 예: 4,4,1 (비우면 preset k-density 자동)")
         print("-" * 74)
         print("* 고급 키(미표시)도 key=value로 입력 가능: max_attempts, children, limit,")
-        print("  order_tol, order_steps, sro_cutoff, sro_tol, sro_weight, bucket, batch,")
+        print("  order_tol, order_steps, sro_cutoff, sro_tol, sro_weight, bucket, redox_max, batch,")
         print("  sp, isif, spin, mag, ldau, vdw, pot, pseudo, template, gen_potcar,")
         print("  potcar_lib, potcar_var")
 
@@ -4516,7 +4593,8 @@ def run_wizard():
         redox_n_sets = 0
         redox_val = s["redox"].strip()
         if redox_val and redox_val.lower() in ("ask", "auto", "y", "yes"):
-            redox_spec = interactive_select_redox_atoms(parent, replace_elements)
+            redox_spec = interactive_select_redox_atoms(
+                parent, replace_elements, max_sets=int(s["redox_max"] or 50))
             s["redox"] = redox_spec or ""
             redox_val = redox_spec or ""
         if redox_val:
@@ -4564,9 +4642,18 @@ def run_wizard():
             print("[검증 실패] fmt는 cif/vasp/folder 중 하나여야 합니다: %r" % s["fmt"])
             return False
 
-        output_dir = s["output"].strip() or _suggest_output_dir(
-            input_file, mode, composition, layer_axis=s["axis"], view_axis=s["view"]
-        )
+        output_dir = s["output"].strip()
+        if not output_dir:
+            # Ask for the folder name once the settings are settled, showing the
+            # name that would be used otherwise. Empty input keeps that default.
+            suggested = _suggest_output_dir(
+                input_file, mode, composition, layer_axis=s["axis"], view_axis=s["view"]
+            )
+            try:
+                answer = input("\n* folder name ? (엔터 = %s)\n: " % suggested).strip()
+            except EOFError:
+                answer = ""
+            output_dir = answer or suggested
         output_abs = os.path.abspath(os.path.realpath(output_dir))
         input_abs = os.path.abspath(os.path.realpath(input_file))
         if output_abs == input_abs or os.path.isfile(output_abs):
@@ -4659,6 +4746,7 @@ def run_wizard():
             potcar_variants=s["potcar_var"].strip() or None,
             adsorbate_elements=surface,
             redox_remove=redox_spec,
+            redox_max_sets=int(s["redox_max"] or 50),
         )
 
         if ccpy_vasp:
