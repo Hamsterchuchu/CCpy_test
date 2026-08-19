@@ -30,17 +30,24 @@ w : wizard     (interactive one-screen settings sheet)
 ex) CCpyAlloyGen.py 1 -i=Pt32.cif -re=Pt -comp=Fe4,Co4,Ni4,Cu4 -n=500 -vasp -preset=alloy
 
     < STRUCTURE GENERATION >
-    -i=[FILE]      : input structure file (.cif, POSCAR/CONTCAR)   (REQUIRED, except wizard)
+    -i=[FILE]      : input structure file (.cif, .vasp, POSCAR/CONTCAR).
+                     Omit it and the structures in this directory are listed
+                     with numbers to pick from, the way CCpyVASPInputGen does.
     -o=[DIR]       : output directory              (DEFAULT : auto-suggested from input/mode/composition)
-    -re=[EL,..]    : element(s) whose sites form the replaceable pool   (DEFAULT : Pt)
+    -re=[EL,..]    : element(s) whose sites form the replaceable pool
+                     (DEFAULT : the substrate elements of the input structure,
+                      i.e. everything except the atoms judged to be adsorbates)
                      ex) -re=Pt        or  -re=Co,Fe,Ni,Cu (pool of an already-mixed HEA)
-    -comp=[C]      : target replacement composition                     (DEFAULT : Fe4,Co4,Ni4,Cu4)
+    -comp=[C]      : target replacement composition
+                     (DEFAULT : what those sites currently hold, so the printed
+                      value shows the real composition to edit from)
                      ex) -comp=Fe4,Co4,Ni4,Cu4  or  -comp=Fe:4,Co:4,Ni:4,Cu:4
     -keep_comp     : reshuffle the current composition of the -re pool (-comp is ignored)
     -n=#           : target number of unique structures                 (DEFAULT : 500)
     -seed=#        : random seed                   (DEFAULT : auto-generated, saved to metadata.txt)
-    -fmt=[F]       : cif | vasp | folder           (DEFAULT : cif / forced to cif when -vasp)
+    -fmt=[F]       : cif | vasp | folder           (DEFAULT : folder)
                      folder : conf dirs with POSCAR (S000001/POSCAR)
+                     (ignored with -vasp: the folders get full VASP inputs)
     -overwrite     : remove the output directory first if it exists
     -surface=[EL,..]: also write adsorbate-free surface twins to [DIR]_surface.
                      A bare element here means ALL atoms of it -- a clean surface.
@@ -137,12 +144,12 @@ if option not in mode_map:
 # ---------------------------------------------------------------------------
 input_file = None
 output_dir = None
-replace_element = "Pt"
-composition_str = "Fe4,Co4,Ni4,Cu4"
+replace_element = None          # None -> derive from the chosen structure
+composition_str = None          # None -> derive from the chosen structure
 keep_composition = False
 target = 500
 seed = None
-out_fmt = "cif"
+out_fmt = "folder"
 overwrite = False
 ASK = "__ASK__"        # sentinel: bare -surface / -redox -> interactive pick
 surface = None
@@ -289,23 +296,48 @@ if mode == "wizard":
     run_wizard()
     quit()
 
+from collections import Counter
+
 from CCpy.VASP.AlloyGen import (
     generate_structures,
+    guess_substrate_elements,
     generate_ccpy_vasp_inputs,
     parse_composition,
     parse_element_list,
     interactive_select_surface_elements,
     interactive_select_redox_atoms,
+    select_structure_file_interactively,
     _read_structure_file,
     _suggest_output_dir,
 )
 
 if not input_file:
-    print("Input structure file must be assigned: -i=[FILE]  (or use wizard: CCpyAlloyGen.py w)")
-    quit()
+    # No -i= given: list what is here and let the user pick by number
+    # (same habit as CCpyVASPInputGen's input selection).
+    input_file = select_structure_file_interactively()
+    if not input_file:
+        quit()
 if not os.path.isfile(input_file):
     print("Input structure file not found: %s" % input_file)
     quit()
+
+# -- defaults taken from the structure itself, so a Pt-free CONTCAR never
+#    silently gets "-re=Pt" applied to it
+if replace_element is None or composition_str is None:
+    seed_parent = _read_structure_file(input_file)
+    if replace_element is None:
+        substrate, adsorbate, _is_slab = guess_substrate_elements(seed_parent)
+        if not substrate:
+            print("Could not work out the replacement pool from the structure; give -re=")
+            quit()
+        replace_element = ",".join(substrate)
+        note = "  (adsorbate: %s)" % ",".join(adsorbate) if adsorbate else ""
+        print("* Replacement pool (auto): %s%s" % (replace_element, note))
+    if composition_str is None:
+        pool = set(parse_element_list(replace_element))
+        counts = Counter(str(sym) for sym in seed_parent.get_chemical_symbols() if str(sym) in pool)
+        composition_str = ",".join("%s%d" % (el, counts[el]) for el in sorted(counts))
+        print("* Target composition (auto, = current): %s" % composition_str)
 
 composition = None if keep_composition else parse_composition(composition_str)
 

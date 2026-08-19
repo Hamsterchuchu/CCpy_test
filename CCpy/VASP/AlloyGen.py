@@ -3100,6 +3100,103 @@ def _largest_vacuum_axis(atoms):
     return best
 
 
+def select_structure_file_interactively():
+    """
+    List the structure files in the current directory with numbers and let the
+    user pick one, the way CCpyVASPInputGen presents its inputs. Each entry
+    shows the formula and the guessed substrate/adsorbate split, so the choice
+    can be made without opening the files. Returns the filename, or None.
+    """
+    files = _find_structure_files()
+    if not files:
+        print("현재 폴더에서 구조 파일을 찾지 못했습니다 (.cif, .vasp, POSCAR, CONTCAR).")
+        return None
+
+    print("\n[구조 파일]")
+    for n, filename in enumerate(files, start=1):
+        try:
+            parent = _read_structure_file(filename)
+            formula = parent.get_chemical_formula()
+            substrate, adsorbate, _is_slab = guess_substrate_elements(parent)
+            tag = "  기판=%s" % ",".join(substrate) if substrate else ""
+            if adsorbate:
+                tag += " / 흡착물=%s" % ",".join(adsorbate)
+        except Exception:
+            formula, tag = "(읽기 실패)", ""
+        print("  %2d) %-24s %-16s%s" % (n, filename, formula, tag))
+
+    while True:
+        try:
+            answer = input("\n* 번호를 선택해 주세요 (파일명 직접 입력도 가능 / q=취소)\n: ").strip()
+        except EOFError:
+            print("\n입력이 없어 취소합니다.")
+            return None
+        if answer.lower() in ("q", "quit", ""):
+            print("취소했습니다.")
+            return None
+        if answer.isdigit():
+            n = int(answer)
+            if 1 <= n <= len(files):
+                return files[n - 1]
+            print("[입력 오류] 1..%d 범위의 번호를 입력해 주세요." % len(files))
+            continue
+        if os.path.isfile(answer):
+            return answer
+        print("[입력 오류] 그런 파일이 없습니다: %r" % answer)
+
+
+def guess_substrate_elements(parent, vacuum_min_gap=VACUUM_MIN_GAP,
+                             z_tol=ADSORBATE_Z_TOL):
+    """
+    Guess which elements form the substrate, *without* being told the
+    replacement pool first. Used to seed the settings sheet, so a Pt-free
+    CONTCAR never shows "replace = Pt".
+
+    An element is called an adsorbate only when both signals agree:
+
+      few    -- it has at most half as many atoms as the most abundant element
+                (an adsorbate is a small cluster; an alloy component is not), and
+      on top -- every one of its atoms sits above the top of the most abundant
+                element's span (a substitutional dopant sits inside it, so it
+                stays in the substrate).
+
+    Without a vacuum gap there is no free surface at all, so everything counts
+    as substrate. Requiring both signals keeps ordered/layered alloys intact:
+    the upper layer of a layered alloy is on top, but it is not few.
+
+    Returns (substrate_elements, adsorbate_elements, is_slab), lists sorted.
+    This is a starting point for the user to edit, not a determination: it
+    misjudges a structure whose adsorbate rivals the slab in size, or one with
+    adsorbates on both faces.
+    """
+    symbols = [str(sym) for sym in parent.get_chemical_symbols()]
+    all_elements = sorted(set(symbols))
+    if not symbols:
+        return [], [], False
+
+    axis, gap, origin = _largest_vacuum_axis(parent)
+    if gap < vacuum_min_gap:
+        return all_elements, [], False
+
+    lengths = parent.cell.lengths()
+    frac = parent.get_scaled_positions(wrap=True)
+    coord = ((frac[:, axis] - origin) % 1.0) * lengths[axis]
+
+    counts = Counter(symbols)
+    max_count = max(counts.values())
+    few_threshold = max(1, max_count // 2)
+    backbone = sorted(all_elements, key=lambda el: (-counts[el], el))[0]
+    backbone_top = max(coord[i] for i, sym in enumerate(symbols) if sym == backbone)
+
+    substrate, adsorbate = [], []
+    for element in all_elements:
+        idx = [i for i, sym in enumerate(symbols) if sym == element]
+        few = counts[element] <= few_threshold
+        on_top = min(coord[i] for i in idx) > backbone_top - z_tol
+        (adsorbate if (few and on_top) else substrate).append(element)
+    return substrate, adsorbate, True
+
+
 def detect_adsorbate_candidates(parent, replace_elements,
                                 vacuum_min_gap=VACUUM_MIN_GAP,
                                 z_tol=ADSORBATE_Z_TOL):
@@ -4195,12 +4292,12 @@ def run_wizard():
     s = {
         # structure generation (visible)
         "input": "",
-        "replace": "Pt",
-        "comp": "Fe4,Co4,Ni4,Cu4",
+        "replace": "",          # filled in from the chosen structure
+        "comp": "",             # filled in from the chosen structure
         "mode": "random",
         "n": "500",
         "seed": "",
-        "fmt": "cif",
+        "fmt": "folder",
         "surface": "",
         "redox": "",
         "output": "",
@@ -4240,9 +4337,57 @@ def run_wizard():
         "potcar_var": "",
     }
 
+    # ---------------------- structure files & defaults ----------------------
     candidates = _find_structure_files()
+    formulas = {}          # filename -> chemical formula (lazy, cached)
+    detected = {}          # filename -> (substrate, adsorbate, is_slab)
+    user_set = set()       # keys the user typed, so defaults never overwrite them
+
+    def _formula(filename):
+        if filename not in formulas:
+            try:
+                formulas[filename] = _read_structure_file(filename).get_chemical_formula()
+            except Exception:
+                formulas[filename] = "(읽기 실패)"
+        return formulas[filename]
+
+    def _detect(filename):
+        """Substrate/adsorbate split of a structure file, cached."""
+        if filename not in detected:
+            try:
+                detected[filename] = guess_substrate_elements(_read_structure_file(filename))
+            except Exception:
+                detected[filename] = ([], [], False)
+        return detected[filename]
+
+    def _apply_structure_defaults():
+        """
+        Seed `replace` and `comp` from the chosen structure: the replacement
+        pool defaults to the substrate (adsorbates left out) and the target
+        composition to what those sites currently hold. Keys the user typed
+        are left alone.
+        """
+        filename = s["input"].strip()
+        if not filename or not os.path.isfile(filename):
+            return
+        substrate, _adsorbate, _is_slab = _detect(filename)
+        if not substrate:
+            return
+        if "replace" not in user_set:
+            s["replace"] = ",".join(substrate)
+        if "comp" not in user_set:
+            try:
+                parent = _read_structure_file(filename)
+            except Exception:
+                return
+            pool = set(s["replace"].replace(" ", "").split(","))
+            counts = Counter(sym for sym in parent.get_chemical_symbols() if str(sym) in pool)
+            if counts:
+                s["comp"] = ",".join(f"{el}{counts[el]}" for el in sorted(counts))
+
     if candidates:
         s["input"] = candidates[0]
+        _apply_structure_defaults()
 
     def _bool(key):
         return s[key].strip().lower() in ("y", "yes", "true", "1")
@@ -4254,18 +4399,33 @@ def run_wizard():
         print("\n" + "=" * 74)
         print(" CCpyAlloyGen settings   (Enter/run = 실행,  q = 취소,  수정: key=value)")
         print("=" * 74)
-        input_hint = "# 구조 파일 (.cif/.vasp/POSCAR/CONTCAR)"
-        if candidates and len(candidates) > 1:
-            shown = ", ".join(candidates[:5])
-            more = " ..." if len(candidates) > 5 else ""
-            input_hint += "  [감지됨: %s%s]" % (shown, more)
-        _row("input", input_hint)
-        _row("replace", "# 치환 풀 원소 (콤마 허용, 예: Co,Fe,Ni,Cu)")
-        _row("comp", "# 목표 조성 / 'keep'=기존 조성 재셔플")
+        # Numbered list of the structure files in this directory, the way
+        # CCpyVASPInputGen presents its inputs: pick with `input=2`.
+        if candidates:
+            print("  [구조 파일]  번호로 선택: input=번호  (파일명 직접 입력도 가능)")
+            for n, filename in enumerate(candidates[:30], start=1):
+                mark = "  <= 선택됨" if filename == s["input"] else ""
+                sub, ads, _slab = _detect(filename)
+                tag = ""
+                if ads:
+                    tag = "  기판=%s / 흡착물=%s" % (",".join(sub), ",".join(ads))
+                elif sub:
+                    tag = "  기판=%s" % ",".join(sub)
+                print("   %2d) %-24s %-16s%s%s"
+                      % (n, filename, _formula(filename), tag, mark))
+            if len(candidates) > 30:
+                print("   ... 외 %d개 (파일명을 직접 입력하세요)" % (len(candidates) - 30))
+        else:
+            print("  [구조 파일] 현재 폴더에 구조 파일이 없습니다 (.cif/.vasp/POSCAR/CONTCAR)")
+        print()
+        _row("input", "# 구조 파일 (.cif/.vasp/POSCAR/CONTCAR)")
+        _row("replace", "# 치환 풀 원소 (기본=흡착물 제외한 기판 원소)")
+        _row("comp", "# 목표 조성 (기본=현재 조성) / 'keep'=기존 조성 재셔플")
         _row("mode", "# random/spread/layered/domain/exhaustive")
         _row("n", "# 목표 구조 수 (exhaustive면 무시)")
         _row("seed", "# 비우면 자동 생성 후 metadata.txt에 기록")
-        _row("fmt", "# cif/vasp/folder (vasp=y면 cif로 고정)")
+        _row("fmt", "# cif/vasp/folder" + ("  (vasp=y 이므로 최종 출력은 VASP 입력 폴더)"
+                                          if _bool("vasp") else ""))
         _row("surface", "# _surface 트윈: 원소 지정 = 그 원소 '전부' 제거 (예: Li,S) / 'auto'=자동감지")
         _row("redox", "# _r 트윈: 제거 조성 '개수 필수' ('S1','S2','Li2,S1') / '35'=그 원자 / 'auto'=선택")
         _row("output", "# 비우면 자동 제안")
@@ -4554,10 +4714,28 @@ def run_wizard():
             key, value = pair.split("=", 1)
             key = key.strip().lower()
             value = value.strip()
-            if key in s:
-                s[key] = value
-            else:
+            if key not in s:
                 print("[입력 오류] 알 수 없는 key: %r  (화면 하단 고급 키 목록 참고)" % key)
+                continue
+            if key == "input":
+                # `input=2` picks from the numbered list; a filename also works.
+                if value.isdigit():
+                    n = int(value)
+                    if not 1 <= n <= len(candidates):
+                        print("[입력 오류] 구조 파일 번호는 1..%d 범위입니다: %s"
+                              % (len(candidates), value))
+                        continue
+                    value = candidates[n - 1]
+                elif not os.path.isfile(value):
+                    print("[입력 오류] 그런 파일이 없습니다: %r "
+                          "(목록의 번호나 정확한 파일명을 입력하세요)" % value)
+                    continue
+                s["input"] = value
+                # A different structure means different sensible defaults.
+                _apply_structure_defaults()
+                continue
+            s[key] = value
+            user_set.add(key)
 
 
 def build_argparser():
