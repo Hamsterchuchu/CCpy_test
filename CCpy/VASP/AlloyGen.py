@@ -2119,6 +2119,30 @@ def generate_structures(
 
     neighbor_map = None
     nearest_distance = None
+    # -- Never chase more structures than the arrangement actually admits.
+    #    n!/prod(k_i!) (times the site choice when the pool is only partly
+    #    replaced) bounds the distinct decorations from above; symmetry only
+    #    reduces it further. Without this, a composition with a single
+    #    arrangement (e.g. keeping the current one: Pt16 on 16 Pt sites) would
+    #    spin through max_attempts looking for structures that cannot exist.
+    if mode in {"random", "spread"} and target > 0:
+        if len(replace_sites) == n_replace:
+            site_choices = 1
+        else:
+            site_choices = factorial(len(replace_sites)) // (
+                factorial(n_replace) * factorial(len(replace_sites) - n_replace)
+            )
+        arrangement_bound = site_choices * multiset_count(composition)
+        if target > arrangement_bound:
+            print(
+                f"[notice] target {target} exceeds the {arrangement_bound} distinct "
+                f"arrangement(s) this composition allows; generating {arrangement_bound}."
+            )
+            if arrangement_bound == 1:
+                print("         (the composition matches the sites one-to-one, so there "
+                      "is only one arrangement -- edit the composition to vary it)")
+            target = arrangement_bound
+
     sro_cutoff = None
     if len(replace_sites) == n_replace:
         neighbor_map, nearest_distance, sro_cutoff = build_neighbor_map(
@@ -3100,49 +3124,53 @@ def _largest_vacuum_axis(atoms):
     return best
 
 
-def select_structure_file_interactively():
+def select_structure_file_interactively(prompt="Choose file : "):
     """
-    List the structure files in the current directory with numbers and let the
-    user pick one, the way CCpyVASPInputGen presents its inputs. Each entry
-    shows the formula and the guessed substrate/adsorbate split, so the choice
-    can be made without opening the files. Returns the filename, or None.
+    Ask which structure to work on, laid out the way CCpy's own input pickers
+    do it (`1 : CONTCAR`, then `Choose file : `). Only real files are listed --
+    CCpy's selectInputs() matches by substring and so also offers output
+    directories such as CONTCAR_random_..._output, which cannot be read.
+
+    Each line also carries the formula and the guessed substrate/adsorbate
+    split, so the choice can be made without opening the files. Returns the
+    chosen filename, or None if the user quits.
     """
     files = _find_structure_files()
     if not files:
         print("현재 폴더에서 구조 파일을 찾지 못했습니다 (.cif, .vasp, POSCAR, CONTCAR).")
         return None
 
-    print("\n[구조 파일]")
+    print()
     for n, filename in enumerate(files, start=1):
         try:
             parent = _read_structure_file(filename)
             formula = parent.get_chemical_formula()
             substrate, adsorbate, _is_slab = guess_substrate_elements(parent)
-            tag = "  기판=%s" % ",".join(substrate) if substrate else ""
+            tag = "기판=%s" % ",".join(substrate) if substrate else ""
             if adsorbate:
                 tag += " / 흡착물=%s" % ",".join(adsorbate)
         except Exception:
             formula, tag = "(읽기 실패)", ""
-        print("  %2d) %-24s %-16s%s" % (n, filename, formula, tag))
+        print("%d : %-26s %-20s %s" % (n, filename, formula, tag))
 
     while True:
         try:
-            answer = input("\n* 번호를 선택해 주세요 (파일명 직접 입력도 가능 / q=취소)\n: ").strip()
+            answer = input(prompt).strip()
         except EOFError:
             print("\n입력이 없어 취소합니다.")
             return None
-        if answer.lower() in ("q", "quit", ""):
+        if answer.lower() in ("q", "quit"):
             print("취소했습니다.")
             return None
         if answer.isdigit():
             n = int(answer)
             if 1 <= n <= len(files):
                 return files[n - 1]
-            print("[입력 오류] 1..%d 범위의 번호를 입력해 주세요." % len(files))
+            print("1 부터 %d 사이의 번호를 입력해 주세요. (q=취소)" % len(files))
             continue
         if os.path.isfile(answer):
             return answer
-        print("[입력 오류] 그런 파일이 없습니다: %r" % answer)
+        print("번호나 파일명을 입력해 주세요. (q=취소)")
 
 
 def guess_substrate_elements(parent, vacuum_min_gap=VACUUM_MIN_GAP,
@@ -4386,7 +4414,12 @@ def run_wizard():
                 s["comp"] = ",".join(f"{el}{counts[el]}" for el in sorted(counts))
 
     if candidates:
-        s["input"] = candidates[0]
+        # Pick the structure first, the way CCpy's input pickers do, then show
+        # the settings sheet for it.
+        chosen = select_structure_file_interactively()
+        if not chosen:
+            return
+        s["input"] = chosen
         _apply_structure_defaults()
 
     def _bool(key):
@@ -4397,28 +4430,9 @@ def run_wizard():
 
     def _print_sheet():
         print("\n" + "=" * 74)
-        print(" CCpyAlloyGen settings   (Enter/run = 실행,  q = 취소,  수정: key=value)")
+        print(" CCpyAlloyGen settings")
         print("=" * 74)
-        # Numbered list of the structure files in this directory, the way
-        # CCpyVASPInputGen presents its inputs: pick with `input=2`.
-        if candidates:
-            print("  [구조 파일]  번호로 선택: input=번호  (파일명 직접 입력도 가능)")
-            for n, filename in enumerate(candidates[:30], start=1):
-                mark = "  <= 선택됨" if filename == s["input"] else ""
-                sub, ads, _slab = _detect(filename)
-                tag = ""
-                if ads:
-                    tag = "  기판=%s / 흡착물=%s" % (",".join(sub), ",".join(ads))
-                elif sub:
-                    tag = "  기판=%s" % ",".join(sub)
-                print("   %2d) %-24s %-16s%s%s"
-                      % (n, filename, _formula(filename), tag, mark))
-            if len(candidates) > 30:
-                print("   ... 외 %d개 (파일명을 직접 입력하세요)" % (len(candidates) - 30))
-        else:
-            print("  [구조 파일] 현재 폴더에 구조 파일이 없습니다 (.cif/.vasp/POSCAR/CONTCAR)")
-        print()
-        _row("input", "# 구조 파일 (.cif/.vasp/POSCAR/CONTCAR)")
+        _row("input", "# 구조 파일 ('input=?' 로 목록에서 다시 선택)")
         _row("replace", "# 치환 풀 원소 (기본=흡착물 제외한 기판 원소)")
         _row("comp", "# 목표 조성 (기본=현재 조성) / 'keep'=기존 조성 재셔플")
         _row("mode", "# random/spread/layered/domain/exhaustive")
@@ -4612,9 +4626,7 @@ def run_wizard():
             print("  redox=%s  ->  %s%s" % (redox_spec, str(output_dir).rstrip("/\\"), suffix_desc))
         if ccpy_vasp:
             print("  CCpy VASP: preset=%s  kp=%s  pot=%s" % (preset or "default", kp if kp else "(auto density)", s["pot"]))
-        if not _ask_yes_no("이 설정으로 실행할까요?", True):
-            return False
-
+        # No extra yes/no here: typing "n" at the sheet already meant "finish".
         result = generate_structures(
             input_file=input_file,
             output_dir=output_dir,
@@ -4693,6 +4705,10 @@ def run_wizard():
     # ------------------------------ main loop ------------------------------
     while True:
         _print_sheet()
+        # Keep taking edits until the user says "n", the same habit as
+        # CCpySIESTAInputGen / CCpyVASPInputGen's option menus.
+        print('\n* Anything want to modify or add? (ex: mode=domain,n=100, comp=Fe4,Co4,Ni4,Cu4)')
+        print('  else, enter "n" to finish     (q = 취소)')
         try:
             ans = input(": ").strip()
         except EOFError:
@@ -4701,10 +4717,12 @@ def run_wizard():
         if ans.lower() in ("q", "quit", "exit"):
             print("취소했습니다.")
             return
-        if ans == "" or ans.lower() == "run":
+        if ans.lower() in ("n", "no"):
             if _validate_and_run():
                 return
-            continue
+            continue        # validation failed -> back to editing
+        if ans == "":
+            continue        # just redraw the sheet
         # key=value edits; commas split pairs only right before the next key=
         pairs = re.split(r",(?=\s*[A-Za-z_]+\s*=)", ans)
         for pair in pairs:
@@ -4718,8 +4736,13 @@ def run_wizard():
                 print("[입력 오류] 알 수 없는 key: %r  (화면 하단 고급 키 목록 참고)" % key)
                 continue
             if key == "input":
-                # `input=2` picks from the numbered list; a filename also works.
-                if value.isdigit():
+                # `input=?` reopens the file list; a number or filename also works.
+                if value in ("?", "list", "목록"):
+                    chosen = select_structure_file_interactively()
+                    if not chosen:
+                        continue
+                    value = chosen
+                elif value.isdigit():
                     n = int(value)
                     if not 1 <= n <= len(candidates):
                         print("[입력 오류] 구조 파일 번호는 1..%d 범위입니다: %s"

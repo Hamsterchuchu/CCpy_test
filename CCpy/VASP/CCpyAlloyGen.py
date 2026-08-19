@@ -15,16 +15,25 @@ if version[0] == '3':
     raw_input = input
 
 
+# No arguments -> the interactive settings sheet (this is the normal way in).
+# `-h` / `--help` / `help` prints the option reference below.
 if len(sys.argv) <= 1:
+    from CCpy.VASP.AlloyGen import run_wizard
+    run_wizard()
+    quit()
+
+if sys.argv[1] in ("-h", "--help", "help", "-help"):
     print("\nHow to use : " + sys.argv[0].split("/")[-1] + " [option] [sub_option1] [sub_option2..]")
     print('''--------------------------------------
 [options]
+(no option) : interactive settings sheet -- the normal way in (same as 'w')
 1 : random     (fully random substitution)
 2 : spread     (same-element dispersed, spread-biased substitution)
 3 : layered    (layer-ordered parent -> disorder controlled by target Q)
 4 : domain     (top-view 2x2 domain / 5-element quincunx template)
 5 : exhaustive (enumerate all symmetry-unique configurations)
-w : wizard     (interactive one-screen settings sheet)
+w : wizard     (same as running with no option)
+-h            : this help
 
 [sub_options]
 ex) CCpyAlloyGen.py 1 -i=Pt32.cif -re=Pt -comp=Fe4,Co4,Ni4,Cu4 -n=500 -vasp -preset=alloy
