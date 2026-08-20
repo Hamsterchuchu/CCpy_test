@@ -63,7 +63,9 @@ class JobSubmit:
             
         self.qsub = queue_config['qsub']
 
-        self.python_path = queue_config['python_path']
+        # -- python_path: queue_config.yaml 값이 실제로 존재하는 경로일 때만 쓰고,
+        #    없거나 비어 있으면 CCpy 를 실행 중인 python 을 쓴다 (CCpyConfig 참고).
+        self.python_path = ccpy_config.resolve_python_path(queue_config)
         self.mpi_run = queue_config['mpi_run']
 
         self.atk_mpi_run = queue_config['atk_mpi_run']

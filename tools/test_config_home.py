@@ -27,6 +27,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import yaml
+
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
@@ -107,8 +109,10 @@ home = fresh_home()
 legacy_dir = home / ".CCpy"
 legacy_dir.mkdir()
 legacy = legacy_dir / "queue_config.yaml"
+PROD_PYTHON = "/home/shared/anaconda3/envs/CCpy/bin/python"
 legacy_text = (template.read_text(encoding="utf-8")
-               + "\nlammps_path: /home/pomepaw/lammps/build/lmp\n"
+               + "\npython_path: %s\n" % PROD_PYTHON
+               + "lammps_path: /home/pomepaw/lammps/build/lmp\n"
                + "lammps_mpi_run: srun --mpi=pmi2\n")
 legacy.write_text(legacy_text, encoding="utf-8")
 (legacy_dir / "vasp").mkdir()
@@ -116,10 +120,18 @@ legacy.write_text(legacy_text, encoding="utf-8")
 before_legacy = snapshot(legacy_dir)
 
 made = cfg.ensure_queue_config()
-check("(c) 기존 ~/.CCpy/queue_config.yaml 을 승계",
-      made.read_text(encoding="utf-8") == legacy_text, made)
+made_text = made.read_text(encoding="utf-8")
 check("(c) 개인 설정(lammps_path)이 살아있다",
-      "lammps_path: /home/pomepaw/lammps/build/lmp" in made.read_text(encoding="utf-8"))
+      "lammps_path: /home/pomepaw/lammps/build/lmp" in made_text)
+check("(c) lammps_mpi_run 도 살아있다", "lammps_mpi_run: srun --mpi=pmi2" in made_text)
+check("(c) python_path 는 승계되지 않는다",
+      "python_path" not in (yaml.safe_load(made_text) or {}), yaml.safe_load(made_text))
+check("(c) 제외된 python_path 는 주석으로 남는다",
+      "# (승계 시 제외) python_path: %s" % PROD_PYTHON in made_text)
+check("(c) python_path 외의 줄은 그대로다",
+      [l for l in made_text.splitlines() if not l.startswith("#")]
+      == [l for l in legacy_text.splitlines()
+          if not l.startswith("#") and not l.startswith("python_path")])
 check("(c) 승계 원본을 수정하지 않는다", snapshot(legacy_dir) == before_legacy)
 check("(c) 승계 후에도 ~/.CCpy 에 새 파일이 생기지 않는다",
       sorted(p.name for p in legacy_dir.iterdir()) == ["queue_config.yaml", "vasp"])
@@ -164,8 +176,11 @@ code = (
 proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=dict(os.environ))
 check("JobSubmit 이 ~/.CCpy_test/queue_config.yaml 을 만든다",
       (home / ".CCpy_test" / "queue_config.yaml").is_file(), proc.stderr[-400:])
-check("JobSubmit 이 승계한다",
-      (home / ".CCpy_test" / "queue_config.yaml").read_text(encoding="utf-8") == legacy_text)
+js_text = (home / ".CCpy_test" / "queue_config.yaml").read_text(encoding="utf-8")
+check("JobSubmit 이 승계한다 (lammps_path 보존)",
+      "lammps_path: /home/pomepaw/lammps/build/lmp" in js_text)
+check("JobSubmit 승계 시 python_path 제외",
+      "python_path" not in (yaml.safe_load(js_text) or {}))
 check("승계 안내가 출력된다", "승계" in proc.stdout, proc.stdout[-300:])
 
 # ------------------------------------------------------------------ 6. VASPio
@@ -237,6 +252,39 @@ for py in sorted((REPO / "CCpy").rglob("*.py")):
         if pattern.search(line):
             leftovers.append("%s:%d: %s" % (rel, i, stripped[:80]))
 check("코드에 하드코딩된 `.CCpy` 경로가 없다", not leftovers, "\n      ".join(leftovers))
+
+# ---------------------------------------------------- 8. python_path 결정 규칙
+print("\n8. python_path 결정 규칙 (resolve_python_path)")
+here = sys.executable
+check("미지정이면 현재 인터프리터", cfg.resolve_python_path({}, verbose=False) == here)
+check("None 이어도 현재 인터프리터", cfg.resolve_python_path(None, verbose=False) == here)
+check("빈 문자열이면 현재 인터프리터",
+      cfg.resolve_python_path({"python_path": "   "}, verbose=False) == here)
+check("존재하지 않는 절대경로면 현재 인터프리터 (프로덕션 3.8 경로 시나리오)",
+      cfg.resolve_python_path({"python_path": PROD_PYTHON}, verbose=False) == here)
+check("존재하는 절대경로는 그대로 존중",
+      cfg.resolve_python_path({"python_path": here}, verbose=False) == here)
+which_py3 = shutil.which("python3")
+check("명령 이름은 $PATH 에서 찾는다",
+      cfg.resolve_python_path({"python_path": "python3"}, verbose=False) == which_py3, which_py3)
+check("패키지 템플릿에 python_path 키가 없다",
+      "python_path" not in (yaml.safe_load(template.read_text(encoding="utf-8")) or {}))
+cfg._PYTHON_PATH_MISMATCH_SHOWN = False
+import io as _io
+import contextlib as _ctx
+_buf = _io.StringIO()
+with _ctx.redirect_stdout(_buf):
+    got = cfg.resolve_python_path({"python_path": which_py3}, verbose=True)
+mismatch_msg = _buf.getvalue()
+check("현재 인터프리터와 다른 python_path 는 존중하되 경고한다",
+      got == which_py3 and ("주의" in mismatch_msg) == (os.path.realpath(which_py3) != os.path.realpath(here)),
+      mismatch_msg)
+
+notice = cfg.strip_python_path("qsub: qsub\npython_path: /a/b/python\nmpi_run: srun\n")
+check("strip_python_path 가 해당 줄만 주석 처리",
+      notice[0] == "qsub: qsub\n# (승계 시 제외) python_path: /a/b/python\n"
+                   "# python_path 를 비워두면 CCpy 를 실행 중인 python 이 그대로 쓰입니다.\n"
+                   "mpi_run: srun\n" and notice[1] == "python_path: /a/b/python", notice)
 
 # ------------------------------------------------------------------- 결과 요약
 print("\n" + "=" * 60)

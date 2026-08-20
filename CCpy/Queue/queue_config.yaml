@@ -1,5 +1,7 @@
 qsub: qsub
-python_path: /home/shared/anaconda3/envs/CCpy/bin/python
+# python_path: 비워두면 CCpy 를 실행 중인 python 이 그대로 쓰인다 (권장).
+#              다른 python 으로 잡을 돌릴 때만 절대경로를 적는다.
+#              ex) python_path: /home/shared/anaconda3/envs/CCpy/bin/python
 mpi_run: srun
 atk_mpi_run: /opt/intel/compilers_and_libraries_2018.1.163/linux/mpi/intel64/bin/mpirun
 vasp_path: /opt/vasp/vasp.6.5.1/bin/vasp_std

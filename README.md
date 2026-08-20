@@ -22,9 +22,13 @@ same user without overwriting each other's `queue_config.yaml` / `vasp/default.y
 </pre>
 
 - The directory is created on first run. `queue_config.yaml` is **inherited from
-  `~/.CCpy/queue_config.yaml`** if that file exists, so per-user paths are not lost.
-  Check `python_path` after the inheritance - it may still point at the production
-  environment.
+  `~/.CCpy/queue_config.yaml`** if that file exists, so per-user paths (lammps /
+  siesta binaries, `lammps_mpi_run`, ...) are not lost.
+- **`python_path` is deliberately NOT inherited** (it is copied over as a comment).
+  Leave the key unset and CCpy submits jobs with **the interpreter that is running
+  CCpy** (`sys.executable`), so a job never silently runs in another environment.
+  Set an absolute path only if you want a different interpreter; if that path does
+  not exist, or differs from the running one, CCpy tells you at submit time.
 - Override the location with `$CCpy_HOME` if needed:
   `export CCpy_HOME=~/.CCpy_something`
 - The path is defined in one place: `CCpy/Tools/CCpyConfig.py`.
