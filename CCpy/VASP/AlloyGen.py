@@ -3562,6 +3562,95 @@ def interactive_select_redox_atoms(parent, replace_elements, max_sets=50):
 # CCpy VASP input generation (INCAR / KPOINTS / POTCAR via CCpy.VASP.VASPio)
 # -----------------------------------------------------------------------------
 
+def _vasp_input_fingerprint(poscar_path_or_text, is_text=False):
+    """
+    Return what makes two structures interchangeable as far as INCAR / KPOINTS /
+    POTCAR are concerned: the lattice, the species sequence and the atom counts.
+
+    - KPOINTS comes from a reciprocal density on the cell  -> lattice
+    - POTCAR is one file per species, concatenated in POSCAR order,
+      and ENCUT is the largest ENMAX among them             -> species sequence
+    - MAGMOM / LDAU lists are written per species block     -> species + counts
+
+    Anything else in a POSCAR (the coordinates) does not enter those three
+    files. Returns None when the POSCAR cannot be read/parsed.
+    """
+    try:
+        if is_text:
+            text = poscar_path_or_text
+        else:
+            with open(poscar_path_or_text) as handle:
+                text = handle.read()
+        lines = text.splitlines()
+        scale = float(lines[1].split()[0])
+        lattice = tuple(
+            tuple(round(float(v) * scale, 6) for v in lines[row].split()[:3])
+            for row in (2, 3, 4)
+        )
+        species = tuple(lines[5].split())
+        counts = tuple(int(v) for v in lines[6].split())
+    except (OSError, IndexError, ValueError):
+        return None
+    if not species or len(species) != len(counts):
+        return None
+    return lattice, species, counts
+
+
+def _write_reused_vasp_inputs(cif, template_dir, template_fp):
+    """
+    Write one structure's VASP inputs by reusing `template_dir`'s INCAR,
+    KPOINTS and POTCAR, writing only its own POSCAR.
+
+    Returns False without touching anything when the structure's fingerprint
+    does not match the template's - the caller then builds it from scratch.
+    Doing the check here (rather than trusting that the generator always keeps
+    the cell and composition fixed) is what makes the shortcut safe: a
+    mismatched POTCAR would be silently wrong rather than loudly broken.
+    """
+    from pymatgen.core import Structure
+
+    try:
+        structure = Structure.from_file(cif)
+    except Exception as exc:
+        print(f"[CCpy VASP] {cif}: cannot read ({exc}); generating it separately.")
+        return False
+    poscar_text = str(structure.to(fmt="poscar"))
+    if _vasp_input_fingerprint(poscar_text, is_text=True) != template_fp:
+        return False
+
+    dirname = cif[:-4] if cif.lower().endswith(".cif") else cif + "_vasp"
+    os.makedirs(dirname, exist_ok=True)
+    with open(os.path.join(dirname, "POSCAR"), "w") as handle:
+        handle.write(poscar_text)
+    for name in ("KPOINTS", "POTCAR"):
+        shutil.copyfile(os.path.join(template_dir, name),
+                        os.path.join(dirname, name))
+
+    # INCAR is identical to the template's except for SYSTEM, which VASPio sets
+    # to the folder name. Rewrite just that value and keep the column layout
+    # (structure ids are fixed width, so the file stays byte-for-byte aligned).
+    with open(os.path.join(template_dir, "INCAR")) as handle:
+        incar_lines = handle.read().splitlines(True)
+    out_lines = []
+    for line in incar_lines:
+        key, sep, value_field = line.partition("=")
+        if sep and key.strip() == "SYSTEM":
+            body = value_field.rstrip("\n")
+            current = body.strip()
+            newline = "\n" if value_field.endswith("\n") else ""
+            body = body.replace(current, dirname, 1) if current else " " + dirname
+            line = key + sep + body + newline
+        out_lines.append(line)
+    with open(os.path.join(dirname, "INCAR"), "w") as handle:
+        handle.writelines(out_lines)
+
+    # Mirror VASPio: the source .cif is filed away under structures/.
+    if not os.path.isdir("structures"):
+        os.mkdir("structures")
+    os.replace(cif, os.path.join("structures", os.path.basename(cif)))
+    return True
+
+
 def generate_ccpy_vasp_inputs(
     output_dir,
     preset=None,
@@ -3576,6 +3665,7 @@ def generate_ccpy_vasp_inputs(
     ldau=False,
     batch=False,
     reuse_incar_from=None,
+    reuse_inputs=True,
 ):
     """
     Convert every generated .cif in `output_dir` into a full CCpy VASP input
@@ -3600,6 +3690,10 @@ def generate_ccpy_vasp_inputs(
     reuse_incar_from: path to an existing .prev_incar.yaml (e.g. from the
     main output dir) to apply to every structure without any interaction -
     used for the _surface / _r twin directories.
+
+    reuse_inputs: reuse the first structure's INCAR / KPOINTS / POTCAR for the
+    rest of this folder instead of rebuilding them (see the comment on the
+    loop below). True by default; -no_reuse turns it off.
 
     Returns the absolute path of the `.prev_incar.yaml` holding the settings
     that were applied (or None if no .cif files were found).
@@ -3655,7 +3749,37 @@ def generate_ccpy_vasp_inputs(
             _normalize_prev_incar()
 
         interactive_first = not (batch or reuse_incar_from)
+        template_dir = None          # folder whose INCAR/KPOINTS/POTCAR we reuse
+        template_fp = None           # its (lattice, species, counts) fingerprint
+        reused = 0
+        fell_back = 0
         for i, cif in enumerate(cifs):
+            # -- Fast path: every structure in one output folder is the same
+            #    cell with the same composition, only the substitution sites
+            #    are decorated differently. KPOINTS (from the cell), POTCAR
+            #    (from the species sequence) and INCAR (apart from its SYSTEM
+            #    line) therefore come out byte-identical for all of them, so
+            #    rebuilding them per structure only repeats a POTCAR
+            #    read+validate, a k-point density calculation and a full
+            #    VASPInput construction. Reuse the first structure's three
+            #    files instead and write only POSCAR.
+            #
+            #    The twins get their own template because they run through
+            #    their own generate_ccpy_vasp_inputs() call - that is what
+            #    keeps _surface / _r on their own composition (and their own
+            #    POTCAR-derived ENCUT) rather than the main folder's.
+            if reuse_inputs and template_dir is not None:
+                if _write_reused_vasp_inputs(cif, template_dir, template_fp):
+                    reused += 1
+                    if (i + 1) % 50 == 0:
+                        print(f"[CCpy VASP] {i + 1}/{n_total} done")
+                    continue
+                # Fingerprint mismatch: this structure is not interchangeable
+                # with the template after all. Build it from scratch.
+                fell_back += 1
+                print(f"[CCpy VASP] {cif}: cell/composition differs from the "
+                      f"first structure - generating its own inputs.")
+
             VI = VASPInput(cif, preset_yaml=preset_yaml)
             if i == 0 and not reuse_incar_from:
                 # First structure: interactive INCAR confirm (like
@@ -3667,7 +3791,10 @@ def generate_ccpy_vasp_inputs(
                     get_pre_incar=None, batch=(not interactive_first),
                 )
                 if n_total > 1:
-                    print(f"[CCpy VASP] applying the same INCAR/KPOINTS settings to the remaining {n_total - 1} structures...")
+                    how = ("reusing its INCAR/KPOINTS/POTCAR for"
+                           if reuse_inputs else
+                           "applying the same INCAR/KPOINTS settings to")
+                    print(f"[CCpy VASP] {how} the remaining {n_total - 1} structures...")
             else:
                 VI.cms_vasp_set(
                     single_point=single_point, isif=isif, vdw=vdw,
@@ -3678,10 +3805,28 @@ def generate_ccpy_vasp_inputs(
             # cms_vasp_set re-dumps .prev_incar.yaml after every structure;
             # keep it FullLoader-readable for the next iteration.
             _normalize_prev_incar()
+
+            if reuse_inputs and template_dir is None:
+                candidate = VI.dirname
+                fingerprint = _vasp_input_fingerprint(
+                    os.path.join(candidate, "POSCAR"))
+                if fingerprint and all(
+                        os.path.isfile(os.path.join(candidate, name))
+                        for name in ("INCAR", "KPOINTS", "POTCAR")):
+                    template_dir, template_fp = candidate, fingerprint
+                else:
+                    print("[CCpy VASP] could not read the first structure's inputs; "
+                          "generating every structure separately.")
+                    reuse_inputs = False
+
             if (i + 1) % 50 == 0:
                 print(f"[CCpy VASP] {i + 1}/{n_total} done")
 
         print(f"[CCpy VASP] Done. {n_total} VASP input folders written under: {output_dir}")
+        if reused:
+            print(f"[CCpy VASP] {reused} of them reused {os.path.basename(template_dir)}'s "
+                  f"INCAR/KPOINTS/POTCAR (-no_reuse to build each one separately)."
+                  + (f" {fell_back} needed their own." if fell_back else ""))
         return os.path.abspath(".prev_incar.yaml")
     finally:
         os.chdir(pwd)
@@ -4381,8 +4526,8 @@ def run_wizard(initial=None):
 
     Hidden advanced keys are accepted the same way even though they are not
     displayed: max_attempts, children, limit, order_tol, order_steps,
-    sro_cutoff, sro_tol, sro_weight, bucket, batch, sp, isif, spin, mag,
-    ldau, vdw, pot, pseudo, template, gen_potcar, potcar_lib, potcar_var.
+    sro_cutoff, sro_tol, sro_weight, bucket, batch, reuse, sp, isif, spin,
+    mag, ldau, vdw, pot, pseudo, template, gen_potcar, potcar_lib, potcar_var.
     """
     # ------------------------------ sheet state ------------------------------
     s = {
@@ -4420,6 +4565,7 @@ def run_wizard(initial=None):
         "bucket": "30",
         "redox_max": "50",
         "batch": "n",
+        "reuse": "y",
         "sp": "n",
         "isif": "",
         "spin": "n",
@@ -4534,6 +4680,7 @@ def run_wizard(initial=None):
         print("-" * 74)
         print("* 고급 키(미표시)도 key=value로 입력 가능: max_attempts, children, limit,")
         print("  order_tol, order_steps, sro_cutoff, sro_tol, sro_weight, bucket, redox_max, batch,")
+        print("  reuse (n = 구조마다 INCAR/KPOINTS/POTCAR 새로 생성),")
         print("  sp, isif, spin, mag, ldau, vdw, pot, pseudo, template, gen_potcar,")
         print("  potcar_lib, potcar_var")
 
@@ -4695,6 +4842,7 @@ def run_wizard(initial=None):
         pseudo = pseudo_tokens if pseudo_tokens else None
         pattern = s["pattern"].strip() or None
         preset = s["preset"].strip() or None
+        reuse_inputs = s["reuse"].strip().lower() not in ("n", "no", "false")
 
         # ----------------------------- summary -----------------------------
         print("\n[실행 설정 요약]")
@@ -4763,6 +4911,7 @@ def run_wizard(initial=None):
                 mag=_bool("mag"),
                 ldau=_bool("ldau"),
                 batch=_bool("batch"),
+                reuse_inputs=reuse_inputs,
             )
             # created dirs come back from generate_structures, so every _rN
             # twin is covered without guessing folder names
@@ -4787,6 +4936,7 @@ def run_wizard(initial=None):
                         mag=_bool("mag"),
                         ldau=_bool("ldau"),
                         reuse_incar_from=prev_incar,
+                        reuse_inputs=reuse_inputs,
                     )
         return True
 

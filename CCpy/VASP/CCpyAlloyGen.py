@@ -136,6 +136,12 @@ ex) CCpyAlloyGen.py 1 -i=Pt32.cif -re=Pt -comp=Fe4,Co4,Ni4,Cu4 -n=500 -vasp -pre
     -kp=#,#,#      : Monkhorst-Pack grid           (DEFAULT : preset reciprocal density)
     -pot=[F]       : POTCAR functional             (DEFAULT : PBE_54)
     -pseudo=[..]   : ex) -pseudo=Nb_sv,Ti_sv
+    -no_reuse      : build INCAR/KPOINTS/POTCAR separately for every structure.
+                     By default only the first structure of each folder goes
+                     through the full VASPInput path and the rest reuse its
+                     INCAR/KPOINTS/POTCAR (they share the cell and composition,
+                     so those three files are identical); use this to switch
+                     that off.
     -batch         : ask nothing -- skip the settings sheet and the INCAR confirm
                      menu, and run immediately (-i= is required with it)
 
@@ -202,6 +208,7 @@ kpoints = False
 functional = "PBE_54"
 pseudo = None
 batch = False
+reuse_inputs = True
 
 template_dir = None
 generate_potcar = False
@@ -234,6 +241,9 @@ for arg in sys.argv[2:]:
     elif arg == "-batch":
         batch = True
         given["batch"] = "y"
+    elif arg == "-no_reuse":
+        reuse_inputs = False
+        given["reuse"] = "n"
     elif arg == "-gen_potcar":
         generate_potcar = True
         given["gen_potcar"] = "y"
@@ -497,6 +507,7 @@ if ccpy_vasp:
         mag=mag,
         ldau=ldau,
         batch=batch,
+        reuse_inputs=reuse_inputs,
     )
     # generate_structures reports the dirs it created, so every _rN twin is
     # covered without guessing folder names
@@ -521,4 +532,5 @@ if ccpy_vasp:
                 mag=mag,
                 ldau=ldau,
                 reuse_incar_from=prev_incar,
+                reuse_inputs=reuse_inputs,
             )
