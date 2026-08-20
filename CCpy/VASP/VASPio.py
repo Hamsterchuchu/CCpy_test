@@ -1142,13 +1142,14 @@ class VASPOutput():
             plt.show()
 
 
-    def get_energy_list(self, show_plot=True, dirs=None, sort=False, figname="energy_list.png"):
+    def get_energy_list(self, show_plot=True, dirs=None, sort=False, figname=None):
         """
         Build the list of final energies of VASP job directories.
 
         - print a table on screen (Directory / Total energy / Energy/atom / Converged / Job Status)
         - save 03_<folder>_FinalEnergies.csv / .txt
-        - if show_plot=True, save the figure as figname
+        - if show_plot=True, save the figure with the same name: 03_<folder>_FinalEnergies.png
+          (figname keeps the given name as it is, for backward compatibility)
 
         The energy reference is 'free  energy   TOTEN' of OUTCAR, and only when OUTCAR is missing
         the last E0 of OSZICAR is used as fallback (the two values differ by the -TS term).
@@ -1220,8 +1221,11 @@ class VASPOutput():
         print(df)
 
         dirname = pwd.split("/")[-1]
-        csv_filename = "03_" + dirname + "_FinalEnergies.csv"
-        txt_filename = "03_" + dirname + "_FinalEnergies.txt"
+        base_filename = "03_" + dirname + "_FinalEnergies"
+        csv_filename = base_filename + ".csv"
+        txt_filename = base_filename + ".txt"
+        # The figure shares the name of the csv/txt so that the outputs of one run stay together.
+        png_filename = figname if figname else base_filename + ".png"
         df.to_csv(csv_filename)
         f = open(txt_filename, "w")
         f.write(df.to_string())
@@ -1249,9 +1253,9 @@ class VASPOutput():
         plt.ylabel(ycol)
         plt.grid()
         plt.tight_layout()
-        plt.savefig(figname, dpi=300)
+        plt.savefig(png_filename, dpi=300)
         plt.close(fig)
-        print("* Saved energy plot to " + figname)
+        print("Energy plot file has been saved: " + png_filename)
 
         return df
 
