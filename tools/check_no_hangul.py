@@ -194,6 +194,13 @@ def iter_py(paths, root):
 
 
 def main(argv):
+    # -- The findings we print are, by definition, characters the console
+    #    may not be able to encode (cp949 chokes on U+2272 etc.). Escaping
+    #    them keeps the checker from dying on its own output.
+    try:
+        sys.stdout.reconfigure(errors="backslashreplace")
+    except (AttributeError, OSError):
+        pass
     show_comments = "--comments" in argv
     ascii_mode = "--ascii" in argv
     pattern = NON_ASCII if ascii_mode else HANGUL
@@ -204,7 +211,7 @@ def main(argv):
 
     total = 0
     for path in iter_py(paths, root):
-        rel = os.path.relpath(path, root)
+        rel = os.path.relpath(path, root).replace(os.sep, "/")
         if rel in DEFAULT_EXCLUDE:
             continue
         if os.path.islink(path):
