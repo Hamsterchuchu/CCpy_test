@@ -3890,9 +3890,9 @@ def _ask_yes_no(prompt, default=False):
     default_str = "y" if default else "n"
     while True:
         ans = _ask_text(prompt + " (y/n)", default_str).lower()
-        if ans in ("y", "yes", "예", "네"):
+        if ans in ("y", "yes"):
             return True
-        if ans in ("n", "no", "아니오", "아니요"):
+        if ans in ("n", "no"):
             return False
         print("Please enter y or n.")
 
@@ -4042,7 +4042,7 @@ def _select_base_structure():
 
         confirm = input("\nUse this structure? (y/n): ").strip().lower()
 
-        if confirm in {"y", "yes", "예", "네", ""}:
+        if confirm in {"y", "yes", ""}:
             return input_file, replace_element
 
         print("Selecting the structure again.")
@@ -4975,7 +4975,7 @@ def run_wizard(initial=None):
                 continue
             if key == "input":
                 # `input=?` reopens the file list; a number or filename also works.
-                if value in ("?", "list", "목록"):
+                if value in ("?", "list"):
                     chosen = select_structure_file_interactively()
                     if not chosen:
                         continue
