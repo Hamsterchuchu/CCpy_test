@@ -34,7 +34,13 @@ if version[0] == '3':
 # -- ENCUT auto setting options
 #    ENCUT_SCALE : scale factor multiplied to the ENMAX read from POTCAR.
 #                  ENCUT = max(ENMAX of POTCARs) x ENCUT_SCALE.
+#    ENCUT_ROUND : the scaled value is rounded to the nearest multiple of this
+#                  number, rounding halves up (10 -> 648.744 becomes 650,
+#                  507.725 becomes 510, 503.1 becomes 500). The same rule is
+#                  already used by cms_phonon_opt(). Set it to 1 (or 0) to keep
+#                  the raw value with 3 decimals instead.
 ENCUT_SCALE = 1.3
+ENCUT_ROUND = 10
 
 
 class VASPInput():
@@ -193,9 +199,10 @@ class VASPInput():
     # ------------------------------------------------------------------------------#
     def set_encut(self, incar_dict, potcar, pot_elt):
         """
-        Multiply the largest ENMAX of the POTCARs used in this calculation by ENCUT_SCALE (1.3)
-        and set it as ENCUT of INCAR. ENMAX is read directly from the POTCAR file, so
-        the real value of that POTCAR is used regardless of functional (PBE_54 / PBE_52 / LDA ...).
+        Multiply the largest ENMAX of the POTCARs used in this calculation by ENCUT_SCALE (1.3),
+        round it to the nearest multiple of ENCUT_ROUND (10) and set it as ENCUT of INCAR.
+        ENMAX is read directly from the POTCAR file, so the real value of that POTCAR is
+        used regardless of functional (PBE_54 / PBE_52 / LDA ...).
 
         The value decided here overrides the ENCUT value of the yaml INCAR section (if it was a
         commented out '# ENCUT', the comment is removed and the value is put in). If the automatic
@@ -212,7 +219,7 @@ class VASPInput():
         for i in range(len(pot_elt)):
             p = pot_elt[i]
             try:
-                value = round(float(potcar[i].enmax) * ENCUT_SCALE, 3)
+                value = round_encut(float(potcar[i].enmax) * ENCUT_SCALE)
             except Exception:
                 print(bcolors.FAIL + "* ENCUT error: cannot read ENMAX of %s from POTCAR." % p + bcolors.ENDC)
                 print("  Check the POTCAR of %s, or give the value directly with -encut= option." % p)
@@ -1596,6 +1603,21 @@ def load_yaml(yaml_file, key=None):
     section = data[key] if key else data
 
     return OrderedDict(copy.deepcopy(section))
+
+def round_encut(value, unit=None):
+    """
+    Round an ENCUT value to the nearest multiple of unit (default ENCUT_ROUND), halves up.
+      648.744 -> 650,  507.725 -> 510,  503.1 -> 500,  520 -> 520
+    With unit <= 1 the value is returned as a float rounded to 3 decimals, which is
+    what CCpy did before the 10 eV rounding was introduced.
+    """
+    if unit is None:
+        unit = ENCUT_ROUND
+    value = float(value)
+    if not unit or unit <= 1:
+        return round(value, 3)
+
+    return int((value + unit / 2.0) // unit * unit)
 
 def num_to_str(value):
     """
