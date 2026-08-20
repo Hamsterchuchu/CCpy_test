@@ -1506,7 +1506,7 @@ def parse_redox_spec(parent, spec, replace_sites=()):
     def _check_number(value):
         if value < 1 or value > n_atoms:
             raise ValueError(
-                f"redox 원자 번호가 범위(1..{n_atoms})를 벗어났습니다: {value}"
+                f"redox atom number is out of range (1..{n_atoms}): {value}"
             )
         return value - 1
 
@@ -1517,7 +1517,7 @@ def parse_redox_spec(parent, spec, replace_sites=()):
         ]
         if not matched:
             raise ValueError(
-                f"'{element}' 원소에 해당하는 (치환 풀이 아닌) 원자가 없습니다."
+                f"no atoms of element '{element}' outside the substituted pool."
             )
         return matched
 
@@ -1534,7 +1534,7 @@ def parse_redox_spec(parent, spec, replace_sites=()):
         if "/" not in text:
             tokens = [t for t in re.split(r"[,\s]+", text) if t]
             if not tokens:
-                raise ValueError(f"redox 지정이 비어 있습니다: {spec!r}")
+                raise ValueError(f"redox spec is empty: {spec!r}")
             fixed = []                              # explicit atoms
             counts = {}                             # element -> how many to remove
             for token in tokens:
@@ -1544,11 +1544,11 @@ def parse_redox_spec(parent, spec, replace_sites=()):
                 match = re.fullmatch(r"([A-Z][a-z]?)\s*[:=]?\s*(\d*)", token)
                 if not match:
                     raise ValueError(
-                        f"redox 지정을 해석할 수 없습니다: {token!r}\n"
-                        "  제거 조성 : 'S1', 'S2', 'Li2,S1'  (개수를 반드시 적습니다)\n"
-                        "  특정 원자 : '35', '35,36'\n"
-                        "  후보 중 k : '19,20,21,22/2'\n"
-                        "  (해당 원소 전부를 없애려면 surface 쪽에 지정하세요)"
+                        f"cannot parse redox spec: {token!r}\n"
+                        "  Removal composition : 'S1', 'S2', 'Li2,S1'  (count is mandatory)\n"
+                        "  Specific atoms      : '35', '35,36'\n"
+                        "  Any k of candidates : '19,20,21,22/2'\n"
+                        "  (to strip an element entirely, set it on the surface side)"
                     )
                 element = match.group(1)
                 if not match.group(2):
@@ -1558,11 +1558,11 @@ def parse_redox_spec(parent, spec, replace_sites=()):
                     # identical-looking values and do opposite things. Making
                     # the count explicit removes that trap.
                     raise ValueError(
-                        f"redox 에는 제거할 개수를 함께 적어 주세요: '{element}1'(1개), "
-                        f"'{element}2'(2개) 처럼요.\n"
-                        f"  '{element}' 원자를 전부 없애려면 surface 쪽에 지정하세요 "
+                        f"redox needs the number of atoms to remove: '{element}1'(1 atom), "
+                        f"'{element}2'(2 atoms), and so on.\n"
+                        f"  to remove every '{element}' atom, set it on the surface side "
                         f"(CLI: -surface={element}).\n"
-                        "  특정 원자만 지정할 때는 번호를 쓰면 됩니다 (예: '35', '35,36')."
+                        "  to name specific atoms, use their numbers (e.g. '35', '35,36')."
                     )
                 counts[element] = counts.get(element, 0) + int(match.group(2))
 
@@ -1570,9 +1570,9 @@ def parse_redox_spec(parent, spec, replace_sites=()):
             fixed_overlap = [i + 1 for i in fixed if i in replace_set]
             if fixed_overlap:
                 raise ValueError(
-                    "redox 대상이 치환 풀 자리입니다: 원자 "
-                    f"{fixed_overlap}. 치환된 자리를 제거하면 메인 구조와 redox 구조의 "
-                    "1:1 배열 대응이 깨지므로 허용하지 않습니다."
+                    "redox target is a substituted pool site: atom "
+                    f"{fixed_overlap}. Removing a substituted site breaks the 1:1 arrangement "
+                    "mapping between the main and redox structures, so it is not allowed."
                 )
 
             if not counts:
@@ -1584,8 +1584,8 @@ def parse_redox_spec(parent, spec, replace_sites=()):
                 candidates = [i for i in _atoms_of(element) if i not in set(fixed)]
                 if count > len(candidates):
                     raise ValueError(
-                        f"{element} 를 {count}개 제거하라고 했지만 후보는 "
-                        f"{len(candidates)}개뿐입니다 (원자 "
+                        f"{element}: {count} atoms requested for removal, but only "
+                        f"{len(candidates)} candidates (atoms "
                         f"{[i + 1 for i in candidates]})."
                     )
                 per_element_choices.append(
@@ -1604,14 +1604,14 @@ def parse_redox_spec(parent, spec, replace_sites=()):
             count_text = count_text.strip()
             if not count_text.isdigit():
                 raise ValueError(
-                    f"redox 지정의 '/' 뒤에는 제거할 개수(숫자)가 와야 합니다: {spec!r} "
-                    "(예: 'S/2', '19,20,21,22/2')"
+                    f"redox spec needs the removal count (a number) after '/': {spec!r} "
+                    "(e.g. 'S/2', '19,20,21,22/2')"
                 )
             choose = int(count_text)
             text = pool_text
         tokens = [t for t in text.replace(" ", "").split(",") if t]
         if not tokens:
-            raise ValueError(f"redox 지정이 비어 있습니다: {spec!r}")
+            raise ValueError(f"redox spec is empty: {spec!r}")
         pool = []
         for token in tokens:
             if token.isdigit():
@@ -1620,10 +1620,10 @@ def parse_redox_spec(parent, spec, replace_sites=()):
                 pool.extend(_atoms_of(token))
             else:
                 raise ValueError(
-                    f"redox 지정을 해석할 수 없습니다: {token!r}\n"
-                    "  원소별 개수 : 'S2', 'Li2,S1'      (제거 조성을 고정)\n"
-                    "  원자/원소   : '35', '35,36', 'S'   (그것들만 제거)\n"
-                    "  후보 중 k개 : '35,36,37,38/2'      (지정 원자 중 아무 k개)"
+                    f"cannot parse redox spec: {token!r}\n"
+                    "  Count per element  : 'S2', 'Li2,S1'      (fixes the removal composition)\n"
+                    "  Atoms / elements   : '35', '35,36', 'S'   (remove only those)\n"
+                    "  Any k of the pool  : '35,36,37,38/2'      (any k of the listed atoms)"
                 )
     else:
         pool = [_check_number(int(v)) for v in spec]
@@ -1632,9 +1632,9 @@ def parse_redox_spec(parent, spec, replace_sites=()):
     overlap = [i + 1 for i in pool if i in replace_set]
     if overlap:
         raise ValueError(
-            "redox 대상이 치환 풀 자리입니다: 원자 "
-            f"{overlap}. 치환된 자리를 제거하면 메인 구조와 redox 구조의 "
-            "1:1 배열 대응이 깨지므로 허용하지 않습니다."
+            "redox target is a substituted pool site: atom "
+            f"{overlap}. Removing a substituted site breaks the 1:1 arrangement "
+            "mapping between the main and redox structures, so it is not allowed."
         )
 
     if choose is None:
@@ -1642,7 +1642,7 @@ def parse_redox_spec(parent, spec, replace_sites=()):
     else:
         if choose < 1 or choose > len(pool):
             raise ValueError(
-                f"제거 개수는 1..{len(pool)} 범위여야 합니다 (후보 {len(pool)}개, 요청 {choose}개)."
+                f"removal count must be in 1..{len(pool)} (candidates {len(pool)}, requested {choose})."
             )
         index_sets = [tuple(c) for c in itertools.combinations(pool, choose)]
     return index_sets, pool, choose
@@ -2258,10 +2258,10 @@ def generate_structures(
         n_sets = len(redox_index_sets)
         if n_sets > redox_max_sets:
             raise ValueError(
-                f"redox 조합이 {n_sets}개입니다 (후보 {len(redox_pool)}개 중 {redox_choose}개 제거) "
-                f"-- 현재 상한은 {redox_max_sets}개입니다.\n"
-                "  후보를 줄이거나(원자 번호를 직접 지정), redox_max_sets 를 올려 주세요 "
-                "(CLI: -redox_max=#). 구조 수 x 조합 수 만큼 폴더가 생기므로 주의하세요."
+                f"redox gives {n_sets} combinations ({len(redox_pool)} candidates, remove {redox_choose}) "
+                f"-- the current limit is {redox_max_sets}.\n"
+                "  Narrow the candidates (give atom numbers directly) or raise redox_max_sets "
+                "(CLI: -redox_max=#). NOTE: folders = number of structures x number of combinations."
             )
 
         def _describe(indices):
@@ -3199,7 +3199,7 @@ def select_structure_file_interactively(prompt="Choose file : "):
     """
     files = _find_structure_files()
     if not files:
-        print("현재 폴더에서 구조 파일을 찾지 못했습니다 (.cif, .vasp, POSCAR, CONTCAR).")
+        print("No structure file found in the current directory (.cif, .vasp, POSCAR, CONTCAR).")
         return None
 
     print()
@@ -3208,31 +3208,31 @@ def select_structure_file_interactively(prompt="Choose file : "):
             parent = _read_structure_file(filename)
             formula = parent.get_chemical_formula()
             substrate, adsorbate, _is_slab = guess_substrate_elements(parent)
-            tag = "기판=%s" % ",".join(substrate) if substrate else ""
+            tag = "substrate=%s" % ",".join(substrate) if substrate else ""
             if adsorbate:
-                tag += " / 흡착물=%s" % ",".join(adsorbate)
+                tag += " / adsorbate=%s" % ",".join(adsorbate)
         except Exception:
-            formula, tag = "(읽기 실패)", ""
+            formula, tag = "(read failed)", ""
         print("%d : %-26s %-20s %s" % (n, filename, formula, tag))
 
     while True:
         try:
             answer = input(prompt).strip()
         except EOFError:
-            print("\n입력이 없어 취소합니다.")
+            print("\nNo input, cancelled.")
             return None
         if answer.lower() in ("q", "quit"):
-            print("취소했습니다.")
+            print("Cancelled.")
             return None
         if answer.isdigit():
             n = int(answer)
             if 1 <= n <= len(files):
                 return files[n - 1]
-            print("1 부터 %d 사이의 번호를 입력해 주세요. (q=취소)" % len(files))
+            print("Enter a number between 1 and %d. (q=cancel)" % len(files))
             continue
         if os.path.isfile(answer):
             return answer
-        print("번호나 파일명을 입력해 주세요. (q=취소)")
+        print("Enter a number or a file name. (q=cancel)")
 
 
 def guess_substrate_elements(parent, vacuum_min_gap=VACUUM_MIN_GAP,
@@ -3327,10 +3327,10 @@ def detect_adsorbate_candidates(parent, replace_elements,
     }
 
     if not other_idx:
-        result["reason"] = "치환 풀 밖의 원소가 없습니다 (제거할 흡착물 후보 없음)."
+        result["reason"] = "No element outside the substituted pool (no adsorbate candidate to remove)."
         return result
     if not pool_idx:
-        result["reason"] = "치환 풀에 해당하는 원자가 없어 기판을 정의할 수 없습니다."
+        result["reason"] = "No atom belongs to the substituted pool, so the substrate cannot be defined."
         return result
 
     axis, gap, origin = _largest_vacuum_axis(parent)
@@ -3371,13 +3371,13 @@ def detect_adsorbate_candidates(parent, replace_elements,
 
     if not result["is_slab"]:
         result["reason"] = (
-            f"최대 빈틈이 {gap:.2f} A 뿐이라 진공층이 없는 벌크 구조로 판단됩니다. "
-            "표면/내부를 기하학적으로 구분할 수 없으므로 직접 선택해 주세요."
+            f"The largest gap is only {gap:.2f} A, so this looks like a bulk structure with no vacuum layer. "
+            "Surface and interior cannot be told apart geometrically, so please select manually."
         )
     elif not result["suggested"]:
         result["reason"] = (
-            "치환 풀 밖의 원소가 모두 기판 좌표 범위 안에 있어 흡착물로 판단되지 "
-            "않았습니다 (치환/도핑된 원소로 보입니다)."
+            "Every element outside the substituted pool lies inside the substrate coordinate range, "
+            "so none was taken as an adsorbate (they look substituted/doped)."
         )
     return result
 
@@ -3385,27 +3385,27 @@ def detect_adsorbate_candidates(parent, replace_elements,
 def print_adsorbate_analysis(parent, info):
     """Print the evidence behind detect_adsorbate_candidates()'s suggestion."""
     counts = Counter(parent.get_chemical_symbols())
-    print("\n[흡착물 분석]")
-    print(f"  전체 조성          : {dict(counts)}")
-    print(f"  치환 풀(기판) 원소 : {info['pool']}")
+    print("\n[Adsorbate analysis]")
+    print(f"  Total composition    : {dict(counts)}")
+    print(f"  Substituted pool   : {info['pool']}")
     if info["axis_name"]:
-        verdict = "slab 으로 판단" if info["is_slab"] else "벌크로 판단 (진공층 없음)"
-        print(f"  진공축 추정        : {info['axis_name']}축, 최대 빈틈 {info['vacuum_gap']:.2f} A  -> {verdict}")
+        verdict = "judged slab" if info["is_slab"] else "judged bulk (no vacuum layer)"
+        print(f"  Vacuum axis (est.) : {info['axis_name']} axis, largest gap {info['vacuum_gap']:.2f} A  -> {verdict}")
     if info["substrate_range"]:
         lo, hi = info["substrate_range"]
-        print(f"  기판 좌표 범위     : {lo:.2f} ~ {hi:.2f} A  ({info['axis_name']}축 기준)")
+        print(f"  Substrate range    : {lo:.2f} ~ {hi:.2f} A  (along the {info['axis_name']} axis)")
     if info["details"]:
         print()
-        print("  원소  개수  좌표 범위(A)        최근접 기판거리  판정")
+        print("  Elem  Cnt   Coord range (A)      Dist to sub     Verdict")
         for element in info["candidates"]:
             d = info["details"][element]
             dist = "  -  " if d["min_distance_to_pool"] is None else f"{d['min_distance_to_pool']:.2f} A"
             if not info["is_slab"]:
-                mark = "판단 불가 (벌크)"
+                mark = "cannot judge (bulk)"
             elif d["outside_substrate"]:
-                mark = "흡착물로 판단"
+                mark = "judged adsorbate"
             else:
-                mark = "기판 내부 (치환/도핑) -> 제외 권장"
+                mark = "inside substrate (substituted/doped) -> exclude (recommended)"
             print("  %-4s  %4d  %6.2f ~ %6.2f      %-14s  %s"
                   % (element, d["count"], d["coord_min"], d["coord_max"], dist, mark))
     if info["reason"]:
@@ -3420,7 +3420,7 @@ def interactive_select_surface_elements(parent, replace_elements):
     """
     info = detect_adsorbate_candidates(parent, replace_elements)
     if not info["candidates"]:
-        print("\n[surface] " + (info["reason"] or "제거할 후보 원소가 없습니다."))
+        print("\n[surface] " + (info["reason"] or "No candidate element to remove."))
         return None
 
     print_adsorbate_analysis(parent, info)
@@ -3429,41 +3429,41 @@ def interactive_select_surface_elements(parent, replace_elements):
     while True:
         if info["suggested"]:
             suggestion = ",".join(info["suggested"])
-            print(f"\n  * 자동 판단 결과: {suggestion}")
-            prompt = ("* 이대로 제거할까요? (엔터=예 / 원소 직접 입력 (예: Li,S) / "
-                      "n=surface 트윈 안 만듦)\n: ")
+            print(f"\n  * Auto-suggested: {suggestion}")
+            prompt = ("* Remove these? (enter=yes / type elements yourself (e.g. Li,S) / "
+                      "n=skip the surface twin)\n: ")
         else:
             suggestion = None
-            prompt = ("\n* 제거할 원소를 직접 입력해 주세요 (예: Li,S / "
-                      "n=surface 트윈 안 만듦)\n: ")
+            prompt = ("\n* Enter the elements to remove (e.g. Li,S / "
+                      "n=skip the surface twin)\n: ")
         try:
             answer = input(prompt).strip()
         except EOFError:
-            print("\n[surface] 입력이 없어 surface 트윈을 만들지 않습니다.")
+            print("\n[surface] No input, the surface twin will not be created.")
             return None
 
         if answer.lower() in ("n", "no"):
-            print("[surface] surface 트윈을 만들지 않습니다.")
+            print("[surface] The surface twin will not be created.")
             return None
         if not answer:
             if suggestion:
                 return suggestion
-            print("[입력 오류] 제거할 원소를 입력하거나 n 을 입력해 주세요.")
+            print("[Input error] Enter the elements to remove, or n.")
             continue
 
         try:
             chosen = parse_element_list(answer)
         except Exception as exc:
-            print(f"[입력 오류] {exc}")
+            print(f"[Input error] {exc}")
             continue
         overlap = set(chosen) & replace_set
         if overlap:
-            print(f"[입력 오류] 치환 풀 원소는 제거할 수 없습니다: {sorted(overlap)}")
+            print(f"[Input error] Substituted pool elements cannot be removed: {sorted(overlap)}")
             continue
         missing = [el for el in chosen if el not in info["candidates"]]
         if missing:
-            print(f"[입력 오류] 입력 구조에 없는 원소입니다: {missing} "
-                  f"(후보: {info['candidates']})")
+            print(f"[Input error] Element not present in the input structure: {missing} "
+                  f"(candidates: {info['candidates']})")
             continue
         return ",".join(chosen)
 
@@ -3487,37 +3487,37 @@ def interactive_select_redox_atoms(parent, replace_elements, max_sets=50):
     removable = [i for i, s in enumerate(symbols) if s not in replace_set]
 
     if not removable:
-        print("\n[redox] 치환 풀 밖의 원자가 없어 제거할 수 있는 원자가 없습니다.")
+        print("\n[redox] No atom outside the substituted pool, so there is nothing to remove.")
         return None
 
     info = detect_adsorbate_candidates(parent, replace_elements)
-    print("\n[redox 제거 가능 원자]  (치환 풀 원자는 배열 매핑이 깨지므로 제외됨)")
-    print("  번호   원소   분율좌표 (a, b, c)              비고")
+    print("\n[redox removable atoms]  (pool atoms excluded: they break the arrangement mapping)")
+    print("  Num    Elem  Frac coords (a, b, c)      Note")
     for i in removable:
         note = ""
         detail = info["details"].get(symbols[i])
         if detail and info["is_slab"]:
-            note = "흡착물로 판단" if detail["outside_substrate"] else "기판 내부 (치환/도핑)"
+            note = "judged adsorbate" if detail["outside_substrate"] else "inside substrate (substituted/doped)"
         print("  #%-5d %-4s  (%.4f, %.4f, %.4f)   %s"
               % (i + 1, symbols[i], frac[i][0], frac[i][1], frac[i][2], note))
 
-    print("\n  [입력 형식]")
-    print("    제거 조성 : 'S1'=S 1개  'S2'=S 2개  'Li2,S1'=Li 2개+S 1개 -> 조합마다 폴더")
-    print("    특정 원자 : '19'  '19,20'                                -> 그것만, _r 하나")
-    print("    후보 중 k : '19,20,21,22/2'                              -> 지정 원자 중 아무 2개")
-    print("    * 개수를 꼭 적어 주세요 ('S' 는 안 됩니다). 어떤 원소를 전부 없애는 것은")
-    print("      surface 쪽 역할입니다.")
+    print("\n  [Input formats]")
+    print("    Removal composition : 'S1'=1 S  'S2'=2 S  'Li2,S1'=2 Li + 1 S -> a folder per combination")
+    print("    Specific atoms      : '19'  '19,20'                           -> only those, one _r")
+    print("    Any k of candidates : '19,20,21,22/2'                         -> any 2 of the listed atoms")
+    print("    * The count is mandatory ('S' alone is rejected). Removing an element entirely is")
+    print("      what the surface side is for.")
 
     replace_indices = [i for i, s in enumerate(symbols) if s in replace_set]
 
     while True:
         try:
-            answer = input("\n* 제거할 대상을 입력해 주세요 (n=_r 트윈 안 만듦)\n: ").strip()
+            answer = input("\n* Enter what to remove (n=skip the _r twin)\n: ").strip()
         except EOFError:
-            print("\n[redox] 입력이 없어 _r 트윈을 만들지 않습니다.")
+            print("\n[redox] No input, the _r twin will not be created.")
             return None
         if answer.lower() in ("n", "no", ""):
-            print("[redox] _r 트윈을 만들지 않습니다.")
+            print("[redox] The _r twin will not be created.")
             return None
 
         try:
@@ -3525,36 +3525,36 @@ def interactive_select_redox_atoms(parent, replace_elements, max_sets=50):
                 parent, answer, replace_sites=replace_indices
             )
         except ValueError as exc:
-            print(f"[입력 오류] {exc}")
+            print(f"[Input error] {exc}")
             continue
 
         n_sets = len(index_sets)
         if n_sets > max_sets:
-            print(f"[입력 오류] 조합이 {n_sets}개로 상한({max_sets})을 넘습니다. "
-                  "제거 개수를 줄이거나 후보를 좁혀 주세요.")
+            print(f"[Input error] {n_sets} combinations exceed the limit ({max_sets}). "
+                  "Reduce the removal count or narrow the candidates.")
             continue
 
         def _desc(indices):
             return " ".join(f"#{i + 1}{symbols[i]}" for i in indices)
 
         if n_sets == 1:
-            print(f"  -> {_desc(index_sets[0])} 제거, _r 폴더 1개")
+            print(f"  -> remove {_desc(index_sets[0])}, 1 _r folder")
         else:
-            print(f"  -> 구조마다 {choose}개 제거, 조합 {n_sets}가지 -> _r1 .. _r{n_sets}")
+            print(f"  -> remove {choose} atoms per structure, {n_sets} combinations -> _r1 .. _r{n_sets}")
             preview = index_sets if n_sets <= 10 else index_sets[:10]
             for n, indices in enumerate(preview, start=1):
                 print("     _r%-3d <- %s" % (n, _desc(indices)))
             if n_sets > len(preview):
-                print(f"     ... (총 {n_sets}개)")
+                print(f"     ... ({n_sets} total)")
 
         try:
-            confirm = input("* 이대로 진행할까요? (엔터=예 / 다시 입력하려면 아무 값 / n=안 만듦)\n: ").strip()
+            confirm = input("* Proceed? (enter=yes / any value to re-enter / n=do not create)\n: ").strip()
         except EOFError:
             confirm = ""
         if not confirm:
             return answer
         if confirm.lower() in ("n", "no"):
-            print("[redox] _r 트윈을 만들지 않습니다.")
+            print("[redox] The _r twin will not be created.")
             return None
 
 
@@ -3844,7 +3844,7 @@ def _ask_text(prompt, default=None, required=True):
         except EOFError:
             # Piped/redirected stdin ran out (e.g. `printf ... | CCpyAlloyGen.py`).
             # Exit cleanly instead of dumping a traceback.
-            print("\n입력이 끝났습니다. 실행을 취소합니다.")
+            print("\nInput ended. Cancelling the run.")
             raise SystemExit(1)
         if not ans and default not in (None, ""):
             return default
@@ -3852,7 +3852,7 @@ def _ask_text(prompt, default=None, required=True):
             return ans
         if not required:
             return ans
-        print("값을 입력해 주세요.")
+        print("Please enter a value.")
 
 
 def _ask_int(prompt, default=None, min_value=None, max_value=None):
@@ -3861,13 +3861,13 @@ def _ask_int(prompt, default=None, min_value=None, max_value=None):
         try:
             value = int(ans)
         except ValueError:
-            print("정수를 입력해 주세요.")
+            print("Please enter an integer.")
             continue
         if min_value is not None and value < min_value:
-            print(f"{min_value} 이상이어야 합니다.")
+            print(f"Must be >= {min_value}.")
             continue
         if max_value is not None and value > max_value:
-            print(f"{max_value} 이하여야 합니다.")
+            print(f"Must be <= {max_value}.")
             continue
         return value
 
@@ -3878,10 +3878,10 @@ def _ask_float(prompt, default=None, min_value=None):
         try:
             value = float(ans)
         except ValueError:
-            print("숫자를 입력해 주세요. 예: 1e-3")
+            print("Enter a number. e.g. 1e-3")
             continue
         if min_value is not None and value < min_value:
-            print(f"{min_value} 이상이어야 합니다.")
+            print(f"Must be >= {min_value}.")
             continue
         return value
 
@@ -3894,7 +3894,7 @@ def _ask_yes_no(prompt, default=False):
             return True
         if ans in ("n", "no", "아니오", "아니요"):
             return False
-        print("y 또는 n으로 입력해 주세요.")
+        print("Please enter y or n.")
 
 
 def _ask_choice(prompt, choices, default=None):
@@ -3905,14 +3905,14 @@ def _ask_choice(prompt, choices, default=None):
     valid = {str(key): value for key, _, value in choices}
     labels = {str(key): label for key, label, _ in choices}
     while True:
-        ans = _ask_text("선택", str(default) if default is not None else None)
+        ans = _ask_text("Choice", str(default) if default is not None else None)
         if ans in valid:
-            print(f"선택됨: {labels[ans]}")
+            print(f"Selected: {labels[ans]}")
             return valid[ans]
-        print("목록에 있는 번호를 입력해 주세요.")
+        print("Please enter a number shown in the list.")
 
 def _find_base_structure_files():
-    """현재 디렉터리에서 *_base_*.cif 구조 파일을 검색한다."""
+    """Search the current directory for *_base_*.cif structure files."""
     base_files = []
 
     for filename in os.listdir("."):
@@ -3929,26 +3929,26 @@ def _find_base_structure_files():
 
 def _detect_base_element(input_file):
     """
-    CIF 구조에서 base 원소를 자동 인식한다.
+    Auto-detect the base element from a CIF structure.
 
-    원칙:
-    1. 구조에 원소가 하나뿐이면 해당 원소를 선택
-    2. 여러 원소가 있으면 가장 많이 존재하는 원소를 base 원소로 선택
+    Rules:
+    1. If the structure has only one element, take that element
+    2. If there are several elements, take the most abundant one as the base element
     """
     atoms = read(input_file)
     symbols = atoms.get_chemical_symbols()
     counts = Counter(symbols)
 
     if not counts:
-        raise ValueError(f"구조에서 원소를 읽을 수 없습니다: {input_file}")
+        raise ValueError(f"Cannot read any element from the structure: {input_file}")
 
-    # 가장 많이 존재하는 원소
+    # most abundant element
     sorted_counts = counts.most_common()
 
     if len(sorted_counts) > 1 and sorted_counts[0][1] == sorted_counts[1][1]:
         raise ValueError(
-            "가장 많은 원소가 둘 이상이라 base 원소를 자동으로 결정할 수 없습니다. "
-            f"구조 조성: {dict(counts)}"
+            "Two or more elements are equally most abundant, cannot decide the base element automatically. "
+            f"Structure composition: {dict(counts)}"
         )
 
     base_element = sorted_counts[0][0]
@@ -3958,18 +3958,18 @@ def _detect_base_element(input_file):
 
 
 def _select_base_structure():
-    """현재 디렉터리의 base CIF 구조를 번호로 선택한다."""
+    """Select a base CIF structure in the current directory by number."""
     while True:
         base_files = _find_base_structure_files()
 
         if not base_files:
             raise FileNotFoundError(
-                "현재 디렉터리에서 '*_base_*.cif' 파일을 찾지 못했습니다."
+                "No '*_base_*.cif' file found in the current directory."
             )
 
         structure_info = []
 
-        print("\n현재 디렉터리에서 발견된 base 구조:\n")
+        print("\nBase structures found in the current directory:\n")
 
         for number, filename in enumerate(base_files, start=1):
             try:
@@ -3990,8 +3990,8 @@ def _select_base_structure():
 
                 print(
                     f"  [{number}] {filename:<24} "
-                    f"→ base 원소: {base_element:<2}, "
-                    f"원자 수: {len(atoms)}"
+                    f"-> base element: {base_element:<2}, "
+                    f"atoms: {len(atoms)}"
                 )
 
             except Exception as exc:
@@ -4004,55 +4004,55 @@ def _select_base_structure():
 
                 print(
                     f"  [{number}] {filename:<24} "
-                    f"→ 읽기 오류: {exc}"
+                    f"-> read error: {exc}"
                 )
 
-        print("  [0] 종료")
+        print("  [0] Quit")
 
-        answer = input("\n사용할 base 구조 선택: ").strip()
+        answer = input("\nSelect the base structure to use: ").strip()
 
         if answer.lower() in {"0", "q", "quit", "exit"}:
-            raise SystemExit("사용자가 구조 선택을 취소했습니다.")
+            raise SystemExit("Structure selection cancelled by the user.")
 
         try:
             selected_number = int(answer)
         except ValueError:
-            print("목록에 표시된 번호를 입력해 주세요.")
+            print("Please enter a number shown in the list.")
             continue
 
         if not 1 <= selected_number <= len(structure_info):
-            print("올바른 번호를 입력해 주세요.")
+            print("Enter a valid number.")
             continue
 
         selected = structure_info[selected_number - 1]
 
         if selected.get("error"):
-            print("해당 구조는 정상적으로 읽히지 않아 선택할 수 없습니다.")
+            print("That structure could not be read properly and cannot be selected.")
             continue
 
         input_file = selected["filename"]
         replace_element = selected["base_element"]
         n_sites = selected["base_count"]
 
-        print("\n[선택된 base 구조]")
-        print(f"  입력 파일        : {input_file}")
-        print(f"  자동 인식 원소   : {replace_element}")
-        print(f"  전체 조성        : {dict(selected['counts'])}")
-        print(f"  치환 가능 자리 수: {n_sites}")
+        print("\n[Selected base structure]")
+        print(f"  Input file            : {input_file}")
+        print(f"  Auto-detected element : {replace_element}")
+        print(f"  Total composition     : {dict(selected['counts'])}")
+        print(f"  Substitutable sites   : {n_sites}")
 
-        confirm = input("\n이 구조를 사용하시겠습니까? (y/n): ").strip().lower()
+        confirm = input("\nUse this structure? (y/n): ").strip().lower()
 
         if confirm in {"y", "yes", "예", "네", ""}:
             return input_file, replace_element
 
-        print("구조를 다시 선택합니다.")
+        print("Selecting the structure again.")
 
 def _read_structure_file(filename):
     """
-    CIF, VASP, POSCAR, CONTCAR 구조를 파일명에 맞춰 읽는다.
+    Read CIF, VASP, POSCAR, CONTCAR structures according to the file name.
 
-    POSCAR/CONTCAR 계열은 확장자가 없거나 변형된 이름이어도
-    ASE에 VASP 형식임을 명시한다.
+    For POSCAR/CONTCAR type names, even with no extension or a modified
+    name, the VASP format is stated explicitly to ASE.
     """
     basename = os.path.basename(filename)
     upper_name = basename.upper()
@@ -4084,7 +4084,7 @@ _SKIP_BROWSE_DIR_NAMES = {".git", "__pycache__", "node_modules", ".venv", "venv"
 
 
 def _looks_like_vasp_template_dir(path):
-    """INCAR나 KPOINTS가 있으면 VASP 템플릿 폴더 후보로 판단한다."""
+    """Treat a folder with INCAR or KPOINTS as a VASP template folder candidate."""
     try:
         names = {n.upper() for n in os.listdir(path)}
     except OSError:
@@ -4094,10 +4094,10 @@ def _looks_like_vasp_template_dir(path):
 
 def _find_template_dir_candidates(start_dir=".", max_depth=3, max_scanned=5000):
     """
-    start_dir 아래(제한된 깊이까지)에서 INCAR 파일이 있는 폴더를 찾는다.
+    Find folders containing an INCAR file under start_dir (up to a limited depth).
 
-    .git, __pycache__, node_modules, venv 같은 폴더는 건너뛰고,
-    너무 큰 디렉터리 트리에서 오래 걸리지 않도록 스캔 개수에 상한을 둔다.
+    Folders such as .git, __pycache__, node_modules, venv are skipped, and the
+    number of scans is capped so a very large directory tree does not take long.
     """
     start_dir = os.path.abspath(start_dir)
     start_depth = start_dir.rstrip(os.sep).count(os.sep)
@@ -4124,35 +4124,35 @@ def _find_template_dir_candidates(start_dir=".", max_depth=3, max_scanned=5000):
 
 def _browse_for_directory(start_dir="."):
     """
-    번호로 폴더를 오르내리며 고르는 간단한 탐색기.
+    Simple browser that moves up and down folders by number.
 
-    하위 폴더 번호를 입력하면 그 폴더로 들어가고, '..'를 입력하면 상위 폴더로
-    나가며, '0'이나 빈 입력은 현재 폴더를 그대로 선택한다. 경로를 직접 입력해도
-    된다(탭 자동완성이 안 되는 환경에서도 번호만으로 탐색 가능).
+    Entering a subfolder number enters that folder, '..' goes up to the parent
+    folder, and '0' or empty input selects the current folder as is. A path may
+    also be typed directly (browsing by number works without tab completion).
     """
     current = os.path.abspath(start_dir)
     while True:
-        print(f"\n[현재 폴더] {current}")
+        print(f"\n[Current folder] {current}")
         try:
             entries = sorted(
                 e for e in os.listdir(current)
                 if os.path.isdir(os.path.join(current, e)) and not e.startswith(".")
             )
         except OSError as exc:
-            print(f"폴더를 읽을 수 없습니다: {exc}")
+            print(f"Cannot read the folder: {exc}")
             entries = []
 
         for number, name in enumerate(entries, start=1):
             sub = os.path.join(current, name)
-            hint = " (INCAR/KPOINTS 있음)" if _looks_like_vasp_template_dir(sub) else ""
+            hint = " (has INCAR/KPOINTS)" if _looks_like_vasp_template_dir(sub) else ""
             print(f"  [{number}] {name}/{hint}")
 
-        here_hint = " (INCAR/KPOINTS 있음)" if _looks_like_vasp_template_dir(current) else ""
-        print(f"  [0] 현재 폴더를 템플릿 폴더로 선택: {current}{here_hint}")
-        print("  [..] 상위 폴더로 이동")
-        print("  (번호 대신 경로를 직접 입력해도 됩니다)")
+        here_hint = " (has INCAR/KPOINTS)" if _looks_like_vasp_template_dir(current) else ""
+        print(f"  [0] Use the current folder as the template folder: {current}{here_hint}")
+        print("  [..] Go up to the parent folder")
+        print("  (you may type a path instead of a number)")
 
-        answer = input("\n선택 또는 경로 입력: ").strip()
+        answer = input("\nSelect or enter a path: ").strip()
 
         if answer in ("0", ""):
             return current
@@ -4165,30 +4165,30 @@ def _browse_for_directory(start_dir="."):
             if 1 <= idx <= len(entries):
                 current = os.path.join(current, entries[idx - 1])
                 continue
-            print("올바른 번호를 입력해 주세요.")
+            print("Enter a valid number.")
             continue
 
         typed = os.path.expanduser(os.path.expandvars(answer))
         if os.path.isdir(typed):
             current = os.path.abspath(typed)
             continue
-        print(f"폴더를 찾을 수 없습니다: {answer}")
+        print(f"Folder not found: {answer}")
 
 
 def _select_template_dir():
     """
-    INCAR가 있는 폴더를 자동으로 찾아 번호로 고르거나, 직접 탐색/입력한다.
+    Auto-find folders with INCAR and pick by number, or browse/enter one directly.
     """
-    print("\nINCAR 파일이 있는 폴더를 현재 위치 기준으로 검색 중...")
+    print("\nSearching for folders with an INCAR file under the current location...")
     candidates = _find_template_dir_candidates(".", max_depth=3)
 
     if candidates:
-        print(f"INCAR가 있는 폴더 {len(candidates)}개를 찾았습니다:")
+        print(f"Found {len(candidates)} folder(s) with INCAR:")
         for number, path in enumerate(candidates, start=1):
             print(f"  [{number}] {path}")
-        print("  [0] 직접 폴더 탐색/경로 입력")
+        print("  [0] Browse folders / enter a path manually")
 
-        answer = _ask_text("템플릿 폴더 선택 (번호 또는 0)", "1")
+        answer = _ask_text("Select template folder (number or 0)", "1")
         if answer.strip().isdigit():
             idx = int(answer.strip())
             if idx == 0:
@@ -4196,23 +4196,23 @@ def _select_template_dir():
             elif 1 <= idx <= len(candidates):
                 template_dir = candidates[idx - 1]
             else:
-                print("목록에 없는 번호입니다. 직접 탐색으로 전환합니다.")
+                print("Number not in the list. Switching to manual browsing.")
                 template_dir = _browse_for_directory(".")
         else:
             typed = os.path.expanduser(os.path.expandvars(answer.strip()))
             template_dir = typed if typed else _browse_for_directory(".")
     else:
-        print("현재 위치 하위에서 INCAR 파일을 찾지 못했습니다. 폴더를 직접 탐색해 주세요.")
+        print("No INCAR file found under the current location. Please browse for the folder.")
         template_dir = _browse_for_directory(".")
 
-    print(f"선택된 템플릿 폴더: {template_dir}")
+    print(f"Selected template folder: {template_dir}")
     return template_dir
 
 def _find_structure_files():
     """
-    현재 디렉터리에서 ASE가 읽을 수 있는 일반적인 구조 파일을 찾는다.
+    Find common structure files readable by ASE in the current directory.
 
-    감지 대상:
+    Detected:
       - *.cif
       - *.vasp
       - POSCAR
@@ -4241,19 +4241,19 @@ def _find_structure_files():
 
 
 def _select_structure_file():
-    """현재 디렉터리의 구조 파일을 표시하고 번호로 선택한다."""
+    """List the structure files in the current directory and select one by number."""
     while True:
         structure_files = _find_structure_files()
 
         if not structure_files:
             raise FileNotFoundError(
-                "현재 디렉터리에서 구조 파일을 찾지 못했습니다.\n"
-                "지원 파일: *.cif, *.vasp, POSCAR, CONTCAR"
+                "No structure file found in the current directory.\n"
+                "Supported files: *.cif, *.vasp, POSCAR, CONTCAR"
             )
 
         valid_files = []
 
-        print("\n현재 디렉터리에서 발견된 구조 파일:\n")
+        print("\nStructure files found in the current directory:\n")
 
         for filename in structure_files:
             try:
@@ -4277,33 +4277,33 @@ def _select_structure_file():
 
                 print(
                     f"  [{number}] {filename:<25} "
-                    f"조성: {composition_text:<20} "
-                    f"원자 수: {len(atoms)}"
+                    f"composition: {composition_text:<20} "
+                    f"atoms: {len(atoms)}"
                 )
 
             except Exception as exc:
-                print(f"  [읽기 실패] {filename}: {exc}")
+                print(f"  [read failed] {filename}: {exc}")
 
         if not valid_files:
             raise ValueError(
-                "구조 파일 후보는 발견했지만 ASE로 읽을 수 있는 파일이 없습니다."
+                "Structure file candidates were found but none could be read by ASE."
             )
 
-        print("  [0] 종료")
+        print("  [0] Quit")
 
-        answer = input("\n사용할 구조 파일 선택: ").strip()
+        answer = input("\nSelect the structure file to use: ").strip()
 
         if answer.lower() in {"0", "q", "quit", "exit"}:
-            raise SystemExit("사용자가 구조 파일 선택을 취소했습니다.")
+            raise SystemExit("Structure file selection cancelled by the user.")
 
         try:
             selected_number = int(answer)
         except ValueError:
-            print("목록에 표시된 번호를 입력해 주세요.")
+            print("Please enter a number shown in the list.")
             continue
 
         if not 1 <= selected_number <= len(valid_files):
-            print("올바른 번호를 입력해 주세요.")
+            print("Enter a valid number.")
             continue
 
         selected = valid_files[selected_number - 1]
@@ -4311,10 +4311,10 @@ def _select_structure_file():
         atoms = selected["atoms"]
         counts = selected["counts"]
 
-        print("\n[선택된 입력 구조]")
-        print(f"  파일명   : {input_file}")
-        print(f"  전체 조성: {dict(counts)}")
-        print(f"  원자 수  : {len(atoms)}")
+        print("\n[Selected input structure]")
+        print(f"  File name         : {input_file}")
+        print(f"  Total composition : {dict(counts)}")
+        print(f"  Atoms             : {len(atoms)}")
 
         return input_file, atoms, counts
 
@@ -4329,16 +4329,16 @@ METAL_ELEMENTS = {
 
 def _select_replace_element(counts):
     """
-    입력 구조에서 치환 대상 원소 풀(pool)을 선택한다.
+    Select the pool of elements to be substituted in the input structure.
 
-    원자 수가 가장 많은 원소를 기판 원소 후보로 먼저 표시한다.
-    Li2S2처럼 소수 원자로 존재하는 흡착종 원소는 별도로 구분한다.
+    The most abundant element is shown first as the substrate element candidate.
+    Adsorbate elements present as a few atoms, like Li2S2, are listed separately.
 
-    번호를 하나만 입력하면 기존처럼 단일 원소를 치환 대상으로 선택하고,
-    콤마로 여러 번호를 입력하면(예: 1,3,4) 이미 여러 금속이 섞여 있는
-    HEA 구조에서도 그 원소들을 하나의 치환 대상 풀로 묶어서 선택할 수 있다.
-    이렇게 고르면 Li, S 같이 목록에서 선택하지 않은 흡착물 원소는
-    자동으로 치환 대상에서 제외된다.
+    Entering a single number selects one element to substitute as before, and
+    entering several numbers separated by commas (e.g. 1,3,4) groups those
+    elements into one substitution pool, even for an HEA structure already mixed.
+    With this choice, adsorbate elements not picked from the list, such as Li or S,
+    are automatically excluded from substitution.
     """
     elements = sorted(
         counts.keys(),
@@ -4349,31 +4349,31 @@ def _select_replace_element(counts):
         replace_element = elements[0]
 
         print(
-            f"\n구조에 원소가 하나만 있으므로 "
-            f"{replace_element}를 치환 기준 원소로 자동 선택합니다."
+            f"\nThe structure has only one element, so "
+            f"{replace_element} is auto-selected as the substitution element."
         )
         return [replace_element]
 
     while True:
-        print("\n치환할 원소를 선택하세요 (여러 원소를 하나의 풀로 묶으려면 콤마로 구분, 예: 1,3,4):\n")
+        print("\nSelect elements to substitute (comma-separate to group several into one pool, ex: 1,3,4):\n")
 
         max_count = max(counts.values())
 
         for number, element in enumerate(elements, start=1):
-            label = "기판 후보" if counts[element] == max_count else "유지 후보"
+            label = "substrate candidate" if counts[element] == max_count else "candidate to keep"
 
             print(
                 f"  [{number}] {element:<2} "
-                f"({counts[element]}개 자리, {label})"
+                f"({counts[element]} sites, {label})"
             )
 
-        print("  [0] 구조 파일 다시 선택")
-        print("  [q] 종료")
+        print("  [0] Select structure file again")
+        print("  [q] Quit")
 
-        answer = input("\n선택 (예: 2 또는 1,3,4): ").strip()
+        answer = input("\nSelect (ex: 2 or 1,3,4): ").strip()
 
         if answer.lower() in {"q", "quit", "exit"}:
-            raise SystemExit("사용자가 입력을 취소했습니다.")
+            raise SystemExit("Input cancelled by the user.")
 
         if answer == "0":
             return None
@@ -4382,36 +4382,36 @@ def _select_replace_element(counts):
         try:
             numbers = [int(t) for t in tokens]
         except ValueError:
-            print("목록에 표시된 번호를 콤마로 구분해 입력해 주세요.")
+            print("Enter the numbers shown in the list, comma-separated.")
             continue
 
         if not numbers or any(not (1 <= n <= len(elements)) for n in numbers):
-            print("올바른 번호를 입력해 주세요.")
+            print("Enter a valid number.")
             continue
 
         if len(set(numbers)) != len(numbers):
-            print("같은 원소를 두 번 선택했습니다. 다시 입력해 주세요.")
+            print("The same element was selected twice. Please enter again.")
             continue
 
         replace_elements = [elements[n - 1] for n in numbers]
         total_sites = sum(counts[e] for e in replace_elements)
 
         print(
-            f"선택된 치환 대상 원소 풀: {', '.join(replace_elements)} "
-            f"(합계 {total_sites}개 자리)"
+            f"Selected substituted pool: {', '.join(replace_elements)} "
+            f"({total_sites} sites in total)"
         )
 
         return replace_elements
 
     
 def _select_input_structure():
-    """구조 파일을 고르고 치환 대상 원소 풀까지 결정한다."""
+    """Pick a structure file and decide the substituted element pool."""
     while True:
         input_file, atoms, counts = _select_structure_file()
         replace_elements = _select_replace_element(counts)
 
         if replace_elements is None:
-            print("\n구조 파일 선택 단계로 돌아갑니다.")
+            print("\nGoing back to the structure file selection step.")
             continue
 
         return input_file, replace_elements
@@ -4419,12 +4419,12 @@ def _select_input_structure():
 
 def _preview_input_structure(input_file, replace_elements, composition=None):
     """
-    입력 구조와 치환 대상 원소 풀을 검증하고 요약을 출력한다.
+    Validate the input structure and the substituted pool, then print a summary.
 
-    composition을 None으로 두면(기존 조성 재사용 모드) 현재 구조에서
-    replace_elements 자리들의 실제 원소 비율을 그대로 target 조성으로
-    자동 계산한다. 이 경우 반환되는 composition으로 실제 사용된 값을
-    확인할 수 있다.
+    Leaving composition as None (reuse-current-composition mode) auto-computes the
+    target composition from the actual element ratio of the replace_elements sites
+    in the current structure. In that case the returned composition shows the
+    values that were actually used.
     """
     parent = _read_structure_file(input_file)
 
@@ -4438,7 +4438,7 @@ def _preview_input_structure(input_file, replace_elements, composition=None):
     ]
 
     if not replace_sites:
-        raise ValueError(f"치환 대상 원소 풀 {replace_elements}에 해당하는 자리가 없습니다.")
+        raise ValueError(f"No site matches the substituted pool {replace_elements}.")
 
     if composition is None:
         composition = dict(Counter(symbols[i] for i in replace_sites))
@@ -4454,21 +4454,21 @@ def _preview_input_structure(input_file, replace_elements, composition=None):
     expected_counts = Counter(preserved_counts)
     expected_counts.update(composition)
 
-    print("\n[입력 구조 확인]")
-    print(f"  전체 조성          : {dict(counts)}")
-    print(f"  치환 대상 원소 풀  : {replace_elements}")
-    print(f"  치환 대상 자리 수  : {len(replace_sites)}")
-    print(f"  입력 HEA 조성      : {composition}")
-    print(f"  치환 조성 합       : {n_replace}")
-    print(f"  유지되는 원소      : {preserved_counts}")
-    print(f"  예상 최종 조성     : {dict(expected_counts)}")
+    print("\n[Input structure check]")
+    print(f"  Total composition    : {dict(counts)}")
+    print(f"  Substituted pool     : {replace_elements}")
+    print(f"  Substituted sites    : {len(replace_sites)}")
+    print(f"  Input HEA comp.      : {composition}")
+    print(f"  Substituted comp sum : {n_replace}")
+    print(f"  Preserved elements   : {preserved_counts}")
+    print(f"  Expected final comp. : {dict(expected_counts)}")
 
     if len(replace_sites) != n_replace:
         raise ValueError(
-            "치환 대상 원소 풀 전체를 치환하려면 치환 조성 합이 "
-            "치환 대상 자리 수와 같아야 합니다.\n"
-            f"  치환 대상 자리 수 = {len(replace_sites)}\n"
-            f"  치환 조성 합 = {n_replace}"
+            "To substitute the whole substituted pool, the substituted comp sum "
+            "must equal the number of substituted sites.\n"
+            f"  Substituted sites = {len(replace_sites)}\n"
+            f"  Substituted comp sum = {n_replace}"
         )
 
     return parent, len(replace_sites), n_replace, composition
@@ -4496,16 +4496,16 @@ def _suggest_output_dir(input_file, mode, composition, layer_axis="z", view_axis
 def _wizard_output_dir(input_file, suggested):
     """Ask for an output directory and reject file/input-destructive choices early."""
     while True:
-        output_dir = _ask_text("8) 출력 디렉토리", suggested)
+        output_dir = _ask_text("8) Output directory", suggested)
         output_abs = os.path.abspath(os.path.realpath(output_dir))
         input_abs = os.path.abspath(os.path.realpath(input_file))
         if output_abs == input_abs or os.path.isfile(output_abs):
-            print(f"[입력 오류] 출력 디렉토리는 파일이 될 수 없습니다: {output_dir}")
-            print("새 폴더 이름을 입력해 주세요.")
+            print(f"[Input error] Output directory cannot be a file: {output_dir}")
+            print("Please enter a new folder name.")
             continue
         if _is_same_or_inside(input_abs, output_abs):
-            print("[입력 오류] 출력 디렉토리 안에 입력 구조 파일이 포함됩니다.")
-            print("입력 파일과 별도의 새 폴더를 지정해 주세요.")
+            print("[Input error] The input structure file lies inside the output directory.")
+            print("Please specify a new folder separate from the input file.")
             continue
         return output_dir
 
@@ -4591,7 +4591,7 @@ def run_wizard(initial=None):
             try:
                 formulas[filename] = _read_structure_file(filename).get_chemical_formula()
             except Exception:
-                formulas[filename] = "(읽기 실패)"
+                formulas[filename] = "(read failed)"
         return formulas[filename]
 
     def _detect(filename):
@@ -4655,32 +4655,32 @@ def run_wizard(initial=None):
         print("\n" + "=" * 74)
         print(" CCpyAlloyGen settings")
         print("=" * 74)
-        _row("input", "# 구조 파일 ('input=?' 로 목록에서 다시 선택)")
-        _row("replace", "# 치환 풀 원소 (기본=흡착물 제외한 기판 원소)")
-        _row("comp", "# 목표 조성 (기본=현재 조성) / 'keep'=기존 조성 재셔플")
+        _row("input", "# structure file ('input=?' to pick again from the list)")
+        _row("replace", "# substituted pool (default = substrate minus adsorbate)")
+        _row("comp", "# target composition (default = current) / 'keep'=reshuffle")
         _row("mode", "# random/spread/layered/domain/exhaustive")
-        _row("n", "# 목표 구조 수 (exhaustive면 무시)")
-        _row("seed", "# 비우면 자동 생성 후 metadata.txt에 기록")
-        _row("fmt", "# cif/vasp/folder" + ("  (vasp=y 이므로 최종 출력은 VASP 입력 폴더)"
+        _row("n", "# target number of structures (ignored for exhaustive)")
+        _row("seed", "# empty = auto-generated, then recorded in metadata.txt")
+        _row("fmt", "# cif/vasp/folder" + ("  (vasp=y, so the final output is a VASP input folder)"
                                           if _bool("vasp") else ""))
-        _row("surface", "# _surface 트윈: 원소 지정 = 그 원소 '전부' 제거 (예: Li,S) / 'auto'=자동감지")
-        _row("redox", "# _r 트윈: 제거 조성 '개수 필수' ('S1','S2','Li2,S1') / '35'=그 원자 / 'auto'=선택")
-        _row("output", "# 비우면 자동 제안")
-        _row("overwrite", "# y면 기존 출력 폴더 삭제 후 생성")
-        _row("symprec", "# spglib 대칭 허용 오차")
+        _row("surface", "# _surface twin: element given = remove 'all' of that element (ex: Li,S) / 'auto'=auto-detect")
+        _row("redox", "# _r twin: removal composition 'count required' ('S1','S2','Li2,S1') / '35'=that atom / 'auto'=pick")
+        _row("output", "# empty = auto-suggested")
+        _row("overwrite", "# y = delete the existing output folder, then create")
+        _row("symprec", "# spglib symmetry tolerance")
         print("  --- mode detail (layered/domain) " + "-" * 39)
-        _row("axis", "# layered 층 축 (x/y/z)")
-        _row("view", "# domain top-view 축 (x/y/z)")
-        _row("pattern", "# domain 패턴 (예: Co,Fe/Ni,Cu / 비우면 자동 전수)")
-        _row("order", "# 목표 order parameter Q 레벨")
+        _row("axis", "# layered layer axis (x/y/z)")
+        _row("view", "# domain top-view axis (x/y/z)")
+        _row("pattern", "# domain pattern (ex: Co,Fe/Ni,Cu / empty = auto all)")
+        _row("order", "# target order parameter Q level")
         print("  --- CCpy VASP inputs " + "-" * 51)
-        _row("vasp", "# y면 INCAR/KPOINTS/POTCAR 자동 생성 (CCpyVASPInputGen과 동일)")
-        _row("preset", "# %s*.yaml 이름 (비우면 default)" % vasp_preset_dir_label())
-        _row("kp", "# 예: 4,4,1 (비우면 preset k-density 자동)")
+        _row("vasp", "# y = auto-generate INCAR/KPOINTS/POTCAR (same as CCpyVASPInputGen)")
+        _row("preset", "# %s*.yaml name (empty = default)" % vasp_preset_dir_label())
+        _row("kp", "# ex: 4,4,1 (empty = auto from preset k-density)")
         print("-" * 74)
-        print("* 고급 키(미표시)도 key=value로 입력 가능: max_attempts, children, limit,")
+        print("* Advanced keys (not shown) also accept key=value: max_attempts, children, limit,")
         print("  order_tol, order_steps, sro_cutoff, sro_tol, sro_weight, bucket, redox_max, batch,")
-        print("  reuse (n = 구조마다 INCAR/KPOINTS/POTCAR 새로 생성),")
+        print("  reuse (n = build INCAR/KPOINTS/POTCAR fresh per structure),")
         print("  sp, isif, spin, mag, ldau, vdw, pot, pseudo, template, gen_potcar,")
         print("  potcar_lib, potcar_var")
 
@@ -4688,18 +4688,18 @@ def run_wizard(initial=None):
         """Validate the sheet; run on success. Returns True when executed."""
         input_file = s["input"].strip()
         if not input_file or not os.path.isfile(input_file):
-            print("[검증 실패] 구조 파일을 찾을 수 없습니다: %r  -> input= 로 지정해 주세요." % input_file)
+            print("[Validation failed] Structure file not found: %r  -> use input= to specify it." % input_file)
             return False
 
         mode = s["mode"].strip().lower()
         if mode not in ("random", "spread", "layered", "domain", "exhaustive"):
-            print("[검증 실패] mode는 random/spread/layered/domain/exhaustive 중 하나여야 합니다: %r" % s["mode"])
+            print("[Validation failed] mode must be one of random/spread/layered/domain/exhaustive: %r" % s["mode"])
             return False
 
         try:
             replace_elements = parse_element_list(s["replace"])
         except Exception as exc:
-            print("[검증 실패] replace: %s" % exc)
+            print("[Validation failed] replace: %s" % exc)
             return False
 
         keep_composition = s["comp"].strip().lower() == "keep"
@@ -4708,7 +4708,7 @@ def run_wizard(initial=None):
             try:
                 composition = parse_composition(s["comp"])
             except Exception as exc:
-                print("[검증 실패] comp: %s" % exc)
+                print("[Validation failed] comp: %s" % exc)
                 return False
 
         # Structure preview also validates the pool and the composition sum.
@@ -4717,12 +4717,12 @@ def run_wizard(initial=None):
                 input_file, replace_elements, composition
             )
         except Exception as exc:
-            print("[검증 실패] %s" % exc)
+            print("[Validation failed] %s" % exc)
             return False
 
         if mode == "domain" and len(composition) not in (4, 5):
-            print("[검증 실패] domain mode는 4원소(2x2) 또는 5원소(quincunx) 조성만 지원합니다. "
-                  "현재 %d원소." % len(composition))
+            print("[Validation failed] domain mode supports only 4-element (2x2) or 5-element (quincunx) compositions. "
+                  "Currently %d elements." % len(composition))
             return False
 
         surface = s["surface"].strip() or None
@@ -4733,7 +4733,7 @@ def run_wizard(initial=None):
         elif surface:
             overlap = set(parse_element_list(surface)) & set(replace_elements)
             if overlap:
-                print("[검증 실패] surface 원소가 치환 풀과 겹칩니다: %s" % sorted(overlap))
+                print("[Validation failed] surface elements overlap the substituted pool: %s" % sorted(overlap))
                 return False
 
         redox_spec = None
@@ -4754,18 +4754,18 @@ def run_wizard(initial=None):
                                    if sym in set(replace_elements)],
                 )
             except ValueError as exc:
-                print("[검증 실패] redox: %s" % exc)
+                print("[Validation failed] redox: %s" % exc)
                 return False
             symbols_all = parent.get_chemical_symbols()
             frac_all = parent.get_scaled_positions()
             n_sets_preview = len(redox_sets_preview)
             if n_sets_preview > 1:
-                print("\n[redox] 후보 %d개 중 %d개 제거 -> 조합 %d가지 (_r1 .. _r%d)"
+                print("\n[redox] %d candidates, remove %d -> %d combinations (_r1 .. _r%d)"
                       % (len(redox_pool_preview), redox_choose_preview, n_sets_preview, n_sets_preview))
                 for n, indices in enumerate(redox_sets_preview, start=1):
                     print("  _r%-3d <- " % n + " ".join("#%d%s" % (i + 1, symbols_all[i]) for i in indices))
             else:
-                print("\n[redox 제거 원자] 모든 생성 구조에서 아래 원자가 제거되어 _r 트윈에 저장됩니다:")
+                print("\n[redox removed atoms] These atoms are removed in every generated structure and saved to the _r twin:")
                 for i in redox_sets_preview[0]:
                     print("  #%-4d %-2s  frac=(%.4f, %.4f, %.4f)"
                           % (i + 1, symbols_all[i], frac_all[i][0], frac_all[i][1], frac_all[i][2]))
@@ -4778,7 +4778,7 @@ def run_wizard(initial=None):
         output_format = out_fmt
         if ccpy_vasp:
             if out_fmt not in ("", "cif"):
-                print("* vasp=y : 구조는 cif로 생성 후 VASP 입력 폴더로 변환됩니다 (fmt=%s 무시)." % out_fmt)
+                print("* vasp=y : structures are generated as cif, then converted to VASP input folders (fmt=%s ignored)." % out_fmt)
             output_format = "cif"
         elif out_fmt in ("folder", "poscar_folder"):
             vasp_folder = True
@@ -4786,7 +4786,7 @@ def run_wizard(initial=None):
         elif out_fmt in ("cif", "vasp", "poscar"):
             output_format = "vasp" if out_fmt == "poscar" else out_fmt
         else:
-            print("[검증 실패] fmt는 cif/vasp/folder 중 하나여야 합니다: %r" % s["fmt"])
+            print("[Validation failed] fmt must be one of cif/vasp/folder: %r" % s["fmt"])
             return False
 
         output_dir = s["output"].strip()
@@ -4797,21 +4797,21 @@ def run_wizard(initial=None):
                 input_file, mode, composition, layer_axis=s["axis"], view_axis=s["view"]
             )
             try:
-                answer = input("\n* folder name ? (엔터 = %s)\n: " % suggested).strip()
+                answer = input("\n* folder name ? (enter = %s)\n: " % suggested).strip()
             except EOFError:
                 answer = ""
             output_dir = answer or suggested
         output_abs = os.path.abspath(os.path.realpath(output_dir))
         input_abs = os.path.abspath(os.path.realpath(input_file))
         if output_abs == input_abs or os.path.isfile(output_abs):
-            print("[검증 실패] 출력 디렉토리는 파일이 될 수 없습니다: %s" % output_dir)
+            print("[Validation failed] Output directory cannot be a file: %s" % output_dir)
             return False
         if _is_same_or_inside(input_abs, output_abs):
-            print("[검증 실패] 출력 디렉토리 안에 입력 구조 파일이 포함됩니다. 다른 폴더를 지정해 주세요.")
+            print("[Validation failed] The input structure file lies inside the output directory. Specify another folder.")
             return False
         overwrite = _bool("overwrite")
         if os.path.isdir(output_dir) and os.listdir(output_dir) and not overwrite:
-            print("[검증 실패] 출력 폴더가 비어 있지 않습니다: %s  (overwrite=y 또는 output= 변경)" % output_dir)
+            print("[Validation failed] Output folder is not empty: %s  (overwrite=y or change output=)" % output_dir)
             return False
 
         try:
@@ -4829,11 +4829,11 @@ def run_wizard(initial=None):
             bucket = int(s["bucket"])
             isif = int(s["isif"]) if s["isif"].strip() else False
         except ValueError as exc:
-            print("[검증 실패] 숫자 값을 확인해 주세요: %s" % exc)
+            print("[Validation failed] Please check the numeric values: %s" % exc)
             return False
 
         if s["axis"].strip() not in ("x", "y", "z") or s["view"].strip() not in ("x", "y", "z"):
-            print("[검증 실패] axis/view는 x, y, z 중 하나여야 합니다.")
+            print("[Validation failed] axis/view must be one of x, y, z.")
             return False
 
         kp_tokens = [t for t in s["kp"].replace(" ", "").split(",") if t]
@@ -4845,7 +4845,7 @@ def run_wizard(initial=None):
         reuse_inputs = s["reuse"].strip().lower() not in ("n", "no", "false")
 
         # ----------------------------- summary -----------------------------
-        print("\n[실행 설정 요약]")
+        print("\n[Run settings summary]")
         print("  input=%s  mode=%s  replace=%s" % (input_file, mode, replace_elements))
         print("  composition%s = %s" % (" (keep)" if keep_composition else "", composition))
         fmt_display = "folder+CCpy VASP inputs" if ccpy_vasp else ("folder" if vasp_folder else output_format)
@@ -4922,7 +4922,7 @@ def run_wizard(initial=None):
                 twin_dirs.extend(result.get("redox_dirs") or [])
             for twin_dir in twin_dirs:
                 if os.path.isdir(twin_dir) and prev_incar:
-                    print("\n[CCpy VASP] 쌍둥이 폴더에도 같은 설정으로 VASP 입력을 생성합니다: %s" % twin_dir)
+                    print("\n[CCpy VASP] Generating VASP inputs in the twin folder with the same settings: %s" % twin_dir)
                     generate_ccpy_vasp_inputs(
                         twin_dir,
                         preset=preset,
@@ -4946,14 +4946,14 @@ def run_wizard(initial=None):
         # Keep taking edits until the user says "n", the same habit as
         # CCpySIESTAInputGen / CCpyVASPInputGen's option menus.
         print('\n* Anything want to modify or add? (ex: mode=domain,n=100, comp=Fe4,Co4,Ni4,Cu4)')
-        print('  else, enter "n" to finish     (q = 취소)')
+        print('  else, enter "n" to finish     (q = cancel)')
         try:
             ans = input(": ").strip()
         except EOFError:
-            print("\n취소했습니다.")
+            print("\nCancelled.")
             return
         if ans.lower() in ("q", "quit", "exit"):
-            print("취소했습니다.")
+            print("Cancelled.")
             return
         if ans.lower() in ("n", "no"):
             if _validate_and_run():
@@ -4965,13 +4965,13 @@ def run_wizard(initial=None):
         pairs = re.split(r",(?=\s*[A-Za-z_]+\s*=)", ans)
         for pair in pairs:
             if "=" not in pair:
-                print("[입력 오류] `key=value` 형식이 아닙니다: %r" % pair)
+                print("[Input error] Not in `key=value` form: %r" % pair)
                 continue
             key, value = pair.split("=", 1)
             key = key.strip().lower()
             value = value.strip()
             if key not in s:
-                print("[입력 오류] 알 수 없는 key: %r  (화면 하단 고급 키 목록 참고)" % key)
+                print("[Input error] Unknown key: %r  (see the advanced key list at the bottom of the sheet)" % key)
                 continue
             if key == "input":
                 # `input=?` reopens the file list; a number or filename also works.
@@ -4983,13 +4983,13 @@ def run_wizard(initial=None):
                 elif value.isdigit():
                     n = int(value)
                     if not 1 <= n <= len(candidates):
-                        print("[입력 오류] 구조 파일 번호는 1..%d 범위입니다: %s"
+                        print("[Input error] Structure file number must be in 1..%d: %s"
                               % (len(candidates), value))
                         continue
                     value = candidates[n - 1]
                 elif not os.path.isfile(value):
-                    print("[입력 오류] 그런 파일이 없습니다: %r "
-                          "(목록의 번호나 정확한 파일명을 입력하세요)" % value)
+                    print("[Input error] No such file: %r "
+                          "(enter a number from the list or the exact file name)" % value)
                     continue
                 s["input"] = value
                 # A different structure means different sensible defaults.
