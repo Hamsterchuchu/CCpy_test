@@ -10,9 +10,9 @@ warnings.filterwarnings("ignore")
 import os, sys
 import time
 
-# X 가 없는 계산 서버에서도 그림이 파일로 남게 Agg 백엔드로 고정한다.
-# pyplot 을 처음 import 하는 쪽(VASPio)보다 먼저 실행돼야 하므로
-# 아래 CCpy import 들보다 위에 있어야 한다.
+# Pin the Agg backend so figures are saved to file even on compute servers without X.
+# It must run before whoever imports pyplot first (VASPio), so it has to stay
+# above the CCpy imports below.
 import matplotlib
 matplotlib.use("Agg")
 
@@ -113,11 +113,11 @@ elif sys.argv[1] == "1":
     inputs = selectVASPOutputs("./", sub=sub, additional_dir=additional_dir)
     pwd = os.getcwd()
     for each_input in inputs:
-        # 경로 전체를 '_' 로 이어붙여 이름을 만든다.
+        # Build the name by joining the whole path with '_'.
         #   ./batch1/LiCoO2      -> batch1_LiCoO2
         #   ./LiMnO2/Band-DOS    -> LiMnO2_Band-DOS
-        # 마지막 디렉토리 이름만 쓰면 -sub 로 하위까지 훑을 때
-        # batch1/LiCoO2 와 batch2/LiCoO2 가 같은 파일명이 되어 덮어써진다.
+        # If only the last directory name is used, when -sub walks subdirectories
+        # batch1/LiCoO2 and batch2/LiCoO2 get the same filename and overwrite each other.
         dirname = each_input.replace('./', '').replace('/', "_")
         os.chdir(each_input)
         VO = VASPOutput()
@@ -133,7 +133,7 @@ elif sys.argv[1] == "1":
 
 elif sys.argv[1] == "2":
     # -- Check show plot
-    #    show_plot=False (서브옵션 n) 이면 그림 파일을 만들지 않는다.
+    #    If show_plot=False (sub-option n), no figure file is created.
     show_plot = True
     sort = False
     try:

@@ -31,8 +31,8 @@ version = sys.version
 if version[0] == '3':
     raw_input = input
 
-# -- ENCUT 자동 지정 관련 설정
-#    ENCUT_SCALE : POTCAR 에서 읽은 ENMAX 에 곱하는 배율.
+# -- ENCUT auto setting options
+#    ENCUT_SCALE : scale factor multiplied to the ENMAX read from POTCAR.
 #                  ENCUT = max(ENMAX of POTCARs) x ENCUT_SCALE.
 ENCUT_SCALE = 1.3
 
@@ -93,8 +93,8 @@ class VASPInput():
         # ------------ Grimme's parameters ------------- #
         vdw_C6, vdw_R0 = vasp_grimme_parameters()
         # ------------ check preset config ------------- #
-        # -- 설정 폴더 경로는 CCpy/Tools/CCpyConfig.py 에서 한 곳으로 관리한다
-        #    (기본 ~/.CCpy_test, $CCpy_HOME 으로 변경 가능).
+        # -- the config folder path is managed in one place, CCpy/Tools/CCpyConfig.py
+        #    (default ~/.CCpy_test, changeable with $CCpy_HOME).
         home = os.path.expanduser('~')
         vasp_config_dir = str(ccpy_config.vasp_config_dir()) + "/"
         MODULE_DIR = str(Path(__file__).resolve().parent)
@@ -193,19 +193,19 @@ class VASPInput():
     # ------------------------------------------------------------------------------#
     def set_encut(self, incar_dict, potcar, pot_elt):
         """
-        이번 계산에 쓰이는 POTCAR 들의 ENMAX 중 가장 큰 값에 ENCUT_SCALE (1.3) 을 곱해
-        INCAR 의 ENCUT 으로 지정한다. ENMAX 는 POTCAR 파일에서 직접 읽으므로
-        functional (PBE_54 / PBE_52 / LDA ...) 에 관계없이 그 POTCAR 의 실제 값이 쓰인다.
+        Multiply the largest ENMAX of the POTCARs used in this calculation by ENCUT_SCALE (1.3)
+        and set it as ENCUT of INCAR. ENMAX is read directly from the POTCAR file, so
+        the real value of that POTCAR is used regardless of functional (PBE_54 / PBE_52 / LDA ...).
 
-        여기서 정한 값은 yaml INCAR 섹션의 ENCUT 값을 덮어쓴다 (주석 처리된
-        '# ENCUT' 이었다면 주석을 풀고 값을 넣는다). 자동값이 마음에 들지 않으면
-        이어지는 INCAR 확인 단계에서 ENCUT=xxx 로 다시 바꿀 수 있다.
-        (-encut= 옵션을 준 경우에는 이 함수가 호출되지 않는다.)
+        The value decided here overrides the ENCUT value of the yaml INCAR section (if it was a
+        commented out '# ENCUT', the comment is removed and the value is put in). If the automatic
+        value is not what you want, you can change it again with ENCUT=xxx in the INCAR check step.
+        (this function is not called when the -encut= option is given.)
 
-        :param incar_dict: 수정할 INCAR dict
-        :param potcar: pymatgen Potcar object (pot_elt 와 순서가 같아야 함)
-        :param pot_elt: POTCAR 이름 리스트 (ex: ['Li_sv', 'Fe_sv', 'O'])
-        :return: ENCUT 이 반영된 incar_dict
+        :param incar_dict: INCAR dict to modify
+        :param potcar: pymatgen Potcar object (must be in the same order as pot_elt)
+        :param pot_elt: list of POTCAR names (ex: ['Li_sv', 'Fe_sv', 'O'])
+        :return: incar_dict with ENCUT applied
         """
         encut_of_pot = OrderedDict()
         detail = []
@@ -682,32 +682,32 @@ class VASPInput():
         key_val = []
         for l in lines:
             l = l.strip()
-            # 완전히 빈 줄은 건너뛰기
+            # skip completely empty lines
             if not l:
                 continue
 
-            # "#1 ..." 처럼 번호 달린 주석 줄은 그대로 유지
+            # keep numbered comment lines like "#1 ..." as they are
             if l.startswith("#") and len(l) > 1 and l[1].isdigit():
                 key_val.append((l, ""))
                 continue
 
-            # '=' 가 없는 줄은 파싱 대상에서 제외 (순수 주석/기타 라인)
+            # lines without '=' are excluded from parsing (pure comment / other lines)
             if "=" not in l:
                 continue
 
-            # 좌변/우변으로 나누기 (최대 1번만 split)
+            # split into left side / right side (split at most once)
             tmp = l.split("=", 1)
             left = tmp[0]
             right = tmp[1]
 
-            # 키 처리
+            # key handling
             if "#" in left:
                 key = left.replace(" ", "").replace("#", "")
                 key = "# " + key
             else:
                 key = left.replace(" ", "")
 
-            # 값 처리: 앞 공백 잘라주기 (기존 tmp[1][1:] 역할)
+            # value handling: strip the leading space (the old role of tmp[1][1:])
             val = right.lstrip()
 
             key_val.append((key, val))
@@ -989,10 +989,10 @@ class VASPInput():
 
 
 
-# -- 에너지 / 원자수 파서 (get_energy_list 에서 사용)
+# -- energy / number of atoms parsers (used in get_energy_list)
 def energy_from_outcar(path="./"):
     """
-    OUTCAR (또는 OUTCAR.gz) 에서 마지막 'free  energy   TOTEN' 값을 리턴. 못 찾으면 None.
+    Return the last 'free  energy   TOTEN' value from OUTCAR (or OUTCAR.gz). None if not found.
     """
     plain = os.path.join(path, "OUTCAR")
     gz = os.path.join(path, "OUTCAR.gz")
@@ -1018,11 +1018,11 @@ def energy_from_outcar(path="./"):
 
 def energy_from_oszicar(path="./"):
     """
-    OSZICAR 에서 마지막 E0 값을 리턴. 못 찾으면 None.
+    Return the last E0 value from OSZICAR. None if not found.
 
-    주의: E0 는 sigma->0 외삽값이고 OUTCAR 의 TOTEN 은 smearing 자유에너지 F 다.
-    ISMEAR/SIGMA 에 따라 -TS 항만큼 다르므로 두 값을 섞어 쓰지 않는다.
-    OUTCAR 이 없을 때의 폴백으로만 쓴다.
+    NOTE: E0 is the sigma->0 extrapolated value and TOTEN of OUTCAR is the smearing free energy F.
+    They differ by the -TS term depending on ISMEAR/SIGMA, so the two values are not mixed.
+    Used only as a fallback when OUTCAR is missing.
     """
     fname = os.path.join(path, "OSZICAR")
     if not os.path.exists(fname):
@@ -1044,10 +1044,10 @@ def energy_from_oszicar(path="./"):
 
 def natoms_from_poscar(path="./"):
     """
-    POSCAR 에서 원자 수를 리턴. 못 읽으면 None.
-    6번째 줄 이후의 '숫자만 있는 줄' 을 원소별 개수 줄로 보고 합한다.
-    (pymatgen 으로 구조를 통째로 읽지 않으므로 디렉토리가 많아도 빠르고,
-     POSCAR 가 깨져 있어도 전체 실행이 죽지 않는다)
+    Return the number of atoms from POSCAR. None if it cannot be read.
+    Lines after the 6th that hold only numbers are taken as per-element count lines and summed.
+    (the structure is not read whole with pymatgen, so it is fast even with many directories,
+     and a broken POSCAR does not kill the whole run)
     """
     fname = os.path.join(path, "POSCAR")
     if not os.path.exists(fname):
@@ -1137,20 +1137,20 @@ class VASPOutput():
 
     def get_energy_list(self, show_plot=True, dirs=None, sort=False, figname="energy_list.png"):
         """
-        VASP job 디렉토리들의 최종 에너지 목록을 만든다.
+        Build the list of final energies of VASP job directories.
 
-        - 화면에 표 출력 (Directory / Total energy / Energy/atom / Converged / Job Status)
-        - 03_<폴더>_FinalEnergies.csv / .txt 저장
-        - show_plot=True 면 figname 으로 그림 저장
+        - print a table on screen (Directory / Total energy / Energy/atom / Converged / Job Status)
+        - save 03_<folder>_FinalEnergies.csv / .txt
+        - if show_plot=True, save the figure as figname
 
-        에너지 기준은 OUTCAR 의 'free  energy   TOTEN' 이고, OUTCAR 이 없을 때만
-        OSZICAR 의 마지막 E0 를 폴백으로 쓴다 (두 값은 -TS 항만큼 다르다).
+        The energy reference is 'free  energy   TOTEN' of OUTCAR, and only when OUTCAR is missing
+        the last E0 of OSZICAR is used as fallback (the two values differ by the -TS term).
 
-        그림은 예전처럼 plt.show() 로 창을 띄우지 않고 파일로 저장한다.
-        X 가 없는 계산 서버에서는 show() 가 아무것도 남기지 않았다.
+        The figure is saved to a file instead of opening a window with plt.show() as before.
+        On a compute server without X, show() left nothing behind.
         """
-        # -- 에너지를 읽을 근거가 있는 디렉토리만 대상으로 한다.
-        #    빠진 디렉토리는 조용히 버리지 않고 아래에서 이름을 찍는다.
+        # -- only directories that have a basis for reading an energy are targeted.
+        #    missing directories are not dropped silently; their names are printed below.
         target_dirs, skipped = [], []
         for d in dirs:
             files = os.listdir(d)
@@ -1188,7 +1188,7 @@ class VASPOutput():
             else:
                 e_per_atom = float(e) / float(natoms)
 
-            # -- 수렴 여부 / 잡 상태는 해당 디렉토리 안에서 판정해야 한다.
+            # -- convergence / job status must be judged inside that directory.
             os.chdir(d)
             try:
                 stat, done, cvgd = self.vasp_status()[:3]
@@ -1562,29 +1562,29 @@ class VASPOutput():
             os.chdir(pwd)
         print("\nDone.")
 
-# -- load_yaml() 결과 캐시. 키는 (절대경로, mtime_ns, 파일크기) 이므로 파일이
-#    바뀌면 자동으로 무효화된다. 캐시는 프로세스 안에서만 산다.
+# -- cache of load_yaml() results. The key is (abspath, mtime_ns, file size), so it is
+#    invalidated automatically when the file changes. The cache lives only in the process.
 _YAML_CACHE = {}
 
 
 def load_yaml(yaml_file, key=None):
-    """설정 yaml 에서 섹션 하나를 OrderedDict 로 읽는다 (파싱 결과는 캐시).
+    """Read one section from a config yaml as an OrderedDict (the parse result is cached).
 
-    VASPInput.__init__ 은 이 함수를 구조 하나당 11~17번 부른다 (INCAR, KPOINTS,
-    MAGMOM, LDAU, POTCAR, KEEP_FILES, vasp_incar_desc ...). 캐시가 없으면 그때마다
-    default.yaml 과 vasp_incar_desc.yaml 전체를 순수 파이썬 yaml 파서로 다시
-    파싱하게 되고, 이것이 다중 구조 입력 생성 시간의 대부분을 차지했다
-    (실측: 구조 1개당 106ms 중 약 100ms. 500개면 53초). 파일은 실행 중에
-    바뀌지 않으므로 한 번만 파싱하고 결과를 재사용한다 (16.6배).
+    VASPInput.__init__ calls this function 11~17 times per structure (INCAR, KPOINTS,
+    MAGMOM, LDAU, POTCAR, KEEP_FILES, vasp_incar_desc ...). Without a cache, all of
+    default.yaml and vasp_incar_desc.yaml is re-parsed with the pure python yaml parser
+    every time, and this took up most of the multi-structure input generation time
+    (measured: about 100ms out of 106ms per structure. 53s for 500). The files do not
+    change during a run, so they are parsed once and the result is reused (16.6x).
 
-    호출자가 돌려받은 dict 를 그 자리에서 수정하므로(예: incar_dict['NSW'] = 0)
-    캐시본 자체가 오염되지 않도록 **항상 깊은 사본**을 돌려준다.
+    Callers modify the returned dict they get back in place (ex: incar_dict['NSW'] = 0),
+    so it **always returns a deep copy** to keep the cached copy from being polluted.
     """
     try:
         stat = os.stat(yaml_file)
         signature = (os.path.abspath(yaml_file), stat.st_mtime_ns, stat.st_size)
     except OSError:
-        signature = None            # 캐시 없이 그때그때 읽는다
+        signature = None            # read it fresh each time, without a cache
 
     data = _YAML_CACHE.get(signature) if signature is not None else None
     if data is None:
@@ -1599,8 +1599,8 @@ def load_yaml(yaml_file, key=None):
 
 def num_to_str(value):
     """
-    yaml 에서 읽은 실수를 INCAR 에 쓰기 좋은 문자열로 바꾼다.
-    표에 적힌 값을 그대로 유지하되 의미 없는 뒤쪽 0 만 정리한다.
+    Convert a float read from yaml into a string good for writing into INCAR.
+    Keep the value written in the table as-is, only trimming meaningless trailing zeros.
       507.725 -> "507.725",  520.000 -> "520",  1103.214 -> "1103.214"
     """
     string = ("%f" % float(value)).rstrip("0").rstrip(".")
@@ -1624,8 +1624,8 @@ def incar_dict_to_str(incar_dict, incar_dict_desc=None, highlights=[], warnings=
             if key in incar_dict_desc.keys():
                 description = str(incar_dict_desc[key])
             elif "# " in key:
-                # 주석 처리된 키(# XXX)의 설명은 desc yaml 에서 XXX 로 찾는데,
-                # 없을 때 KeyError 로 죽지 않도록 빈 문자열로 폴백한다.
+                # the description of a commented out key (# XXX) is looked up as XXX in the desc yaml,
+                # falling back to an empty string so that a missing entry does not die with KeyError.
                 description = str(incar_dict_desc.get(key.replace("# ", ""), ""))
             else:
                 description = ""
