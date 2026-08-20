@@ -607,7 +607,7 @@ def kz_metal_1d_from_c(c_ang: float, dk: float = 0.02, kz_min: int = 7) -> int:
       kz = ceil((2*pi/c) / dk)
     then enforce:
       kz >= kz_min
-      kz is odd (so Γ is included for Γ-centered mesh when shift=0.0)
+      kz is odd (so Gamma is included for Gamma-centered mesh when shift=0.0)
 
     Parameters
     ----------

@@ -887,7 +887,7 @@ def make_mode(top: Path, label: str, base_fdf: Path, mode: str, args, parent: Op
                 n_ef = estimate_fermi_band_index(nelec)
                 bmin = max(1, n_ef - args.ef_window)
                 bmax = min(nbands_val, n_ef + args.ef_window)
-                print(f"--ef-window = {args.ef_window}  (≈ {2*args.ef_window+1} bands around EF)")
+                print(f"--ef-window = {args.ef_window}  ({2*args.ef_window+1} bands around EF)")
                 print(f"EF band index (heuristic) = {n_ef}")
                 print(f"Wfs.band.min = {bmin}")
                 print(f"Wfs.band.max = {bmax}")
@@ -1901,7 +1901,7 @@ def plot_bands(
 
     if show_gap:
         if gap_info.get('is_metal', False):
-            txt = f"Metallic (Eg ≲ 0)"
+            txt = f"Metallic (Eg <= 0)"
         else:
             g = gap_info['gap']
             kind = "direct" if gap_info.get('is_direct', False) else "indirect"
@@ -1919,7 +1919,7 @@ def plot_bands(
 
     print(f"Detected bands.dat format: {fmt}")
     if gap_info.get("is_metal", False):
-        print("Bandgap: metallic (Eg ≲ 0)")
+        print("Bandgap: metallic (Eg <= 0)")
     else:
         kind = "direct" if gap_info.get("is_direct", False) else "indirect"
         print(f"Bandgap: Eg = {gap_info['gap']:.6f} eV ({kind})")
@@ -2159,7 +2159,7 @@ def plot_one(
         if show_gap:
             gap_info = compute_bandgap(energies, kgrid=kgrid, tol=gap_tol)
             if gap_info.get("is_metal", False):
-                txt = "Metallic (Eg ≲ 0)"
+                txt = "Metallic (Eg <= 0)"
             else:
                 kind = "direct" if gap_info.get("is_direct", False) else "indirect"
                 txt = f"Eg = {gap_info['gap']:.6f} eV ({kind})"
