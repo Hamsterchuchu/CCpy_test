@@ -214,8 +214,13 @@ def main(argv):
         rel = os.path.relpath(path, root).replace(os.sep, "/")
         if rel in DEFAULT_EXCLUDE:
             continue
-        if os.path.islink(path):
-            continue               # CCpy/bin/*.py are symlinks to the modules
+        # -- CCpy/bin/*.py are symlinks to the modules. On a clone with
+        #    core.symlinks=false (Windows) they are plain files holding the
+        #    target path, so islink() misses them: every finding gets
+        #    reported twice, and a bin link pointing at an excluded module
+        #    would slip past DEFAULT_EXCLUDE. Skip by path as well.
+        if os.path.islink(path) or rel.startswith("CCpy/bin/"):
+            continue
         try:
             src = open(path, encoding="utf-8").read()
         except (UnicodeDecodeError, OSError):
