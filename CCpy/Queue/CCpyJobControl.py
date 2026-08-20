@@ -38,8 +38,9 @@ queue_info = yaml.load(open(CCpy_SCHEDULER_CONFIG, 'r'), Loader=yaml.FullLoader)
 class JobSubmit:
     def __init__(self, inputfile, queue, n_of_cpu, node=None, init_only=False):
         # -- 개인 설정 폴더는 CCpy/Tools/CCpyConfig.py 에서 한 곳으로 관리한다
-        #    (기본 ~/.CCpy_test). 파일이 없으면 만들고, 기존 ~/.CCpy/queue_config.yaml
-        #    이 있으면 그것을 복사해 승계한다 (서버·개인마다 다른 값을 잃지 않도록).
+        #    (기본 ~/.CCpy_test). 파일이 없으면 패키지 템플릿에서 만들고, 그때
+        #    python_path 에 지금 CCpy 를 실행 중인 python 을 기록한다.
+        #    기존 ~/.CCpy 에서 승계하지는 않는다 (서버·개인별 경로는 직접 지정).
         user_queue_config = str(ccpy_config.ensure_queue_config())
 
         if init_only:
@@ -63,9 +64,7 @@ class JobSubmit:
             
         self.qsub = queue_config['qsub']
 
-        # -- python_path: queue_config.yaml 값이 실제로 존재하는 경로일 때만 쓰고,
-        #    없거나 비어 있으면 CCpy 를 실행 중인 python 을 쓴다 (CCpyConfig 참고).
-        self.python_path = ccpy_config.resolve_python_path(queue_config)
+        self.python_path = queue_config['python_path']
         self.mpi_run = queue_config['mpi_run']
 
         self.atk_mpi_run = queue_config['atk_mpi_run']

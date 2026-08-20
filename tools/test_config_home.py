@@ -11,8 +11,8 @@ repo 루트에서 실행한다:
 
 확인 항목
   1. CCpyConfig 경로 함수 (기본값, $CCpy_HOME, 하위 경로)
-  2. queue_config.yaml 생성 규칙 (템플릿 / 기존 ~/.CCpy 승계 / 이미 있으면 유지)
-  3. 프로덕션 `~/.CCpy` 를 수정하지 않는지 (내용·mtime·파일 목록)
+  2. queue_config.yaml 생성 규칙 (템플릿에서 생성 + python_path 기록 / 이미 있으면 유지)
+  3. 기존 `~/.CCpy` 를 승계하지도, 수정하지도 않는지
   4. AIMD 루프 생성 스크립트에 절대경로가 박히는지
   5. JobSubmit(init_only=True) 실제 경로
   6. VASPio 가 `~/.CCpy_test/vasp/` 를 만들고 그 사본을 읽는지
@@ -70,7 +70,6 @@ from CCpy.Tools import CCpyConfig as cfg
 
 home = fresh_home()
 check("기본 설정 폴더 = ~/.CCpy_test", cfg.config_home() == home / ".CCpy_test", cfg.config_home())
-check("승계 원본 = ~/.CCpy", cfg.legacy_config_home() == home / ".CCpy")
 check("vasp 폴더", cfg.vasp_config_dir() == home / ".CCpy_test" / "vasp")
 check("queue_config 경로", cfg.queue_config_path() == home / ".CCpy_test" / "queue_config.yaml")
 check("config_path()", cfg.config_path("g09_input.json") == home / ".CCpy_test" / "g09_input.json")
@@ -86,31 +85,45 @@ os.environ["CCpy_HOME"] = str(home / "env_dir")
 check("$CCpy_HOME 오버라이드 (절대경로)", cfg.config_home() == home / "env_dir")
 os.environ.pop("CCpy_HOME")
 
-# --------------------------------------------------- 2~3. queue_config 생성 규칙
+# ------------------------------------------------- 2~3. queue_config 생성 규칙
 print("\n2. queue_config.yaml 생성 규칙")
 template = cfg.package_queue_config_template()
+template_text = template.read_text(encoding="utf-8")
+PROD_PYTHON = "/home/shared/anaconda3/envs/CCpy/bin/python"
 
-# (a) 승계 원본이 없을 때 -> 패키지 템플릿
+# (a) 없으면 패키지 템플릿에서 만들고, python_path 만 지금 python 으로 기록
 home = fresh_home()
 made = cfg.ensure_queue_config()
-check("(a) 템플릿에서 새로 생성", made.is_file() and made.read_bytes() == template.read_bytes(), made)
+made_text = made.read_text(encoding="utf-8")
+made_cfg = yaml.safe_load(made_text) or {}
+check("(a) 템플릿에서 새로 생성", made.is_file(), made)
+check("(a) python_path 에 지금 실행 중인 python 이 기록된다",
+      made_cfg.get("python_path") == sys.executable, made_cfg.get("python_path"))
+check("(a) python_path 외의 값은 템플릿과 같다",
+      {k: v for k, v in made_cfg.items() if k != "python_path"}
+      == {k: v for k, v in (yaml.safe_load(template_text) or {}).items() if k != "python_path"})
+check("(a) 주석 줄도 그대로 남는다",
+      [l for l in made_text.splitlines() if l.startswith("#")]
+      == [l for l in template_text.splitlines() if l.startswith("#")])
 check("(a) 프로덕션 폴더를 만들지 않는다", not (home / ".CCpy").exists())
 
-# (b) 이미 있으면 손대지 않는다
-made.write_text("qsub: sbatch\n# edited by user\n", encoding="utf-8")
+# (b) 이미 있으면 손대지 않는다 (사용자가 고친 값을 코드가 되돌리지 않는다)
+made.write_text("qsub: sbatch\npython_path: /my/env/bin/python\n# edited by user\n",
+                encoding="utf-8")
 before = made.stat().st_mtime_ns
 again = cfg.ensure_queue_config()
+after_text = made.read_text(encoding="utf-8")
 check("(b) 이미 있으면 덮어쓰지 않는다",
-      again == made and made.read_text(encoding="utf-8").endswith("# edited by user\n")
-      and made.stat().st_mtime_ns == before)
+      again == made and made.stat().st_mtime_ns == before
+      and "python_path: /my/env/bin/python" in after_text
+      and after_text.endswith("# edited by user\n"))
 
-# (c) 기존 ~/.CCpy 가 있으면 승계
+# (c) 기존 ~/.CCpy 가 있어도 승계하지 않고, 원본도 건드리지 않는다
 home = fresh_home()
 legacy_dir = home / ".CCpy"
 legacy_dir.mkdir()
 legacy = legacy_dir / "queue_config.yaml"
-PROD_PYTHON = "/home/shared/anaconda3/envs/CCpy/bin/python"
-legacy_text = (template.read_text(encoding="utf-8")
+legacy_text = (template_text
                + "\npython_path: %s\n" % PROD_PYTHON
                + "lammps_path: /home/pomepaw/lammps/build/lmp\n"
                + "lammps_mpi_run: srun --mpi=pmi2\n")
@@ -121,20 +134,11 @@ before_legacy = snapshot(legacy_dir)
 
 made = cfg.ensure_queue_config()
 made_text = made.read_text(encoding="utf-8")
-check("(c) 개인 설정(lammps_path)이 살아있다",
-      "lammps_path: /home/pomepaw/lammps/build/lmp" in made_text)
-check("(c) lammps_mpi_run 도 살아있다", "lammps_mpi_run: srun --mpi=pmi2" in made_text)
-check("(c) python_path 는 승계되지 않는다",
-      "python_path" not in (yaml.safe_load(made_text) or {}), yaml.safe_load(made_text))
-check("(c) 제외된 python_path 는 주석으로 남는다",
-      "# (승계 시 제외) python_path: %s" % PROD_PYTHON in made_text)
-check("(c) python_path 외의 줄은 그대로다",
-      [l for l in made_text.splitlines() if not l.startswith("#")]
-      == [l for l in legacy_text.splitlines()
-          if not l.startswith("#") and not l.startswith("python_path")])
-check("(c) 승계 원본을 수정하지 않는다", snapshot(legacy_dir) == before_legacy)
-check("(c) 승계 후에도 ~/.CCpy 에 새 파일이 생기지 않는다",
-      sorted(p.name for p in legacy_dir.iterdir()) == ["queue_config.yaml", "vasp"])
+made_cfg = yaml.safe_load(made_text) or {}
+check("(c) 기존 ~/.CCpy 를 승계하지 않는다", "lammps_mpi_run" not in made_cfg, made_cfg)
+check("(c) 프로덕션 python_path 가 따라오지 않는다",
+      made_cfg.get("python_path") == sys.executable, made_cfg.get("python_path"))
+check("(c) 기존 ~/.CCpy 를 수정하지 않는다", snapshot(legacy_dir) == before_legacy)
 
 # ------------------------------------------- 4. AIMD 루프 생성 스크립트 경로 주입
 print("\n4. AIMD 루프 생성 스크립트 (NVTLoopQueScript)")
@@ -176,12 +180,11 @@ code = (
 proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=dict(os.environ))
 check("JobSubmit 이 ~/.CCpy_test/queue_config.yaml 을 만든다",
       (home / ".CCpy_test" / "queue_config.yaml").is_file(), proc.stderr[-400:])
-js_text = (home / ".CCpy_test" / "queue_config.yaml").read_text(encoding="utf-8")
-check("JobSubmit 이 승계한다 (lammps_path 보존)",
-      "lammps_path: /home/pomepaw/lammps/build/lmp" in js_text)
-check("JobSubmit 승계 시 python_path 제외",
-      "python_path" not in (yaml.safe_load(js_text) or {}))
-check("승계 안내가 출력된다", "승계" in proc.stdout, proc.stdout[-300:])
+js_cfg = yaml.safe_load((home / ".CCpy_test" / "queue_config.yaml").read_text(encoding="utf-8")) or {}
+check("JobSubmit 이 기록한 python_path = 그 프로세스의 python",
+      js_cfg.get("python_path") == sys.executable, js_cfg.get("python_path"))
+check("JobSubmit 도 기존 ~/.CCpy 를 승계하지 않는다", "lammps_mpi_run" not in js_cfg, js_cfg)
+check("생성 안내가 출력된다", "새로 만들었습니다" in proc.stdout, proc.stdout[-300:])
 
 # ------------------------------------------------------------------ 6. VASPio
 print("\n6. VASPio preset 사본")
@@ -253,38 +256,25 @@ for py in sorted((REPO / "CCpy").rglob("*.py")):
             leftovers.append("%s:%d: %s" % (rel, i, stripped[:80]))
 check("코드에 하드코딩된 `.CCpy` 경로가 없다", not leftovers, "\n      ".join(leftovers))
 
-# ---------------------------------------------------- 8. python_path 결정 규칙
-print("\n8. python_path 결정 규칙 (resolve_python_path)")
-here = sys.executable
-check("미지정이면 현재 인터프리터", cfg.resolve_python_path({}, verbose=False) == here)
-check("None 이어도 현재 인터프리터", cfg.resolve_python_path(None, verbose=False) == here)
-check("빈 문자열이면 현재 인터프리터",
-      cfg.resolve_python_path({"python_path": "   "}, verbose=False) == here)
-check("존재하지 않는 절대경로면 현재 인터프리터 (프로덕션 3.8 경로 시나리오)",
-      cfg.resolve_python_path({"python_path": PROD_PYTHON}, verbose=False) == here)
-check("존재하는 절대경로는 그대로 존중",
-      cfg.resolve_python_path({"python_path": here}, verbose=False) == here)
-which_py3 = shutil.which("python3")
-check("명령 이름은 $PATH 에서 찾는다",
-      cfg.resolve_python_path({"python_path": "python3"}, verbose=False) == which_py3, which_py3)
-check("패키지 템플릿에 python_path 키가 없다",
-      "python_path" not in (yaml.safe_load(template.read_text(encoding="utf-8")) or {}))
-cfg._PYTHON_PATH_MISMATCH_SHOWN = False
-import io as _io
-import contextlib as _ctx
-_buf = _io.StringIO()
-with _ctx.redirect_stdout(_buf):
-    got = cfg.resolve_python_path({"python_path": which_py3}, verbose=True)
-mismatch_msg = _buf.getvalue()
-check("현재 인터프리터와 다른 python_path 는 존중하되 경고한다",
-      got == which_py3 and ("주의" in mismatch_msg) == (os.path.realpath(which_py3) != os.path.realpath(here)),
-      mismatch_msg)
-
-notice = cfg.strip_python_path("qsub: qsub\npython_path: /a/b/python\nmpi_run: srun\n")
-check("strip_python_path 가 해당 줄만 주석 처리",
-      notice[0] == "qsub: qsub\n# (승계 시 제외) python_path: /a/b/python\n"
-                   "# python_path 를 비워두면 CCpy 를 실행 중인 python 이 그대로 쓰입니다.\n"
-                   "mpi_run: srun\n" and notice[1] == "python_path: /a/b/python", notice)
+# -------------------------------------------------- 8. python_path 기록 규칙
+print("\n8. python_path 기록 규칙 (set_python_path)")
+text, recorded = cfg.set_python_path("qsub: qsub\npython_path: python\nmpi_run: srun\n",
+                                     "/my/env/bin/python")
+check("기존 python_path 줄의 값만 바꾼다",
+      text == "qsub: qsub\npython_path: /my/env/bin/python\nmpi_run: srun\n"
+      and recorded == "/my/env/bin/python", text)
+text2, _ = cfg.set_python_path("qsub: qsub\nmpi_run: srun\n", "/my/env/bin/python")
+check("키가 없으면 맨 앞에 추가한다",
+      text2 == "python_path: /my/env/bin/python\nqsub: qsub\nmpi_run: srun\n", text2)
+text3, _ = cfg.set_python_path("python_path: /a/b\npython_path: /c/d\n", "/x/y")
+check("첫 python_path 줄만 바꾼다", text3 == "python_path: /x/y\npython_path: /c/d\n", text3)
+check("패키지 템플릿에 python_path 키가 있다 (표시용 기본값)",
+      "python_path" in (yaml.safe_load(template_text) or {}))
+check("코드에 python_path 자동 결정(resolve) 로직이 없다",
+      not hasattr(cfg, "resolve_python_path"))
+jc = (REPO / "CCpy" / "Queue" / "CCpyJobControl.py").read_text(encoding="utf-8")
+check("JobControl 은 queue_config 값을 그대로 읽는다",
+      "self.python_path = queue_config['python_path']" in jc)
 
 # ------------------------------------------------------------------- 결과 요약
 print("\n" + "=" * 60)

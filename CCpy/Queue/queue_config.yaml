@@ -1,7 +1,9 @@
 qsub: qsub
-# python_path: 비워두면 CCpy 를 실행 중인 python 이 그대로 쓰인다 (권장).
-#              다른 python 으로 잡을 돌릴 때만 절대경로를 적는다.
-#              ex) python_path: /home/shared/anaconda3/envs/CCpy/bin/python
+# python_path 는 ~/.CCpy_test/queue_config.yaml 을 처음 만들 때 CCpy 를 실행 중인
+# python 의 절대경로로 자동 기록된다 (아래 값은 템플릿 표시용). 다른 python 으로
+# 잡을 돌리려면 만들어진 파일의 이 줄을 직접 고친다 -- CCpy 는 파일을 만든 뒤에는
+# 다시 건드리지 않는다.
+python_path: python
 mpi_run: srun
 atk_mpi_run: /opt/intel/compilers_and_libraries_2018.1.163/linux/mpi/intel64/bin/mpirun
 vasp_path: /opt/vasp/vasp.6.5.1/bin/vasp_std

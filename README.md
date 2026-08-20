@@ -21,14 +21,17 @@ same user without overwriting each other's `queue_config.yaml` / `vasp/default.y
     └── band_sample.yaml
 </pre>
 
-- The directory is created on first run. `queue_config.yaml` is **inherited from
-  `~/.CCpy/queue_config.yaml`** if that file exists, so per-user paths (lammps /
-  siesta binaries, `lammps_mpi_run`, ...) are not lost.
-- **`python_path` is deliberately NOT inherited** (it is copied over as a comment).
-  Leave the key unset and CCpy submits jobs with **the interpreter that is running
-  CCpy** (`sys.executable`), so a job never silently runs in another environment.
-  Set an absolute path only if you want a different interpreter; if that path does
-  not exist, or differs from the running one, CCpy tells you at submit time.
+- The directory is created on first run, from the templates shipped with the
+  package. Nothing is inherited from `~/.CCpy/` - run any CCpy command once from
+  the environment you intend to use and the files are created there.
+- When `queue_config.yaml` is created, **`python_path` is written as the absolute
+  path of the interpreter that created it** (`sys.executable`). So running a CCpy
+  command inside your conda/venv environment registers that environment's python,
+  and submitted jobs use it.
+- **After the files exist, CCpy never rewrites them.** Per-server and per-user
+  values (`vasp_path`, `lammps_path`, `siesta_path`, `python_path`, ...) are yours
+  to edit; the code only reads them. To regenerate a file from the template,
+  delete it and run a CCpy command again.
 - Override the location with `$CCpy_HOME` if needed:
   `export CCpy_HOME=~/.CCpy_something`
 - The path is defined in one place: `CCpy/Tools/CCpyConfig.py`.
