@@ -3,16 +3,16 @@
 """
 CCpySIESTAAnal.py
 
-CCpyVASPAnal.py 의 CLI 형식(옵션 번호 기반, -sub 등 sub-option, 사용법 출력)과
-siesta_analyze.py 의 분석 로직(에너지/힘 수렴, ARC 생성, TIMES 스캔 등)을 섞은 스크립트.
+Mixes the CLI style of CCpyVASPAnal.py (option-number based, sub-options like -sub, usage output) with
+the analysis logic of siesta_analyze.py (energy/force convergence, ARC generation, TIMES scan, etc.).
 
-- 옵션 1 : 최종 구조만 추출 (마지막 MD_CAR 프레임 -> <dirname>_final.car, 상위 폴더에 모아 저장)
-- 옵션 3 : 현재 디렉토리 하나에 대한 전체 분석 (siesta_analyze.py 의 main() 로직 그대로)
-- 옵션 0, 2 : 여러 SIESTA job 디렉토리를 선택해 배치 처리 (CCpyVASPAnal.py 의 0, 2번 옵션 형식)
-- -time : TIMES 파일 스캔 (siesta_analyze.py 의 --time 로직)
-- -d : 결과물 정리 (입력파일 *.fdf/*.psf/*.vps/*.ion 은 보존)
+- Option 1 : extract only the final structure (last MD_CAR frame -> <dirname>_final.car, collected in the parent folder)
+- Option 3 : full analysis of a single current directory (same as the main() logic of siesta_analyze.py)
+- Options 0, 2 : select several SIESTA job directories and batch process (style of options 0, 2 in CCpyVASPAnal.py)
+- -time : scan TIMES files (the --time logic of siesta_analyze.py)
+- -d : clean up outputs (input files *.fdf/*.psf/*.vps/*.ion are kept)
 
-필요 패키지: numpy, pandas, matplotlib
+Required packages: numpy, pandas, matplotlib
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from typing import Optional, List, Tuple, Dict, Any
 from collections import OrderedDict
 
-# X 없는 서버에서 쓰는 경우에는 Agg 백엔드가 안전 (CCpyVASPAnal.py 형식)
+# On a server without X, the Agg backend is safe (CCpyVASPAnal.py style)
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -44,12 +44,12 @@ if version[0] == '3':
 
 
 # ============================================================
-# 0. SIESTA job 디렉토리 탐색/선택 (CCpyVASPAnal.py 의
-#    selectVASPOutputs / selectInputs 를 대체하는 SIESTA용 헬퍼)
+# 0. Find/select SIESTA job directories (SIESTA helper replacing
+#    selectVASPOutputs / selectInputs of CCpyVASPAnal.py)
 # ============================================================
 
 def find_siesta_dirs(root=".", sub=False):
-    """*.fdf 파일이 있는 디렉토리를 SIESTA job 디렉토리로 간주하고 찾는다."""
+    """Find directories that contain a *.fdf file and treat them as SIESTA job directories."""
     root = Path(root)
     dirs: List[Path] = []
 
@@ -71,9 +71,9 @@ def find_siesta_dirs(root=".", sub=False):
 
 def selectSiestaOutputs(root=".", ask=True, sub=False, dir_list=None):
     """
-    CCpyVASPAnal.py 의 selectVASPOutputs(...) 사용 패턴을 그대로 모사.
-    dir_list 가 주어지면 그대로 사용하고, 아니면 root 이하에서 SIESTA job
-    디렉토리(*.fdf 존재)를 찾아 ask=True 인 경우 사용자에게 확인/선택받는다.
+    Mimics the usage pattern of selectVASPOutputs(...) in CCpyVASPAnal.py.
+    If dir_list is given it is used as is, otherwise SIESTA job directories
+    (*.fdf present) are searched under root and confirmed/selected by the user when ask=True.
     """
     if dir_list is not None:
         return [str(d) for d in dir_list]
@@ -100,7 +100,7 @@ def selectSiestaOutputs(root=".", ask=True, sub=False, dir_list=None):
 
 
 def parse_index_selection(sel: str, n: int) -> List[int]:
-    """'1-3,5' -> [1,2,3,5] (1-based). '0' -> all indices 1..n. (CCpySIESTABandSubmit.py 와 동일한 문법)"""
+    """'1-3,5' -> [1,2,3,5] (1-based). '0' -> all indices 1..n. (same syntax as CCpySIESTABandSubmit.py)"""
     sel = sel.strip()
     if sel == "0":
         return list(range(1, n + 1))
@@ -119,15 +119,15 @@ def parse_index_selection(sel: str, n: int) -> List[int]:
 
 def select_siesta_dirs(dirs: List[Path], ask: bool = True, preselect: Optional[str] = None) -> List[Path]:
     """
-    CCpySIESTABandSubmit.py 의 select_systems(...) 과 동일한 UX:
+    Same UX as select_systems(...) in CCpySIESTABandSubmit.py:
         1 : Ti2CTx_O_NT_2
         2 : Ti2CTx_O_NT_Bandtest
         ...
         0 : All directories
         choose file :
-    콤마/범위(1-3,5) 입력을 지원하고, 잘못 입력하면 다시 물어본다.
-    preselect 가 주어지면(-systems=... sub-option) 프롬프트 없이 바로 선택.
-    ask=False 이면 전부 선택(프롬프트 없음).
+    Supports comma/range (1-3,5) input, and asks again on invalid input.
+    If preselect is given (-systems=... sub-option), selects right away without a prompt.
+    If ask=False, selects all of them (no prompt).
     """
     if not dirs:
         print("No SIESTA job directory (*.fdf) found.")
@@ -156,7 +156,7 @@ def select_siesta_dirs(dirs: List[Path], ask: bool = True, preselect: Optional[s
 
 
 def _get_kv_arg(name, default=None, cast=str):
-    """sys.argv 에서 --name=value 혹은 -name=value 형태의 sub-option 값을 읽는다."""
+    """Read a sub-option value of the form --name=value or -name=value from sys.argv."""
     prefixes = (f"--{name}=", f"-{name}=")
     for arg in sys.argv:
         for prefix in prefixes:
@@ -170,7 +170,7 @@ def _get_kv_arg(name, default=None, cast=str):
 
 
 # ============================================================
-# 1. siesta_analyze.py 의 분석 엔진 (거의 그대로 이식)
+# 1. Analysis engine of siesta_analyze.py (ported almost as is)
 # ============================================================
 
 _TOT_LINE_RE = re.compile(r"^\s*Tot\s+([-+]?\d+(?:\.\d+)?(?:[Ee][-+]?\d+)?)\s+([-+]?\d+(?:\.\d+)?(?:[Ee][-+]?\d+)?)\s+([-+]?\d+(?:\.\d+)?(?:[Ee][-+]?\d+)?)\s*$")
@@ -196,7 +196,7 @@ def _extract_last_float(line: str) -> Optional[float]:
 
 
 def infer_basename_from_fdf() -> str:
-    """현재 디렉토리 (혹은 Restart/RestartN 인 경우 부모/복원 체인)에서 basename 추론."""
+    """Infer the basename from the current directory (or the parent/restart chain for Restart/RestartN)."""
     search_dirs: List[Path] = [Path(".")]
 
     cwd = Path.cwd()
@@ -228,7 +228,7 @@ def _sec_to_hms(sec: float) -> str:
 
 
 def collect_restart_dirs() -> List[Path]:
-    """Normal / Restart / RestartN 레이아웃을 위한 merge 대상 디렉토리 목록."""
+    """List of directories to merge for the Normal / Restart / RestartN layout."""
     cwd = Path.cwd()
     parent = cwd.parent
 
@@ -266,7 +266,7 @@ def collect_restart_dirs() -> List[Path]:
 
 
 def collect_existing_files(dirs: List[Path], filename: str, restart_filename: Optional[str] = None) -> List[Path]:
-    """Normal/Restart 디렉토리들 사이에서 존재하는 파일들을 순서대로 모은다."""
+    """Collect the files that exist across the Normal/Restart directories, in order."""
     files: List[Path] = []
     for d in dirs:
         is_restart_dir = (d.name == 'Restart') or re.fullmatch(r'Restart(\d+)', d.name) is not None
@@ -428,7 +428,7 @@ def parse_fdf(base: str) -> FDFInfo:
 
 
 def get_natoms_from_fdf_file(fdf_path) -> Optional[int]:
-    """옵션 2 (배치 에너지 리스트)에서 쓰는 가벼운 원자 수 추정 (cwd 이동 없이 파일 경로만으로 동작)."""
+    """Light atom count estimate used in option 2 (batch energy list) (works from the file path only, without changing cwd)."""
     fdf_path = Path(fdf_path)
     if not fdf_path.exists():
         return None
@@ -521,7 +521,7 @@ def _is_tot_line(ln: str) -> bool:
 def parse_out_forces(out_path: Path) -> Tuple[List[Tuple[Optional[float], Optional[float], Optional[float]]],
                                               List[Optional[float]],
                                               List[Optional[float]]]:
-    """SIESTA .out 파일에서 Tot(총 힘 벡터)/Max/Res(RMS 힘) 값을 파싱."""
+    """Parse Tot (total force vector)/Max/Res (RMS force) values from a SIESTA .out file."""
     lines = out_path.read_text(errors="ignore").splitlines()
 
     tot_vecs: List[Tuple[Optional[float], Optional[float], Optional[float]]] = []
@@ -737,7 +737,7 @@ def plot_forces(series: ForceSeries, out_png: Path):
 
 
 def plot_force_convergence(fs: ForceSeries, out_png: Path):
-    """Res (RMS force) vs step 그래프."""
+    """Res (RMS force) vs step plot."""
     x = np.array(fs.steps, dtype=float)
     y = np.array([np.nan if v is None else float(v) for v in fs.res_force], dtype=float)
 
@@ -994,10 +994,10 @@ def write_arc_from_files(base: str, mdcar_files: List[Path], mde: MDEData, fdf: 
 
 def extract_final_structure_car(base: str, mdcar_files: List[Path], fdf: FDFInfo, out_car: Path) -> None:
     """
-    ARC(전체 트래젝토리) 대신 MD_CAR의 마지막 프레임만 뽑아서 단일 구조 .car 파일로 저장.
-    write_arc_from_lines() 와 같은 블록 슬라이싱/pos2car.py/FDF 심볼 재배치 로직을 그대로 재사용하되,
-    ARC 특유의 (에너지 라인 + end/end 두 번 반복) 트래젝토리 포맷 없이 pos2car.py 가 만든
-    단일 구조 CAR 내용을 그대로 기록한다.
+    Instead of an ARC (full trajectory), take only the last MD_CAR frame and save it as a single-structure .car file.
+    Reuses the same block slicing/pos2car.py/FDF symbol reordering logic as write_arc_from_lines(), but
+    writes the single-structure CAR content made by pos2car.py as is, without the ARC-specific
+    trajectory format (energy line + end/end repeated twice).
     """
     if not mdcar_files:
         raise RuntimeError("No MD_CAR files found to merge.")
@@ -1046,7 +1046,7 @@ def extract_final_structure_car(base: str, mdcar_files: List[Path], fdf: FDFInfo
 
 
 def run_final_structure(base: Optional[str] = None, out_name: Optional[str] = None) -> Optional[Path]:
-    """옵션 1에서 사용: 현재 디렉토리 SIESTA job의 최종 구조만 {base}_final.car 로 추출."""
+    """Used in option 1: extract only the final structure of the current directory SIESTA job to {base}_final.car."""
     base = base or infer_basename_from_fdf()
 
     restart_dirs = collect_restart_dirs()
@@ -1218,7 +1218,7 @@ def print_times(rows: List[Tuple[str, float]]):
 
 
 # ----------------------------
-# 현재 디렉토리 하나에 대한 전체 분석 (siesta_analyze.py main() 로직)
+# Full analysis of a single current directory (siesta_analyze.py main() logic)
 # ----------------------------
 def run_full_analysis(base: Optional[str] = None, analysis_dir: str = "analysis", xstart: int = 1) -> Dict[str, Any]:
     adir = Path(analysis_dir)
@@ -1295,7 +1295,7 @@ def run_full_analysis(base: Optional[str] = None, analysis_dir: str = "analysis"
 
 
 # ----------------------------
-# 옵션 0 / 2 용 배치 헬퍼
+# Batch helpers for options 0 / 2
 # ----------------------------
 # SIESTA가 치명적으로 죽을 때 남기는 대표적인 종료 문구들.
 # "ERROR STOP from Node" / "Error in Cholesky factorisation in cdiag" 는
@@ -1303,14 +1303,14 @@ def run_full_analysis(base: Optional[str] = None, analysis_dir: str = "analysis"
 # 나오는 조합으로 확인됨 (사용자 제공 로그 기준). "stopping program" 은 SIESTA의
 # die() 서브루틴이 다른 여러 치명적 오류에서도 공통으로 찍는 문구라 넓게 같이 잡아준다.
 _ERROR_PATTERNS = [
-    r"error stop",                        # "ERROR STOP from Node..." 등 - 문구가 정확히
-                                           # 일치하지 않을 수 있어 "from node" 없이도 매칭되게 완화
-    r"error in cholesky factori[sz]ation", # cdiag 대각화 실패 (원자 겹침 등으로 발생)
+    r"error stop",                        # "ERROR STOP from Node..." etc - the wording may not
+                                           # match exactly, so relaxed to match even without "from node"
+    r"error in cholesky factori[sz]ation", # cdiag diagonalization failure (from overlapping atoms, etc.)
     r"stopping program",
     r"siesta error",
     r"segmentation fault",
     r"floating[- ]point exception",
-    r"forrtl",                            # Intel Fortran 런타임 에러 접두사
+    r"forrtl",                            # Intel Fortran runtime error prefix
     r"not enough memory",
 ]
 _ERROR_RE = re.compile("|".join(_ERROR_PATTERNS), re.IGNORECASE)
@@ -1325,23 +1325,23 @@ _WARNING_DEFS = [
     ("Bad DM normalization", re.compile(r"bad dm normali[sz]ation", re.IGNORECASE)),
 ]
 
-# .out 파일이 이 시간(초) 이상 갱신되지 않았는데 End of run 도, 에러 메시지도
-# 없으면 "아직 도는 중"이라기보다 죽었을 가능성이 높다고 보고 구분해서 표시.
+# If the .out file has not been updated for this time (seconds) while there is no End of run
+# and no error message, it is more likely dead than "still running", so it is marked separately.
 _STALE_SECONDS = 600
 
 
 def get_siesta_status(d) -> Dict[str, Optional[str]]:
     """
-    디렉토리 하나의 SIESTA job 상태를 대략 판별.
-    - .out 파일이 없으면 "Not started"
-    - _ERROR_PATTERNS 중 하나라도 있으면 "Error" (">> End of run:" 유무와 무관하게 우선)
-    - ">> End of run:" 이 있고 에러 패턴이 없으면 "Converged" (정상 종료)
-    - 그 외: 최근에 갱신된 파일이면 "Running/Incomplete",
-             한동안(기본 10분) 갱신이 없으면 "Incomplete (stalled/crashed?)"
-    - "Atoms .. too close" / "Bad DM normalization" 같은 경고성 문구는
-      status 뒤에 [Warning: ...] 로 개수와 함께 덧붙여 표시
-      (Converged 로 끝났어도 뜰 수 있음 - 기하구조가 이상해도 SCF 자체는 돌아간 경우)
-    (휴리스틱이므로 실제와 다른 에러 문구를 겪으면 알려주면 더 정밀하게 맞출 수 있음)
+    Roughly determine the SIESTA job status of a single directory.
+    - If there is no .out file: "Not started"
+    - If any of _ERROR_PATTERNS is present: "Error" (takes priority regardless of ">> End of run:")
+    - If ">> End of run:" is present and no error pattern: "Converged" (normal exit)
+    - Otherwise: if the file was updated recently, "Running/Incomplete",
+                 if it has not been updated for a while (default 10 min), "Incomplete (stalled/crashed?)"
+    - Warning phrases such as "Atoms .. too close" / "Bad DM normalization" are
+      appended after the status as [Warning: ...] together with their counts
+      (can show up even if it ended as Converged - geometry is odd but SCF itself ran)
+    (Heuristic - if you hit error wording different from this, report it so it can be tuned more precisely)
     """
     d = Path(d)
     fdfs = sorted(d.glob("*.fdf"))
@@ -1388,7 +1388,7 @@ def get_siesta_status(d) -> Dict[str, Optional[str]]:
 
 
 def get_final_energy(d) -> Tuple[Optional[float], Optional[str]]:
-    """옵션 2에서 사용. Energy.dat (run_full_analysis 결과물)이 있으면 우선 사용, 없으면 MDE에서 직접 읽음."""
+    """Used in option 2. Prefers Energy.dat (output of run_full_analysis) if present, otherwise reads directly from MDE."""
     d = Path(d)
     edat = d / "Energy.dat"
     if edat.exists():
@@ -1414,14 +1414,14 @@ def get_final_energy(d) -> Tuple[Optional[float], Optional[str]]:
 
 
 # ============================================================
-# 2. CLI (CCpyVASPAnal.py 형식: sys.argv[1] 옵션 분기 + 사용법 출력)
+# 2. CLI (CCpyVASPAnal.py style: sys.argv[1] option branching + usage output)
 # ============================================================
 
 USAGE = """
 How to use : CCpySIESTAAnal.py [option] [sub_option1] [sub_option2..]
 --------------------------------------
 [suboptions]
--sub : deep in subdirectories (options 0, 1, 2, 3, -d 에서 사용)
+-sub : deep in subdirectories (used with options 0, 1, 2, 3, -d)
 
 [options]
 -d : Clear SIESTA output files (except of *.fdf, *.psf, *.vps, *.ion)
@@ -1434,7 +1434,7 @@ How to use : CCpySIESTAAnal.py [option] [sub_option1] [sub_option2..]
 
  1 : Extract ONLY the final structure (last MD_CAR frame, via pos2car.py +
      FDF atom order) as a standalone <dirname>_final.car file - no full ARC
-     trajectory. Shows an interactive picker (CCpySIESTABandSubmit.py 스타일):
+     trajectory. Shows an interactive picker (CCpySIESTABandSubmit.py style):
          1 : Ti2CTx_O_NT_2
          2 : Ti2CTx_O_NT_Bandtest
          ...
@@ -1561,7 +1561,7 @@ elif sys.argv[1] == "1":
             if out_name:
                 this_out = out_name
             elif write_here:
-                this_out = None  # run_final_structure 기본값(<base>_final.car) 사용
+                this_out = None  # use the run_final_structure default (<base>_final.car)
             else:
                 this_out = str(Path("..") / f"{dirname}_final.car")
             run_final_structure(base=base, out_name=this_out)

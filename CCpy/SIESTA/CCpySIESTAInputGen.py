@@ -15,108 +15,108 @@ installed CCpy package version. Keep this file's directory earlier in your
 PATH (or call it as ./CCpySIESTAInputGen.py / python3 CCpySIESTAInputGen.py)
 if you want to make sure this one runs instead of the installed one.
 
-요청 반영 (2026-02):
-1) car2siesta.py 에서 DOS, BAND, PDOS 관련 옵션들 제거
-2) siesta_Band-DOS.py 의 restart 관련 옵션(.car 파일 없이, OPT 결과 디렉토리에서 작동)을 car2siesta.py 에 추가
-   - 현재 디렉토리에 있는 *.fdf에서 SystemLabel을 자동 추출 후 Restart/ 디렉토리를 생성합니다.
-   - Restart/ 에는 원본 fdf를 복사하고, DM.UseSaveDM / MD.UseSaveXV 를 .true.로 강제한
-     <label>_restart.fdf 와 Slurm mpi.sh 를 생성합니다.
-3) (DOS/PDOS 입력 옵션 추가/수정 기능은 siesta_Band-DOS.py 에 구현)
+Requests applied (2026-02):
+1) Removed the DOS, BAND, PDOS related options from car2siesta.py
+2) Added the restart options of siesta_Band-DOS.py (works without a .car file, in the OPT result directory) to car2siesta.py
+   - Auto-extracts SystemLabel from *.fdf in the current directory, then creates a Restart/ directory.
+   - Into Restart/ the original fdf is copied, and with DM.UseSaveDM / MD.UseSaveXV forced to .true., a
+     <label>_restart.fdf and a Slurm mpi.sh are generated.
+3) (Adding/modifying DOS/PDOS input options is implemented in siesta_Band-DOS.py)
 
-요청 반영 (2026-07, v2):
-4) 입력 구조 파일로 .car 뿐 아니라 .cif 도 지원 (v3에서 pymatgen 기반으로 교체)
-5) 매번 긴 CLI 옵션을 입력하지 않도록 YAML 설정 파일(--config 또는 cwd의
-   siesta_default.yaml 자동 인식) 지원. 설정 파일 값은 CLI 옵션의 기본값으로 쓰이고,
-   실제 CLI 인자를 명시하면 그 값이 우선합니다.
+Requests applied (2026-07, v2):
+4) Support .cif as well as .car as the input structure file (replaced by a pymatgen-based reader in v3)
+5) YAML config file support so long CLI options need not be retyped every time (--config, or
+   auto-detection of siesta_default.yaml in cwd). Config file values are used as CLI option defaults,
+   and an explicitly given CLI argument takes precedence.
 
-요청 반영 (2026-07, v3) - CCpySIESTAInputGen.py(연구실 자체 CCpy 툴) 기능 통합:
-6) 구조 파일 파서를 pymatgen 기반으로 통일 -> .cif 뿐 아니라 VASP POSCAR/CONTCAR도 지원
-   (CCpySIESTAInputGen.py와 동일하게 IStructure.from_file 사용, .car만 자체 파서 유지)
-7) CCpySIESTAInputGen.py가 실행 중 대화형으로 받던 "Add or modify option
-   (ex: XC.functional=LDA, MaxSCFIterations=200)" 프롬프트를 비대화형 --extra 옵션으로
-   포팅. --all/Slurm 배치 작업에서 입력 대기로 멈추지 않음. 기존 fdf 옵션 줄과 겹치면
-   그 줄을 덮어쓰고(첫 정의만 유효한 fdf 파서 특성 고려), 없으면 새로 추가함.
-8) 기본값(DM.Tolerance, MaxSCFIterations 등)과 kgrid 자동계산 규칙은 기존 car2siesta.py
-   쪽을 그대로 유지 (CCpy 쪽 kgrid 계산에는 c축이 b축 값을 그대로 복사하는 버그가 있었음)
-9) --extra를 안 주고 터미널에서 대화형으로 실행하면 CCpySIESTAInputGen.py와 동일하게
-   "Add or modify option ... / else Enter" 프롬프트가 한 번 뜸. Slurm/cron처럼
-   stdin이 터미널이 아닌 경우엔 자동으로 건너뛰어서 배치 작업이 멈추지 않음.
-10) pymatgen/PyYAML을 매번 손으로 설치하는 게 귀찮다는 요청으로, CCpySIESTAInputGen.py가
-    conda env(envs/CCpy)에 shebang으로 고정된 것처럼, 지금 실행 중인 파이썬에 pymatgen/yaml이
-    없으면 KNOWN_ENV_PYTHONS에 등록된 conda env의 파이썬으로 자동 재실행함. 끄고 싶으면
-    환경변수 CAR2SIESTA_NO_AUTOENV=1 로 실행.
-11) --pseudo-dir을 매번 안 주도록, DEFAULT_PSEUDO_DIRS(기본값: Dojo만)를 기본 탐색 경로로
-    내장. --pseudo-dir을 주면 그게 항상 우선하고, 안 주면 이 기본값들을 원소별로 순서대로
-    찾아서 복사/심볼릭링크함. 저장 위치가 바뀌면 DEFAULT_PSEUDO_DIRS만 고치면 됨.
-    PSF는 원소 커버리지가 Dojo의 부분집합이라 기본값에서 뺐음 (자동으로 같이 검색하면
-    같은 원소에 대해 .psf/.psml이 둘 다 복사돼서 SIESTA 계산이 진행 안 되는 문제가 있었음).
-    PSF/PSF_old가 필요하면 --pseudo-dir로 명시적으로 지정.
-12) CCpySIESTAInputGen.py/CCpyVASPInputGen.py의 selectInputs()처럼, 파일을 하나도 안 주고
-    실행하면(그리고 --all도 안 줬으면) 현재 폴더에서 .car/.cif/POSCAR/CONTCAR를 찾아 번호를
-    붙여 보여주고 "Choose file :"로 고르게 함 (0은 전체). 파일을 직접 주거나 --all을 쓰면
-    이 화면 없이 예전처럼 바로 진행됨. 비대화형(Slurm/cron/pipe)에서는 뜨지 않음.
-13) CCpyVASPInputGen.py의 INCAR 옵션 미리보기처럼, --extra 프롬프트 뜨기 전에 현재
-    mode/basis/kgrid 규칙/MeshCutoff/DM.Tolerance/MaxSCFIterations/모드별 MD 옵션/
-    pseudo_dir을 화면에 먼저 보여줌. "n" 입력 또는 그냥 Enter 둘 다 스킵으로 처리됨
-    (CCpyVASPInputGen.py와 동일).
+Requests applied (2026-07, v3) - merged in features of CCpySIESTAInputGen.py (the lab CCpy tool):
+6) Unified the structure file parser on pymatgen -> supports VASP POSCAR/CONTCAR as well as .cif
+   (uses IStructure.from_file just like CCpySIESTAInputGen.py, only .car keeps the built-in parser)
+7) Ported the prompt CCpySIESTAInputGen.py used to ask interactively at run time, "Add or modify option
+   (ex: XC.functional=LDA, MaxSCFIterations=200)", to the non-interactive --extra option.
+   No more stalling on input in --all/Slurm batch jobs. If it collides with an existing fdf option line,
+   that line is overwritten (the fdf parser honors only the first definition); otherwise it is appended.
+8) The defaults (DM.Tolerance, MaxSCFIterations, etc.) and the kgrid auto-calculation rules keep the
+   existing car2siesta.py behavior (the CCpy kgrid calculation had a bug copying the b axis value to c)
+9) Run interactively in a terminal without --extra and, just like CCpySIESTAInputGen.py, the
+   "Add or modify option ... / else Enter" prompt appears once. When stdin is not a terminal,
+   as with Slurm/cron, it is skipped automatically so batch jobs do not stall.
+10) By request (installing pymatgen/PyYAML by hand every time is tedious), just as CCpySIESTAInputGen.py
+    is pinned to a conda env (envs/CCpy) by shebang, if the running python lacks pymatgen/yaml it
+    re-execs automatically with a conda env python registered in KNOWN_ENV_PYTHONS. To turn this off,
+    run with the environment variable CAR2SIESTA_NO_AUTOENV=1.
+11) So --pseudo-dir need not be given every time, DEFAULT_PSEUDO_DIRS (default: Dojo only) is built in
+    as the default search path. Given --pseudo-dir it always wins; otherwise these defaults are searched
+    per element in order and copied/symlinked. If the storage location moves, edit DEFAULT_PSEUDO_DIRS only.
+    PSF was dropped from the defaults since its element coverage is a subset of Dojo (searching both
+    automatically copied both .psf/.psml for the same element, which kept SIESTA from proceeding).
+    If PSF/PSF_old is needed, specify it explicitly with --pseudo-dir.
+12) Like selectInputs() in CCpySIESTAInputGen.py/CCpyVASPInputGen.py, running with no file given
+    (and without --all) scans the current folder for .car/.cif/POSCAR/CONTCAR, lists them with numbers
+    and lets you pick via "Choose file :" (0 = all). Passing a file directly or using --all goes
+    straight through as before, without this screen. It never appears non-interactively (Slurm/cron/pipe).
+13) Like the INCAR option preview in CCpyVASPInputGen.py, before the --extra prompt appears the current
+    mode/basis/kgrid rule/MeshCutoff/DM.Tolerance/MaxSCFIterations/per-mode MD options/
+    pseudo_dir are shown on screen first. Both an "n" entry and a plain Enter are treated as skip
+    (same as CCpyVASPInputGen.py).
 
-요청 반영 (2026-07, v4) - car2siesta.py를 CCpySIESTAInputGen.py로 명명, CLI를 CCpy 스타일로 전환:
-14) --mode 플래그를 없애고, 원래 CCpySIESTAInputGen.py/CCpyVASPInputGen.py처럼 맨 앞
-    위치 인자로 계산 모드 번호(1~7)를 받음: 1=opt 2=nvt 3=nve 4=npe 5=npt 6=anneal 7=scf
-    (기존 인터랙티브 메뉴가 쓰던 순서와 동일, opt가 항상 1). 번호가 없거나 잘못되면
-    (그리고 --restart-from-outdir도 아니면) VASPInputGen.py 스타일의 "How to use" 안내를
-    출력하고 깨끗하게 종료함. 주의: argparse는 두 개의 위치 인자(모드 번호, 구조파일)
-    사이에 옵션 플래그가 끼어 있으면 제대로 못 나누기 때문에, extract_mode_number()가
-    argparse 실행 전에 맨 앞 숫자만 수동으로 떼어내는 방식으로 구현함.
-15) -basis=sz 처럼 소문자로 basis set을 지정할 수 있게 함(-basis/--basis 둘 다 동일하게
-    동작, 대소문자 무관, 실제 fdf에는 대문자로 들어감). --basis를 아예 안 주면 기본값은
-    이제 인터랙티브 프롬프트 대신 바로 SZ로 고정됨.
-16) -pot=dojo / -pot=psf / -pot=psfold 로 미리 정의된 pseudopotential 세트를 고를 수 있게
-    함(POT_ALIASES 딕셔너리, 기본값 dojo). --pseudo-dir을 명시하면 그게 항상 최우선이고
-    -pot=은 무시됨. DEFAULT_PSEUDO_DIRS 방식(다중 경로 fallback)은 이 POT_ALIASES 방식으로
-    대체됨 - 항상 정확히 하나의 pot 디렉토리만 골라 쓰므로 .psf/.psml 혼합 복사 문제가
-    구조적으로 발생할 수 없음.
+Requests applied (2026-07, v4) - car2siesta.py renamed to CCpySIESTAInputGen.py, CLI switched to CCpy style:
+14) Dropped the --mode flag; like the original CCpySIESTAInputGen.py/CCpyVASPInputGen.py, the
+    calculation mode number (1~7) is taken as the first positional argument: 1=opt 2=nvt 3=nve 4=npe 5=npt 6=anneal 7=scf
+    (same order the old interactive menu used, opt is always 1). If the number is missing or wrong
+    (and it is not --restart-from-outdir either), it prints a VASPInputGen.py-style "How to use" guide
+    and exits cleanly. NOTE: argparse cannot split two positional arguments (mode number, structure file)
+    properly when option flags sit between them, so extract_mode_number() is implemented to strip
+    only the leading number manually before argparse runs.
+15) The basis set can be given in lowercase, e.g. -basis=sz (-basis/--basis behave identically,
+    case-insensitive, written uppercase into the actual fdf). If --basis is omitted entirely, the default
+    is now fixed straight to SZ instead of an interactive prompt.
+16) A predefined pseudopotential set can be chosen with -pot=dojo / -pot=psf / -pot=psfold
+    (POT_ALIASES dictionary, default dojo). An explicit --pseudo-dir always has top priority and
+    -pot= is ignored. The DEFAULT_PSEUDO_DIRS scheme (multi-path fallback) is replaced by this
+    POT_ALIASES scheme - exactly one pot directory is always chosen, so the mixed .psf/.psml copy
+    problem cannot arise by construction.
 
-사용 예 (v4, CCpySIESTAInputGen.py):
-  # (A) 모드 번호 + CCpy 스타일 짧은 옵션으로 fdf 생성
+Usage examples (v4, CCpySIESTAInputGen.py):
+  # (A) generate fdf with a mode number + CCpy-style short options
   python CCpySIESTAInputGen.py 1 -basis=sz -pot=dojo --kgrid-from-car --max-force 0.02 ZnOHX3L.car
   python CCpySIESTAInputGen.py 7 -basis=dzp structure.cif        # 7 = scf
   python CCpySIESTAInputGen.py 1 POSCAR
 
-  # (A-2) 파일을 안 주고 실행하면 현재 폴더에서 찾아서 번호로 고르게 함
+  # (A-2) run with no file given: scans the current folder and lets you pick by number
   python CCpySIESTAInputGen.py 1 -basis=sz
 
-  # (A-3) 설정 파일로 옵션 줄이기 (같은 디렉토리에 siesta_default.yaml이 있으면 자동 로드)
+  # (A-3) fewer options via a config file (auto-loaded if siesta_default.yaml is in the same directory)
   python CCpySIESTAInputGen.py 1 ZnOHX3L.car
   python CCpySIESTAInputGen.py 1 --config ../lab_defaults.yaml ZnOHX3L.car
 
-  # (A-4) CCpy 스타일 옵션 오버라이드 (비대화형)
+  # (A-4) CCpy-style option override (non-interactive)
   python CCpySIESTAInputGen.py 1 --extra "XC.functional=LDA,MaxSCFIterations=50" structure.cif
 
-  # (B) OPT 결과 디렉토리에서(= 구조 파일 없이) Restart/ 워크플로우 생성 (모드 번호 불필요)
+  # (B) build the Restart/ workflow in an OPT result directory (= without a structure file; no mode number)
   python3 CCpySIESTAInputGen.py --restart-from-outdir
 
-주의:
-- 이 스크립트는 이제 Bands/DOS/PDOS 입력 블록 및 관련 CLI 옵션을 제공하지 않습니다.
-- 기존 "siesta .out로부터 좌표/셀을 fdf에 패치" 기능은 --patch-from-out 로 이름이 변경되었습니다.
-- v4부터 --mode는 제거되었습니다. 이전에 --mode opt 등을 쓰던 스크립트/alias가 있다면
-  맨 앞에 숫자(1~7)를 넣는 방식으로 바꿔주세요.
+NOTE:
+- This script no longer provides Bands/DOS/PDOS input blocks or the related CLI options.
+- The old "patch coordinates/cell from a siesta .out into the fdf" feature was renamed to --patch-from-out.
+- As of v4 --mode has been removed. If you have scripts/aliases that used --mode opt and the like,
+  please change them to put a number (1~7) at the front.
 
-요청 반영 (2026-07, v4 추가):
-17) mode_number 유효성 검사를 파일 탐색/읽기보다 먼저 하도록 순서 변경. mode_number가
-    없거나 잘못되면 (그리고 --restart-from-outdir도 아니면) 파일 피커나 --all 스캔을
-    전혀 건드리지 않고 바로 How-to-use를 출력하고 종료함.
-18) -maxforce=0.02 (--max-force와 동일, 기본값 0.02 - 연구실 실사용 기본값이 0.02라는
-    피드백으로 정정. 비교군은 0.05(rough)/0.02(default)/0.01(tight)). How-to-use 화면에
-    -basis/-maxforce/-pot 각각의 선택지와 의미를 표로 정리해서 보여줌 (mode_number 없이
-    그냥 실행해도 동일하게 뜸).
-19) CCpyVASPInputGen.py 스타일로, fdf 생성이 끝난 원본 구조 파일(.car/.cif/POSCAR/
-    CONTCAR)을 cwd 기준 ./structures/ 로 옮김(복사가 아니라 이동). --outdir와는 무관하게
-    항상 실행 디렉토리의 structures/ 에 쌓임.
-- .cif/POSCAR/CONTCAR 입력은 pymatgen(`pip install pymatgen`)이 설치되어 있어야 합니다.
-  (연구실 CCpy 환경에는 이미 설치되어 있음)
-- 설정 파일 기능은 PyYAML(`pip install pyyaml`)이 설치되어 있어야 합니다. 둘 다 없어도
-  기존 .car 워크플로우는 그대로 동작합니다 (해당 기능 사용 시에만 필요한 모듈을 import).
+Requests applied (2026-07, v4 additions):
+17) Reordered so mode_number validation happens before any file search/read. If mode_number is
+    missing or wrong (and it is not --restart-from-outdir either), it prints How-to-use and exits
+    immediately without touching the file picker or the --all scan at all.
+18) -maxforce=0.02 (same as --max-force, default 0.02 - corrected after feedback that the lab
+    actually uses 0.02 by default. Comparison set: 0.05(rough)/0.02(default)/0.01(tight)). The How-to-use
+    screen shows the choices and meaning of -basis/-maxforce/-pot in a table (it appears the same
+    way when simply run with no mode_number).
+19) In CCpyVASPInputGen.py style, the original structure file (.car/.cif/POSCAR/
+    CONTCAR) whose fdf generation is done is moved to ./structures/ relative to cwd (moved, not copied).
+    Regardless of --outdir, they always pile up in structures/ of the run directory.
+- .cif/POSCAR/CONTCAR input requires pymatgen (`pip install pymatgen`) to be installed.
+  (already installed in the lab CCpy environment)
+- The config file feature requires PyYAML (`pip install pyyaml`) to be installed. Without either one,
+  the existing .car workflow still works (the needed module is imported only when that feature is used).
 """
 
 from __future__ import annotations
@@ -459,8 +459,8 @@ def read_with_pymatgen(path: Path) -> CarData:
         from pymatgen.core.structure import IStructure  # type: ignore
     except ImportError as exc:
         raise SystemExit(
-            "ERROR: .cif/POSCAR/CONTCAR 파일을 읽으려면 pymatgen이 필요합니다. "
-            "다음을 실행하세요: pip install pymatgen"
+            "ERROR: reading .cif/POSCAR/CONTCAR files requires pymatgen. "
+            "Please run: pip install pymatgen"
         ) from exc
 
     st = IStructure.from_file(str(path))
@@ -645,10 +645,10 @@ def sort_atoms(atoms: List[Atom], element_order: Optional[List[str]]) -> List[At
     if not atoms:
         return atoms
 
-    # --no-sort: element_order == [] 이면 원자 순서 그대로
+    # --no-sort: if element_order == [], keep the original atom order
     if element_order is not None and len(element_order) == 0:
         return atoms
-    # element_order가 명시적으로 주어졌을 때만 정렬
+    # sort only when element_order is explicitly given
     if element_order is not None:
         order = [_norm_el(x) for x in element_order]
         rank = {el:i for i,el in enumerate(order)}
@@ -656,7 +656,7 @@ def sort_atoms(atoms: List[Atom], element_order: Optional[List[str]]) -> List[At
             return (rank.get(a.el, 10_000), a.el, a.name)
         return sorted(atoms, key=key)
 
-    # 기본(기존): 원소별 정렬
+    # default (as before): sort by element
     return sorted(atoms, key=lambda a: (a.el, a.name))
 
 def bounding_box(atoms: Sequence[Atom]) -> Tuple[float,float,float,float,float,float]:
@@ -882,7 +882,7 @@ def fdf_md_anneal(option: str, target_temp: float, target_pressure_gpa: float, t
 
 
 # -----------------------------
-# Restart-from-outfile patching (legacy 기능, 옵션명 변경)
+# Restart-from-outfile patching (legacy feature, option name changed)
 # -----------------------------
 def parse_siesta_out_relaxed(out_path: Path) -> Tuple[List[str], Optional[Tuple[float,float,float,float,float,float]]]:
     text = out_path.read_text(errors="ignore").splitlines()
@@ -1391,7 +1391,7 @@ def auto_detect_label(workdir: Path) -> str:
         lbl = parse_systemlabel_from_fdf(f)
         if lbl:
             return lbl
-    raise SystemExit("ERROR: SystemLabel 자동 추출 실패. --label로 지정하세요.")
+    raise SystemExit("ERROR: failed to auto-extract SystemLabel. Please specify it with --label.")
 
 def safe_symlink_as(src: Path, dst_path: Path) -> None:
     """Create/replace a symlink at dst_path pointing to src (if src exists)."""
@@ -1716,14 +1716,14 @@ def load_yaml_config(path: Path) -> Dict[str, Any]:
         import yaml  # type: ignore
     except ImportError as exc:
         raise SystemExit(
-            "ERROR: 설정 파일을 사용하려면 PyYAML이 필요합니다. 다음을 실행하세요: pip install pyyaml"
+            "ERROR: using a config file requires PyYAML. Please run: pip install pyyaml"
         ) from exc
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except Exception as exc:
-        raise SystemExit(f"ERROR: 설정 파일을 읽는 중 오류가 발생했습니다: {path} ({exc})")
+        raise SystemExit(f"ERROR: an error occurred while reading the config file: {path} ({exc})")
     if not isinstance(data, dict):
-        raise SystemExit(f"ERROR: 설정 파일은 'key: value' 형태의 매핑이어야 합니다: {path}")
+        raise SystemExit(f"ERROR: the config file must be a mapping of the form 'key: value': {path}")
     # Accept both 'kgrid-from-car' and 'kgrid_from_car' style keys.
     return {str(k).replace("-", "_"): v for k, v in data.items()}
 
@@ -1760,7 +1760,7 @@ def apply_config_defaults(parser: argparse.ArgumentParser, config: Dict[str, Any
         applied.append(key)
 
     if unknown:
-        print(f"WARNING: 설정 파일에 알 수 없는 옵션이 있어 무시합니다: {', '.join(unknown)}")
+        print(f"WARNING: unknown options in the config file are ignored: {', '.join(unknown)}")
 
     return applied
 
@@ -1788,16 +1788,16 @@ def main() -> int:
         "5) cell-param opt & kgrid  \n"
         "   --kgrid 3 3 3  --variable-cell --element-order \n"
         "6) Calculation Time Limit \n"
-        "   --time   :  time_limit default 7일 (7-00:00:00) !!! \n"
-        "7) CIF / POSCAR / CONTCAR 입력 (pymatgen) \n"
+        "   --time   :  time_limit default 7 days (7-00:00:00) !!! \n"
+        "7) CIF / POSCAR / CONTCAR input (pymatgen) \n"
         "   python CCpySIESTAInputGen.py 1 -basis=sz structure.cif \n"
         "   python CCpySIESTAInputGen.py 1 -basis=sz POSCAR \n"
-        "8) 설정 파일로 옵션 줄이기 (siesta_default.yaml.example 참고, cwd에 siesta_default.yaml 두면 자동 로드) \n"
+        "8) Fewer options via a config file (see siesta_default.yaml.example, auto-loaded if siesta_default.yaml is in cwd) \n"
         "   python CCpySIESTAInputGen.py 1 SWNT7-6.car \n"
         "   python CCpySIESTAInputGen.py 1 --config lab_defaults.yaml SWNT7-6.car \n"
-        "9) 옵션 오버라이드 (비대화형, --extra 안 주고 대화형으로 실행하면 자동으로 물어봄) \n"
+        "9) Option override (non-interactive, an interactive run without --extra asks automatically) \n"
         "   python CCpySIESTAInputGen.py 1 --extra \"XC.functional=LDA,MaxSCFIterations=50\" structure.cif \n"
-        "10) 파일을 안 주면 현재 폴더에서 찾아서 번호로 고르게 함 \n"
+        "10) With no file given, scans the current folder and lets you pick by number \n"
         "   python CCpySIESTAInputGen.py 1 -basis=sz \n"
         " --------------------------------------------------------------------------------------------------------------------------- \n"
     )
@@ -1941,7 +1941,7 @@ def main() -> int:
         label = args.label or auto_detect_label(top)
         base_fdf = top / f"{label}.fdf"
         if not base_fdf.exists():
-            raise SystemExit(f"ERROR: {base_fdf} 없음 (SystemLabel과 파일명이 다르면 --label로 맞추세요)")
+            raise SystemExit(f"ERROR: {base_fdf} not found (if SystemLabel differs from the filename, match it with --label)")
         make_restart_dir(top, label, base_fdf, args)
         if args.submit:
             os.system("cd Restart && sbatch mpi.sh")
@@ -2034,7 +2034,7 @@ def main() -> int:
         # if --no-sort, build appearance-ordered element list from original atoms
         sort_for_this = sort_order
         if args.no_sort:
-            sort_for_this = []   #  빈 리스트는 "정렬하지 않음" 신호로만 사용
+            sort_for_this = []   #  an empty list is used only as a "do not sort" signal
 #            sort_for_this = []
 #            for a in car_data.atoms:
 #                if a.el not in sort_for_this:
@@ -2174,17 +2174,17 @@ if __name__ == "__main__":
 
 
 # -------------------------------------------------------------------------------------------------------
-## --- 금속  SCF 안정화 (SIESTA 5.4.2) ---
+## --- Metal SCF stabilization (SIESTA 5.4.2) ---
 #SCF.Mix                 charge
-#DM.MixingWeight         0.03          # (기존 0.10이면 너무 공격적일 수 있음)
+#DM.MixingWeight         0.03          # (the previous 0.10 may be too aggressive)
 #SCF.RhoG.DIIS.Depth     6
 #SCF.Kerker.q0sq         0.5 Ry
 #SCF.RhoGMixingCutoff    9 Ry
-#ElectronicTemperature   1000 K         # 금속/준금속이면 특히 효과 큼
+#ElectronicTemperature   1000 K         # especially effective for metals/semimetals
 
 
 ####### Lattice Constrain ###########
-##         2D 설정
+##         2D setting
 #####################################
 # MD.ConstantVolume     false
 

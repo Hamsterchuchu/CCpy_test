@@ -23,7 +23,7 @@ This file merges five previously-separate scripts into one, as sub-commands:
     pipeline      <- new: runs the whole thing end-to-end (equivalent to
                      WorkFlow_FatBandDOS.sh), calling the sub-commands above
                      in sequence and running SIESTA itself in between.
-                     Use --steps to run only a subset (세분화).
+                     Use --steps to run only a subset (fine-grained).
 
 Each sub-command keeps the exact same flag names as the original standalone
 script, so any existing usage/notes transfer directly - just prefix the
