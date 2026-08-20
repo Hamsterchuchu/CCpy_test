@@ -37,10 +37,10 @@ queue_info = yaml.load(open(CCpy_SCHEDULER_CONFIG, 'r'), Loader=yaml.FullLoader)
 
 class JobSubmit:
     def __init__(self, inputfile, queue, n_of_cpu, node=None, init_only=False):
-        # -- 개인 설정 폴더는 CCpy/Tools/CCpyConfig.py 에서 한 곳으로 관리한다
-        #    (기본 ~/.CCpy_test). 파일이 없으면 패키지 템플릿에서 만들고, 그때
-        #    python_path 에 지금 CCpy 를 실행 중인 python 을 기록한다.
-        #    기존 ~/.CCpy 에서 승계하지는 않는다 (서버·개인별 경로는 직접 지정).
+        # -- The personal config folder is managed in one place in CCpy/Tools/CCpyConfig.py
+        #    (default ~/.CCpy_test). Create the file from the package template if missing,
+        #    recording the python currently running CCpy in python_path at that point.
+        #    It is not inherited from an old ~/.CCpy (per-server / per-user paths are set directly).
         user_queue_config = str(ccpy_config.ensure_queue_config())
 
         if init_only:
@@ -106,12 +106,12 @@ class JobSubmit:
         self.partition_name = profile['default_partition']
         if node:
             self.allot_node = "#SBATCH --nodelist=%s" % node
-            # 노드 이름 -> 파티션
+            # node name -> partition
             for part_name, node_list in profile['node_partitions'].items():
                 if node in node_list:
                     self.partition_name = part_name
                     break
-            # 코어수만 지정한 경우 (예: '96') -> 특정 노드 지정 없이 파티션 전체
+            # When only a core count is given (e.g. '96') -> whole partition, no specific node
             if node in profile['partition_alias']:
                 self.partition_name = profile['partition_alias'][node]
                 self.allot_node = ""

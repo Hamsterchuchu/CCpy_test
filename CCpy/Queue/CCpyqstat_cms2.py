@@ -1,9 +1,9 @@
 """
-cms2 용 qstat 구현 (PBS 형식 `qstat -f` 출력 파싱).
+qstat implementation for cms2 (parses PBS-style `qstat -f` output).
 
-node99 는 SLURM `squeue` 를 쓰기 때문에 구현이 완전히 다르다.
--> CCpyqstat_node99.py 참고.
-실행 시에는 CCpyqstat.py 가 $CCpy_SERVER 값에 따라 둘 중 하나를 골라 불러온다.
+node99 uses SLURM `squeue`, so its implementation is completely different.
+-> see CCpyqstat_node99.py.
+At run time CCpyqstat.py picks one of the two according to $CCpy_SERVER.
 """
 import os, sys, re
 import datetime
@@ -264,7 +264,7 @@ def get_empty_nodes(df):
 #    print("All SLOTS : 1024")
     result = {}  
     for key, value in runnings.items():
-        node_name = key.split('/')[0]  # running 중인 노드 이름 추출
+        node_name = key.split('/')[0]  # extract the name of the running node
         if node_name in result:
             result[node_name] += value
         else:

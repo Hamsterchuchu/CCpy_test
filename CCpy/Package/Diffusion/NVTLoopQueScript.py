@@ -31,17 +31,17 @@ specie = sys.argv[3]
 screen = sys.argv[4]
 max_step = int(sys.argv[5])
 
-# -- 실행 경로는 queue_config.yaml 에서 읽는다.
-#    서버마다 vasp 바이너리가 다르기 때문에 여기에 박아두면 안 된다.
-#    아래 경로는 잡 제출 시점에 CCpy/Tools/CCpyConfig.py 가 해석해 넣은
-#    절대경로다 (기본 ~/.CCpy_test/queue_config.yaml). 계산 노드에서 환경변수를
-#    다시 읽지 않으므로, 제출 환경과 다른 폴더를 읽을 일이 없다.
-#    VASPOptLoop.py 도 같은 파일을 읽지만, 그쪽은 파일이 없으면 패키지
-#    기본값을 복사해 만들어준다. 여기서는 복사하지 않고 바로 실패시킨다 --
-#    이 스크립트는 작업 제출 시점에 CCpyJobControl.py 가 이미 파일을
-#    만들어둔 뒤 계산 노드에서 실행되므로, 그 시점에 파일이 없다면
-#    조용히 기본값으로 도는 것보다 멈추는 편이 낫다.
-#      cms2   : /opt/vasp/vasp_auto  (노드에 따라 일반/AVX2 빌드를 골라주는 래퍼)
+# -- The executable path is read from queue_config.yaml.
+#    The vasp binary differs from server to server, so it must not be hard-coded here.
+#    The path below is the absolute path that CCpy/Tools/CCpyConfig.py resolved and
+#    inserted at job submit time (default ~/.CCpy_test/queue_config.yaml). Environment
+#    variables are not read again on the compute node, so it never reads a folder other than that one.
+#    VASPOptLoop.py reads the same file, but there, if the file is missing, it copies
+#    the package default to create it. Here we do not copy and fail right away --
+#    this script runs on the compute node after CCpyJobControl.py has already
+#    created the file at job submit time, so if the file is missing at that point
+#    it is better to stop than to quietly run with the defaults.
+#      cms2   : /opt/vasp/vasp_auto  (wrapper that picks the normal/AVX2 build per node)
 #      node99 : /opt/vasp/vasp.6.5.1/bin/vasp_std
 _queue_config_path = "@@CCPY_QUEUE_CONFIG_PATH@@"
 try:

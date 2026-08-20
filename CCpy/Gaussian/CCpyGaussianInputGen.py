@@ -62,7 +62,7 @@ elif sys.argv[1] == "4":
     input_marker = [".com"]
     inputs = selectInputs(input_marker, "./")
 
-# -- 개인 설정 폴더는 CCpy/Tools/CCpyConfig.py 에서 한 곳으로 관리한다 (기본 ~/.CCpy_test)
+# -- The personal config folder is managed in one place in CCpy/Tools/CCpyConfig.py (default ~/.CCpy_test)
 config_dir = ccpy_config.ensure_config_home()
 g09_preset_file = str(ccpy_config.config_path("g09_input.json"))
 configs = os.listdir(str(config_dir))

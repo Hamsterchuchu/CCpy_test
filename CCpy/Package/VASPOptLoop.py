@@ -94,7 +94,7 @@ def check_empty():
             quit()
 
 MODULE_DIR = Path(__file__).resolve().parent
-# -- 개인 설정 폴더는 CCpy/Tools/CCpyConfig.py 에서 한 곳으로 관리한다 (기본 ~/.CCpy_test).
+# -- The personal config folder is managed in one place in CCpy/Tools/CCpyConfig.py (default ~/.CCpy_test).
 #    이전에는 여기서 같은 로직을 따로 구현했는데, 템플릿 경로를 CCpy/Package/queue_config.yaml
 #    로 잡고 있어서(실제 템플릿은 CCpy/Queue/queue_config.yaml) 파일이 없을 때 복사가
 #    실패하고 있었다. 이제 JobControl 과 같은 함수를 쓴다.

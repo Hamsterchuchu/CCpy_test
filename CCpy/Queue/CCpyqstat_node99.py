@@ -1,9 +1,9 @@
 """
-node99 용 qstat 구현 (SLURM `squeue` 출력 파싱).
+qstat implementation for node99 (parses SLURM `squeue` output).
 
-cms2 는 PBS 형식 `qstat -f` 를 쓰기 때문에 구현이 완전히 다르다.
--> CCpyqstat_cms2.py 참고.
-실행 시에는 CCpyqstat.py 가 $CCpy_SERVER 값에 따라 둘 중 하나를 골라 불러온다.
+cms2 uses PBS-style `qstat -f`, so its implementation is completely different.
+-> see CCpyqstat_cms2.py.
+At run time CCpyqstat.py picks one of the two according to $CCpy_SERVER.
 """
 import os, sys, datetime
 import getpass
@@ -13,7 +13,7 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-# -- 설정 로드
+# -- load config
 try:
     CCpy_SCHEDULER_CONFIG = os.environ['CCpy_SCHEDULER_CONFIG']
     queue_info = yaml.safe_load(open(CCpy_SCHEDULER_CONFIG, 'r'))
@@ -25,7 +25,7 @@ class bcolors:
     OKBLUE = '\033[94m'
     ENDC = '\033[0m'
 
-# 여기서 공백을 추가하거나 줄여서 터미널 간격을 마음대로 조절하세요!
+# Add or reduce the spaces here to tune the terminal column spacing as you like!
 C_ID    = '   ID'
 C_JOB   = '           JOBNAME'
 C_USER  = '     USER'
@@ -36,7 +36,7 @@ C_NODE  = '   QUEUE-NODE'
 C_SLOTS = ' SLOTS'
 
 def unify_time_format(time_str):
-    """Slurm 시간을 'D days, HH:MM:SS' 또는 'HH:MM:SS'로 통일"""
+    """Unify Slurm time into 'D days, HH:MM:SS' or 'HH:MM:SS'"""
     if '-' in time_str:
         days, rest = time_str.split('-')
         return f"{days} days, {rest}"
@@ -66,9 +66,9 @@ def CCpyqstat(in_user="*", in_status="", node_check=False):
         raw_state = p[3]
         state = ' R' if raw_state == 'R' else ' Q' if raw_state == 'PD' else ' ' + raw_state
         
-        # 시간 및 노드 처리 (보내주신 예시 이미지 스타일 반영)
+        # Time and node handling (follows the style of the example image you sent)
         if raw_state == 'PD':
-            # -- Q 상태: 제출 시간 및 대기 시간 계산
+            # -- Q state: compute the submit time and the waiting time
             start_t_str = p[4].replace('T', ' ')
             node_info = ' ' 
             try:
@@ -80,7 +80,7 @@ def CCpyqstat(in_user="*", in_status="", node_check=False):
             except:
                 calc_run = "00:00:00"
         else:
-            # -- R 상태: 시작 시간 및 실제 런타임 표시
+            # -- R state: show the start time and the actual run time
             start_t_str = p[5].replace('T', ' ')
             node_info = f"{p[7]}/{p[8]}"
             calc_run = unify_time_format(p[6])
@@ -94,7 +94,7 @@ def CCpyqstat(in_user="*", in_status="", node_check=False):
         cms3_exec_host.append(node_info)
         cms3_ncpus.append(p[8])
 
-    #  정의한 변수들을 컬럼명으로 사용
+    #  use the variables defined above as column names
     ps = {C_ID: cms3_job_id, C_JOB: cms3_jobname, C_USER: cms3_job_user,
           C_STAT: cms3_job_state, C_START: cms3_start_time, 
           C_RUN: run_time, C_NODE: cms3_exec_host, C_SLOTS: cms3_ncpus}
@@ -112,7 +112,7 @@ def CCpyqstat(in_user="*", in_status="", node_check=False):
     if in_status == '-s r':
         df = df[df[C_STAT] == ' R']
     
-    #  to_string 출력 시 인덱스 포함, 우측 정렬 유지
+    #  include the index in the to_string output, keep right alignment
     print(df.to_string(index=True, justify='right'))
 
     if node_check:
@@ -121,7 +121,7 @@ def CCpyqstat(in_user="*", in_status="", node_check=False):
 
 def get_waiting_nodes(df):
     print("\n" + bcolors.OKBLUE + "# ---- Pending Jobs ---- #" + bcolors.ENDC)
-    # C_STAT 변수를 사용하여 필터링
+    # filter using the C_STAT variable
     waiting_df = df[df[C_STAT].str.contains('Q')].reset_index(drop=True)
     if not waiting_df.empty:
         summary = waiting_df[C_USER].str.strip().value_counts().reset_index()

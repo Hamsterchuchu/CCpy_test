@@ -609,7 +609,7 @@ def get_ip():
 def progress_bar(total, crt, len_bar=50, cmt=None):
     proceeding = int(crt / total * len_bar)
     pgb_msg = "[ %s%s ]" % ("=" * proceeding, " " * (len_bar - proceeding))
-    pgb_msg += " [ " + str(crt).rjust(len(str(total)) + 1) + " / " + str(total).rjust(len(str(total))) + " ] "      # rjust length --> 숫자 자릿수
+    pgb_msg += " [ " + str(crt).rjust(len(str(total)) + 1) + " / " + str(total).rjust(len(str(total))) + " ] "      # rjust length --> number of digits
     if cmt:
         pgb_msg += cmt
     sys.stdout.write(pgb_msg)
