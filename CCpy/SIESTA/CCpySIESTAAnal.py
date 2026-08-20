@@ -1454,8 +1454,10 @@ How to use : CCpySIESTAAnal.py [option] [sub_option1] [sub_option2..]
     ex) CCpySIESTAAnal.py 1 --out=final_structure.car   -> explicit path/name (single dir only)
 
  2 : Get final total energy list across SIESTA job directories
-     -> saves energy_list.txt / energy_list.csv (no plot)
+     -> saves 03_<folder>_FinalEnergies.txt / .csv / .png
+        (same file names as CCpyVASPAnal.py 2)
     ex) CCpySIESTAAnal.py 2
+    ex) CCpySIESTAAnal.py 2 n     : sub option 'n' -> do not save the plot
     ex) CCpySIESTAAnal.py 2 -st   : sub option '-st' -> sort by total energy
     ex) CCpySIESTAAnal.py 2 -sa   : sub option '-sa' -> sort by energy/atom
 
@@ -1573,6 +1575,9 @@ elif sys.argv[1] == "1":
 elif sys.argv[1] == "2":
     sort_mode = None  # "tot" or "atom"
 
+    # Sub-option n : do not create the figure (CCpyVASPAnal.py 2 style)
+    show_plot = "n" not in sys.argv[2:]
+
     if "-st" in sys.argv:
         sort_mode = "tot"
     elif "-sa" in sys.argv:
@@ -1609,10 +1614,35 @@ elif sys.argv[1] == "2":
 
     txt = df.to_string(index=False)
     print(txt)
-    with open("energy_list.txt", "w") as f:
+
+    # The output files share the names of CCpyVASPAnal.py 2 :
+    # 03_<folder>_FinalEnergies.txt / .csv / .png, so txt, csv and the figure of
+    # one run stay together and the folder name keeps runs from overwriting each other.
+    base_filename = "03_" + Path.cwd().name + "_FinalEnergies"
+    txt_filename = base_filename + ".txt"
+    csv_filename = base_filename + ".csv"
+    png_filename = base_filename + ".png"
+    with open(txt_filename, "w") as f:
         f.write(txt + "\n")
-    df.to_csv("energy_list.csv", index=False)
-    print("\n* Saved energy list to energy_list.txt / energy_list.csv")
+    df.to_csv(csv_filename, index=False)
+    print("\n* Saved energy list to " + txt_filename + " / " + csv_filename)
+
+    if show_plot:
+        ycol = "E_per_atom" if sort_mode == "atom" else "E"
+        plot_df = df.dropna(subset=[ycol])
+        if len(plot_df) == 0:
+            print("* No energy data to plot.")
+        else:
+            x = range(len(plot_df))
+            fig = plt.figure(figsize=(8, 7))
+            plt.plot(x, plot_df[ycol].values, marker="o", color="#0054FF")
+            plt.xticks(x, plot_df["dir"].tolist(), rotation=45, ha="right")
+            plt.ylabel("Energy/atom (eV)" if sort_mode == "atom" else "Total energy (eV)")
+            plt.grid()
+            plt.tight_layout()
+            plt.savefig(png_filename, dpi=300)
+            plt.close(fig)
+            print("* Saved energy plot to " + png_filename)
 
 elif sys.argv[1] == "3":
     base = _get_kv_arg("base", None, str)
