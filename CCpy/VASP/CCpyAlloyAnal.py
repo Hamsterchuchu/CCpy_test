@@ -71,9 +71,15 @@ S000001 of the twin).
                  relaxed result; POSCAR is used anyway when CONTCAR is missing)
 -tol=#         : nearest-neighbour window for the distance method, as a
                  fraction of the shortest distance   (DEFAULT : 0.15)
--layer_tol=#   : thickness of one substrate layer in A (DEFAULT : 1.0)
+-layer_tol=#   : thickness of one substrate layer in A (DEFAULT : 1.2)
+                 Raise it for a relaxed, buckled surface: when atoms of one
+                 physical layer fall on both sides of this window the top
+                 layer comes out incomplete, which is the one thing that
+                 really breaks the projection method.
 -hcp_tol=#     : in-plane distance in A within which a second-layer atom counts
                  as sitting under a hollow -> hcp instead of fcc (DEFAULT : 0.8)
+-main=[M]      : which method fills the single 'site' column and the per
+                 structure summary: proj | dist   (DEFAULT : proj)
 
 Two independent methods are always reported side by side:
   site_dist : nearest-neighbour counting (how many substrate atoms share the
@@ -81,7 +87,21 @@ Two independent methods are always reported side by side:
   site_proj : geometric projection onto the surface plane, located in the
               Delaunay triangulation of the top layer (vertex / edge / inside)
 The 'agree' column flags where they differ -- that is where the position is
-genuinely ambiguous and worth looking at by hand.
+genuinely ambiguous and worth looking at by hand. 'site' is the -main answer,
+falling back to the other method if the primary one cannot resolve it.
+
+  Projection leads because its barycentric test is scale-free, so a surface
+  whose elements have different atomic radii does not shift the answer the way
+  a distance window can. It has one blind spot by construction: height is not
+  part of it, so an adsorbate that drifted off the surface still gets a
+  confident label. 'd_min (A)' and 'height (A)' are the columns that catch it.
+
+  sub_site / sub_neighbors : the same classification against the SECOND
+  substrate layer. The adsorbate does not bond to that layer, so this is a
+  descriptor of what the site sits on, not a site of its own. On an ideal
+  fcc(111) slab it just repeats fcc/hcp (hcp <=> sub_site 'top'); it earns its
+  place by naming the SUBSURFACE elements under the site, which is what makes
+  two geometrically identical sites of a substituted surface differ in energy.
 
 [output files]
 04_[SET]_AlloyAnal.csv / .txt        : one row per structure
@@ -90,7 +110,8 @@ genuinely ambiguous and worth looking at by hand.
     quit()
 
 from CCpy.VASP.AlloyAnal import (select_alloy_sets, analyze_set, write_tables,
-                                 DEFAULT_DIST_TOL, DEFAULT_LAYER_TOL, DEFAULT_HCP_TOL)
+                                 DEFAULT_DIST_TOL, DEFAULT_LAYER_TOL,
+                                 DEFAULT_HCP_TOL, DEFAULT_MAIN_METHOD)
 
 option = sys.argv[1]
 if option not in ("1", "2", "3"):
@@ -104,6 +125,7 @@ chosen, ads, pool = None, None, None
 prefer_poscar = "-poscar" in sys.argv
 take_all = "-all" in sys.argv
 dist_tol, layer_tol, hcp_tol = DEFAULT_DIST_TOL, DEFAULT_LAYER_TOL, DEFAULT_HCP_TOL
+main = DEFAULT_MAIN_METHOD
 
 for arg in sys.argv[2:]:
     if arg.startswith("-i="):
@@ -118,6 +140,11 @@ for arg in sys.argv[2:]:
         layer_tol = float(arg.split("=", 1)[1])
     elif arg.startswith("-hcp_tol="):
         hcp_tol = float(arg.split("=", 1)[1])
+    elif arg.startswith("-main="):
+        main = arg.split("=", 1)[1].strip().lower()
+        if main not in ("proj", "dist"):
+            print("-main= takes 'proj' or 'dist', not '%s'" % main)
+            quit()
 
 sets = select_alloy_sets("./", ask=not take_all, chosen=chosen)
 if not sets:
@@ -130,7 +157,7 @@ for set_dir in sets:
     table, site_table, info = analyze_set(
         set_dir, do_sites=do_sites, do_energy=do_energy,
         prefer_poscar=prefer_poscar, ads_override=ads, pool_override=pool,
-        dist_tol=dist_tol, layer_tol=layer_tol, hcp_tol=hcp_tol)
+        dist_tol=dist_tol, layer_tol=layer_tol, hcp_tol=hcp_tol, main=main)
 
     if table is None or not len(table):
         print("  nothing to report in this folder.")

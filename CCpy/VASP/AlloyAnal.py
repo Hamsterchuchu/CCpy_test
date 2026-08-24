@@ -44,6 +44,21 @@ Site assignment is done by two independent methods and both are reported:
 They agree for clean sites and disagree exactly where the answer is genuinely
 ambiguous (a distorted or half-way position), so the disagreement itself is
 the useful output. The "agree" column flags it.
+
+The single "site" column follows -main (projection by default, because its
+barycentric test is scale-free and so does not drift when the surface elements
+have different radii); the distance method stays next to it as the check that
+catches what projection structurally cannot see -- it ignores height, so an
+adsorbate that drifted away from the surface still gets a confident label,
+while d_min and height show it at once.
+
+Every atom also gets "sub_site": the same classification run against the
+SECOND substrate layer. The adsorbate does not bond to that layer, so this is
+a descriptor of what the site sits on rather than a site, and it stays a
+secondary column. For an ideal fcc(111) slab it only repeats fcc/hcp
+(hcp <=> sub_site 'top'). It earns its place where fcc/hcp says nothing: the
+subsurface ELEMENTS under the site on a substituted / HEA surface, which is
+what shifts the adsorption energy between otherwise identical sites.
 """
 
 import ast
@@ -75,8 +90,18 @@ SURFACE_SUFFIX = "_surface"
 
 # Site assignment defaults
 DEFAULT_DIST_TOL = 0.15     # nearest-neighbour distance window (fraction)
-DEFAULT_LAYER_TOL = 1.0     # A, thickness of one substrate layer
+# 1.2 A, not 1.0: a relaxed surface buckles, and atoms of one physical layer
+# then land in different groups, which is what actually breaks the projection
+# method (its triangulation would cover only part of the top layer). 1.2 A is
+# still well under the interlayer spacing of a close-packed metal (~2 A), so
+# layer 1 and layer 2 do not merge. Raise it with -layer_tol for a rough slab.
+DEFAULT_LAYER_TOL = 1.2     # A, thickness of one substrate layer
 DEFAULT_HCP_TOL = 0.8       # A, in-plane match to a second-layer atom
+# Which method fills the single 'site' column and the per-structure summary.
+# Projection is the primary one: it is scale-free (barycentric weights), so a
+# substituted surface whose elements have different radii does not shift the
+# answer the way a distance window can.
+DEFAULT_MAIN_METHOD = "proj"
 BARY_TOP_MIN = 0.60         # barycentric weight above which it is a vertex
 BARY_EDGE_MAX = 0.15        # barycentric weight below which the vertex is out
 
@@ -645,15 +670,49 @@ def site_by_projection(atoms, adsorbate_index, top_layer, second_layer, normal,
     }
 
 
+def classify_atom(atoms, index, layer, next_layer, normal, basis,
+                  dist_tol=DEFAULT_DIST_TOL, hcp_tol=DEFAULT_HCP_TOL):
+    """
+    Run both methods against ONE substrate layer and return (dist, proj).
+
+    `next_layer` is used only to tell fcc from hcp, i.e. to ask whether
+    anything sits directly under a three-fold hollow.
+    """
+    by_dist = site_by_distance(atoms, index, layer, next_layer, normal,
+                               dist_tol=dist_tol, hcp_tol=hcp_tol)
+    by_proj = site_by_projection(atoms, index, layer, next_layer, normal,
+                                 basis, hcp_tol=hcp_tol)
+    return by_dist, by_proj
+
+
+def site_label(result):
+    """'hollow3-fcc' from one method's result dict."""
+    site = result.get("site", "")
+    flavour = result.get("flavour", "")
+    return site + ("-" + flavour if flavour else "")
+
+
+UNRESOLVED = ("unresolved", "unavailable")
+
+
 # -----------------------------------------------------------------------------
 # Site analysis of one structure
 # -----------------------------------------------------------------------------
 
 def analyze_sites(atoms, adsorbate_elements, substrate_elements=None,
                   dist_tol=DEFAULT_DIST_TOL, layer_tol=DEFAULT_LAYER_TOL,
-                  hcp_tol=DEFAULT_HCP_TOL):
+                  hcp_tol=DEFAULT_HCP_TOL, main=DEFAULT_MAIN_METHOD):
     """
     Adsorption site of every adsorbate atom of one structure, by both methods.
+
+    Besides the site on the top layer, the same classification is run against
+    the SECOND substrate layer ("sub_site"). The adsorbate does not bond to
+    that layer, so it is a descriptor of what the site sits on, not a site of
+    its own -- which is why it stays a secondary column. On an ideal fcc(111)
+    slab it repeats the fcc/hcp answer (hcp <=> sub_site 'top'); what it adds
+    is the case fcc/hcp cannot express: which SUBSURFACE elements are under
+    the site on a substituted / HEA surface, and a second layer that relaxed
+    out of ideal stacking.
 
     Returns (rows, info). Every row is one adsorbate atom; info carries the
     slab normal, the vacuum gap and any warning worth printing once.
@@ -677,14 +736,17 @@ def analyze_sites(atoms, adsorbate_elements, substrate_elements=None,
     axis, gap, _origin = AlloyGen._largest_vacuum_axis(atoms)
     normal, u1, u2, cell_vectors = surface_frame(atoms, axis)
     coord = normal_coordinate(atoms, axis, normal)
+    basis = (u1, u2, cell_vectors)
     info["axis"] = "xyz"[axis]
     info["vacuum_gap"] = float(gap)
+    warnings_seen = []
     if gap < AlloyGen.VACUUM_MIN_GAP:
-        info["warning"] = ("largest vacuum gap is only %.2f A, so 'surface' is "
-                           "not well defined here" % gap)
+        warnings_seen.append("largest vacuum gap is only %.2f A, so 'surface' is "
+                             "not well defined here" % gap)
 
     substrate_mid = float(np.mean(coord[sub_idx]))
     rows = []
+    thin_layer_reported = False
     for index in ads_idx:
         # Which face of the slab this atom sits on decides which layer is "top".
         side = 1.0 if coord[index] >= substrate_mid else -1.0
@@ -692,36 +754,88 @@ def analyze_sites(atoms, adsorbate_elements, substrate_elements=None,
         groups = layer_groups(signed, sub_idx, layer_tol)
         top_layer = groups[0]
         second_layer = groups[1] if len(groups) > 1 else []
+        third_layer = groups[2] if len(groups) > 2 else []
 
-        by_dist = site_by_distance(atoms, index, top_layer, second_layer, normal,
-                                   dist_tol=dist_tol, hcp_tol=hcp_tol)
-        by_proj = site_by_projection(atoms, index, top_layer, second_layer, normal,
-                                     (u1, u2, cell_vectors), hcp_tol=hcp_tol)
-        height = float(signed[index] - np.mean(signed[top_layer]))
+        # A top layer much thinner than the layers below it means the split is
+        # cutting through one buckled layer -- the one failure mode of the
+        # projection method, and -layer_tol is the knob for it.
+        widest = max(len(group) for group in groups)
+        if not thin_layer_reported and len(groups) > 1 and len(top_layer) < 0.6 * widest:
+            warnings_seen.append("top layer holds %d atom(s) against %d in the "
+                                 "widest layer -- the surface may be buckled by "
+                                 "more than -layer_tol (%.2f A)"
+                                 % (len(top_layer), widest, layer_tol))
+            thin_layer_reported = True
+
+        by_dist, by_proj = classify_atom(atoms, index, top_layer, second_layer,
+                                         normal, basis, dist_tol=dist_tol,
+                                         hcp_tol=hcp_tol)
         agree = "same" if by_dist["site"] == by_proj.get("site") else "DIFF"
-        if by_proj.get("site") in ("unresolved", "unavailable"):
+        if by_proj.get("site") in UNRESOLVED:
             agree = by_proj["site"]
+
+        # The single 'site' column follows -main, but never hides an answer:
+        # when the primary method cannot resolve the position the other one
+        # fills in, and the agree column is what says so.
+        primary, secondary = ((by_proj, by_dist) if main == "proj"
+                              else (by_dist, by_proj))
+        if primary.get("site") in UNRESOLVED:
+            primary = secondary
+        main_neighbours = primary.get("neighbour_labels", "")
+
+        sub_site, sub_neighbours, d_min_sub = "", "", None
+        if second_layer:
+            sub_dist, sub_proj = classify_atom(atoms, index, second_layer,
+                                               third_layer, normal, basis,
+                                               dist_tol=dist_tol, hcp_tol=hcp_tol)
+            sub_primary = sub_proj if main == "proj" else sub_dist
+            if sub_primary.get("site") in UNRESOLVED:
+                sub_primary = sub_dist
+            sub_site = site_label(sub_primary)
+            sub_neighbours = sub_primary.get("neighbour_labels", "")
+            d_min_sub = round(float(sub_dist["d_min"]), 3)
+
+        height = float(signed[index] - np.mean(signed[top_layer]))
         rows.append({
             "atom": label_atom(atoms, index),
             "element": symbols[index],
             "atom_no": index + 1,
             "side": "top" if side > 0 else "bottom",
-            "site_dist": by_dist["site"] + (("-" + by_dist["flavour"]) if by_dist["flavour"] else ""),
-            "neighbors_dist": by_dist["neighbour_labels"],
-            "d_min (A)": round(by_dist["d_min"], 3),
-            "height (A)": round(height, 3),
-            "site_proj": by_proj["site"] + (("-" + by_proj["flavour"]) if by_proj.get("flavour") else ""),
-            "neighbors_proj": by_proj.get("neighbour_labels", ""),
+            "site": site_label(primary),
+            "neighbors": main_neighbours,
             "agree": agree,
+            "sub_site": sub_site,
+            "sub_neighbors": sub_neighbours,
+            "site_dist": site_label(by_dist),
+            "neighbors_dist": by_dist["neighbour_labels"],
+            "site_proj": site_label(by_proj),
+            "neighbors_proj": by_proj.get("neighbour_labels", ""),
+            "d_min (A)": round(by_dist["d_min"], 3),
+            "d_min_sub (A)": d_min_sub,
+            "height (A)": round(height, 3),
         })
+    info["warning"] = "; ".join(warnings_seen)
     return rows, info
 
 
 def summarize_sites(rows):
-    """One short string per structure: 'Li#33 top / S#35 hollow3-fcc'."""
+    """
+    One short string per structure: 'Li#33 top>hollow3 / S#35 hollow3-fcc'.
+
+    The sub-layer part is appended only where it says something new. For a
+    three-fold hollow the fcc/hcp flavour already IS the second-layer answer,
+    so repeating it would only make the line longer.
+    """
     if not rows:
         return ""
-    return " / ".join("%s %s" % (row["atom"], row["site_dist"]) for row in rows)
+    pieces = []
+    for row in rows:
+        label = row["site"]
+        sub = row.get("sub_site") or ""
+        if sub and not label.startswith("hollow3"):
+            label = "%s>%s" % (label, sub.split("-")[0])
+        pieces.append("%s %s" % (row["atom"], label))
+    return " / ".join(pieces)
 
 
 # -----------------------------------------------------------------------------
@@ -731,7 +845,7 @@ def summarize_sites(rows):
 def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
                 ads_override=None, pool_override=None, dist_tol=DEFAULT_DIST_TOL,
                 layer_tol=DEFAULT_LAYER_TOL, hcp_tol=DEFAULT_HCP_TOL,
-                quiet=False):
+                main=DEFAULT_MAIN_METHOD, quiet=False):
     """
     Analyze one AlloyGen output set and return (table, site_table, info).
 
@@ -832,7 +946,8 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
                 site_result, site_info = analyze_sites(
                     atoms, resolved["elements"],
                     substrate_elements=resolved.get("substrate"),
-                    dist_tol=dist_tol, layer_tol=layer_tol, hcp_tol=hcp_tol)
+                    dist_tol=dist_tol, layer_tol=layer_tol, hcp_tol=hcp_tol,
+                    main=main)
                 if site_info["warning"]:
                     info["warnings"].append("%s: %s" % (main_dir, site_info["warning"]))
                 for site_row in site_result:
