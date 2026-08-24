@@ -782,19 +782,37 @@ def _poscar_type_and_counts(base: str, fdf: FDFInfo) -> Tuple[str, str]:
     return type_line, count_line
 
 
-def _run_pos2car(pos_text: str) -> List[str]:
-    import subprocess
+def _find_pos2car() -> Path:
+    """
+    Locate pos2car.py, which ARC generation shells out to.
+    Searched in the current directory, next to this script, /home/work/bin, then $PATH.
+    Only the python version is supported on purpose - the perl pos2car.pl found on some
+    clusters does not produce equivalent output, so pos2car.py is deployed everywhere instead.
+    """
+    import shutil
 
     candidates = [
         Path("pos2car.py"),
         Path(__file__).resolve().with_name("pos2car.py"),
         Path("/home/work/bin/pos2car.py"),
     ]
-    pos2car = next((p for p in candidates if p.exists()), None)
-    if pos2car is None:
-        raise RuntimeError("pos2car.py not found (need it to generate ARC). Place it next to this script or in CWD.")
+    which = shutil.which("pos2car.py")
+    if which:
+        candidates.append(Path(which))
 
-    cmd = [sys.executable, str(pos2car)]
+    found = next((p for p in candidates if p.exists()), None)
+    if found is None:
+        raise RuntimeError(
+            "pos2car.py not found (need it to generate ARC). "
+            "Place it next to this script, in CWD, in /home/work/bin, or on $PATH."
+        )
+    return found
+
+
+def _run_pos2car(pos_text: str) -> List[str]:
+    import subprocess
+
+    cmd = [sys.executable, str(_find_pos2car())]
     p = subprocess.run(cmd, input=pos_text, text=True, capture_output=True)
     if p.returncode != 0:
         raise RuntimeError(f"pos2car.py failed: {p.stderr.strip()}")
