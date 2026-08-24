@@ -1038,30 +1038,42 @@ def extract_final_structure_cif(base: str, mdcar_files: List[Path], fdf: FDFInfo
     if step <= 0:
         raise RuntimeError("Could not infer number of steps from MD_CAR.")
 
-    type_line, count_line = _poscar_type_and_counts(base, fdf)
-
     stot = step * atom
     blk = lines[stot - atom: stot]
     if len(blk) != atom:
         raise RuntimeError("Last MD_CAR frame block is incomplete.")
 
-    # The coordinates in blk[6:] are assumed to be fractional (Direct), since MD_CAR is POSCAR-styled.
-    pos_lines: List[str] = [type_line]
-    pos_lines.extend(blk[1:5])
-    pos_lines.append(type_line)
-    pos_lines.append(count_line)
-    pos_lines.extend(blk[6:])
-    pos_text = "\n".join(pos_lines) + "\n"
-
     try:
-        from pymatgen.core import Structure
+        from pymatgen.core import Lattice, Structure
         from pymatgen.io.cif import CifWriter
     except ImportError as e:
         raise RuntimeError(
             "pymatgen is not installed (pip install pymatgen) - needed to write the final structure CIF."
         ) from e
 
-    structure = Structure.from_str(pos_text, fmt="poscar")
+    # Species are taken PER ATOM from the FDF, in coordinate order - not as a grouped
+    # "symbols + counts" POSCAR header. The FDF atom order may interleave species
+    # (CCpySIESTAInputGen.py defaults to no_sort: true, so atoms are not regrouped by element),
+    # and a grouped header would then silently label the atoms in the wrong order.
+    # This matches what _apply_fdf_symbols_to_car() does on the ARC path.
+    symbols = list(fdf.symbols)
+    if not symbols:
+        raise RuntimeError("No atomic species found in the FDF; cannot label the final structure.")
+
+    scale = float(blk[1].split()[0])
+    matrix = [[float(v) * scale for v in blk[i].split()[:3]] for i in (2, 3, 4)]
+
+    mode = blk[6].strip().lower()
+    cartesian = mode.startswith(("c", "k"))  # Cartesian / Kartesisch; MD_CAR normally writes Direct
+
+    coord_lines = [ln for ln in blk[7:] if ln.strip()]
+    if len(coord_lines) < len(symbols):
+        raise RuntimeError(
+            f"Last MD_CAR frame has {len(coord_lines)} coordinate lines but the FDF declares {len(symbols)} atoms."
+        )
+    coords = [[float(v) for v in ln.split()[:3]] for ln in coord_lines[:len(symbols)]]
+
+    structure = Structure(Lattice(matrix), symbols, coords, coords_are_cartesian=cartesian)
     out_cif.parent.mkdir(parents=True, exist_ok=True)
     CifWriter(structure).write_file(str(out_cif))
 
