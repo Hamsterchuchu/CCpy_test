@@ -763,6 +763,29 @@ def _find_mdcar_markers(lines: List[str], marker: str) -> List[int]:
     return [i for i, ln in enumerate(lines) if marker in ln]
 
 
+def _mdcar_frame_starts(lines: List[str], base: str) -> Tuple[int, List[int]]:
+    """
+    Return (lines_per_frame, start index of every COMPLETE frame) for an MD_CAR.
+
+    The previous formula was step = int(idxs[-1] / atom), which counts the frames that START
+    before the last marker - i.e. it silently dropped the last frame, so the "final" structure
+    was really the second-to-last one. Every marker starts a frame, so the count is simply the
+    number of markers, minus a trailing frame whose block is cut short (interrupted run).
+    """
+    idxs = _find_mdcar_markers(lines, base)
+    if len(idxs) < 2:
+        raise RuntimeError("MD_CAR frame markers not found (need >=2 occurrences of basename in MD_CAR)")
+
+    atom = idxs[1] - idxs[0]
+    if atom <= 7:
+        raise RuntimeError(f"Invalid MD_CAR block length inferred: {atom}")
+
+    starts = [i for i in idxs if i + atom <= len(lines)]
+    if not starts:
+        raise RuntimeError("Could not infer number of steps from MD_CAR.")
+    return atom, starts
+
+
 def _poscar_type_and_counts(base: str, fdf: FDFInfo) -> Tuple[str, str]:
     lf = Path("list")
     if lf.exists():
@@ -927,28 +950,23 @@ def _apply_fdf_symbols_to_car(car_lines: List[str], symbols: List[str]) -> List[
 
 def write_arc_from_lines(base: str, mdcar_lines: List[str], mde: MDEData, fdf: FDFInfo, out_arc: Path):
     lines = list(mdcar_lines)
-    idxs = _find_mdcar_markers(lines, base)
-    if len(idxs) < 2:
-        raise RuntimeError("MD_CAR frame markers not found (need >=2 occurrences of basename in MD_CAR)")
+    atom, starts = _mdcar_frame_starts(lines, base)
+    step = len(starts)
 
-    atom = idxs[1] - idxs[0]
-    if atom <= 7:
-        raise RuntimeError(f"Invalid MD_CAR block length inferred: {atom}")
-
-    end_line_no = idxs[-1] + 1
-    step = int((end_line_no - 1) / atom)
-    if step <= 0:
-        raise RuntimeError("Could not infer number of steps from MD_CAR.")
-
-    energies = mde.energy_col4[1:] if len(mde.energy_col4) > 1 else mde.energy_col4
+    # Energies are aligned to the frames FROM THE END, so the last frame always gets the last
+    # MDE energy. The old code took energy_col4[1:] and indexed from the front, which paired the
+    # last written frame with the last energy only because it was writing one frame too few;
+    # now that the final frame is included, aligning from the end keeps that pairing intact
+    # whether the MDE has one more row than the MD_CAR has frames or exactly as many.
+    energies = mde.energy_col4
+    e_offset = len(energies) - step
 
     type_line, count_line = _poscar_type_and_counts(base, fdf)
 
     out_arc.parent.mkdir(parents=True, exist_ok=True)
     with out_arc.open("w") as fw:
         for i in range(1, step + 1):
-            stot = i * atom
-            blk = lines[stot - atom: stot]
+            blk = lines[starts[i - 1]: starts[i - 1] + atom]
             if len(blk) != atom:
                 break
 
@@ -966,7 +984,11 @@ def write_arc_from_lines(base: str, mdcar_lines: List[str], mde: MDEData, fdf: F
 
             car_lines = _apply_fdf_symbols_to_car(car_lines, fdf.symbols)
 
-            e = float(energies[i - 1]) if (i - 1) < len(energies) else float(energies[-1])
+            if len(energies):
+                e_idx = min(max(e_offset + (i - 1), 0), len(energies) - 1)
+                e = float(energies[e_idx])
+            else:
+                e = 0.0
 
             if i == 1:
                 for ln in car_lines:
@@ -1025,21 +1047,9 @@ def extract_final_structure_cif(base: str, mdcar_files: List[Path], fdf: FDFInfo
     for path in mdcar_files:
         lines.extend(path.read_text(errors="ignore").splitlines())
 
-    idxs = _find_mdcar_markers(lines, base)
-    if len(idxs) < 2:
-        raise RuntimeError("MD_CAR frame markers not found (need >=2 occurrences of basename in MD_CAR)")
+    atom, starts = _mdcar_frame_starts(lines, base)
 
-    atom = idxs[1] - idxs[0]
-    if atom <= 7:
-        raise RuntimeError(f"Invalid MD_CAR block length inferred: {atom}")
-
-    end_line_no = idxs[-1] + 1
-    step = int((end_line_no - 1) / atom)
-    if step <= 0:
-        raise RuntimeError("Could not infer number of steps from MD_CAR.")
-
-    stot = step * atom
-    blk = lines[stot - atom: stot]
+    blk = lines[starts[-1]: starts[-1] + atom]
     if len(blk) != atom:
         raise RuntimeError("Last MD_CAR frame block is incomplete.")
 
