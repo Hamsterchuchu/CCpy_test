@@ -6,7 +6,7 @@ CCpySIESTAAnal.py
 Mixes the CLI style of CCpyVASPAnal.py (option-number based, sub-options like -sub, usage output) with
 the analysis logic of siesta_analyze.py (energy/force convergence, ARC generation, TIMES scan, etc.).
 
-- Option 1 : extract only the final structure (last MD_CAR frame -> <dirname>_final.car, collected in the parent folder)
+- Option 1 : extract only the final structure (last MD_CAR frame parsed with pymatgen -> <dirname>_final.cif, collected in the parent folder)
 - Option 3 : full analysis of a single current directory (same as the main() logic of siesta_analyze.py)
 - Options 0, 2 : select several SIESTA job directories and batch process (style of options 0, 2 in CCpyVASPAnal.py)
 - -time : scan TIMES files (the --time logic of siesta_analyze.py)
@@ -992,12 +992,13 @@ def write_arc_from_files(base: str, mdcar_files: List[Path], mde: MDEData, fdf: 
     write_arc_from_lines(base, lines, mde, fdf, out_arc)
 
 
-def extract_final_structure_car(base: str, mdcar_files: List[Path], fdf: FDFInfo, out_car: Path) -> None:
+def extract_final_structure_cif(base: str, mdcar_files: List[Path], fdf: FDFInfo, out_cif: Path) -> None:
     """
-    Instead of an ARC (full trajectory), take only the last MD_CAR frame and save it as a single-structure .car file.
-    Reuses the same block slicing/pos2car.py/FDF symbol reordering logic as write_arc_from_lines(), but
-    writes the single-structure CAR content made by pos2car.py as is, without the ARC-specific
-    trajectory format (energy line + end/end repeated twice).
+    Instead of an ARC (full trajectory), take only the last MD_CAR frame and save it as a CIF,
+    parsed with pymatgen rather than the external pos2car script. This is the same approach as
+    VASPOutput.getFinalStructure() in CCpyVASPAnal.py (pymatgen IStructure.from_file + CifWriter),
+    so it does not depend on whether a given cluster has pos2car.py / pos2car.pl installed
+    (or on which perl modules that script needs).
     """
     if not mdcar_files:
         raise RuntimeError("No MD_CAR files found to merge.")
@@ -1026,6 +1027,7 @@ def extract_final_structure_car(base: str, mdcar_files: List[Path], fdf: FDFInfo
     if len(blk) != atom:
         raise RuntimeError("Last MD_CAR frame block is incomplete.")
 
+    # The coordinates in blk[6:] are assumed to be fractional (Direct), since MD_CAR is POSCAR-styled.
     pos_lines: List[str] = [type_line]
     pos_lines.extend(blk[1:5])
     pos_lines.append(type_line)
@@ -1033,20 +1035,22 @@ def extract_final_structure_car(base: str, mdcar_files: List[Path], fdf: FDFInfo
     pos_lines.extend(blk[6:])
     pos_text = "\n".join(pos_lines) + "\n"
 
-    car_lines = _run_pos2car(pos_text)
-    if len(car_lines) < 5:
-        raise RuntimeError("pos2car output too short; cannot compose final structure file.")
+    try:
+        from pymatgen.core import Structure
+        from pymatgen.io.cif import CifWriter
+    except ImportError as e:
+        raise RuntimeError(
+            "pymatgen is not installed (pip install pymatgen) - needed to write the final structure CIF."
+        ) from e
 
-    car_lines = _apply_fdf_symbols_to_car(car_lines, fdf.symbols)
-
-    out_car.parent.mkdir(parents=True, exist_ok=True)
-    with out_car.open("w") as fw:
-        for ln in car_lines:
-            fw.write(ln + "\n")
+    structure = Structure.from_str(pos_text, fmt="poscar")
+    out_cif.parent.mkdir(parents=True, exist_ok=True)
+    CifWriter(structure).write_file(str(out_cif))
 
 
 def run_final_structure(base: Optional[str] = None, out_name: Optional[str] = None) -> Optional[Path]:
-    """Used in option 1: extract only the final structure of the current directory SIESTA job to {base}_final.car."""
+    """Used in option 1: extract only the final structure of the current directory SIESTA job
+    to {base}_final.cif, parsed with pymatgen."""
     base = base or infer_basename_from_fdf()
 
     restart_dirs = collect_restart_dirs()
@@ -1063,15 +1067,15 @@ def run_final_structure(base: Optional[str] = None, out_name: Optional[str] = No
         print(f"[{base}] Failed to parse {base}.fdf: {e}")
         return None
 
-    out_car = Path(out_name or f"{base}_final.car")
+    out_cif = Path(out_name or f"{base}_final.cif")
     try:
-        extract_final_structure_car(base, mdcar_files, fdf_info, out_car)
+        extract_final_structure_cif(base, mdcar_files, fdf_info, out_cif)
     except Exception as e:
         print(f"[{base}] Failed to extract final structure: {e}")
         return None
 
-    print(f"* Saved final structure to {out_car.name}")
-    return out_car
+    print(f"* Saved final structure to {out_cif.name}")
+    return out_cif
 
 
 # ----------------------------
@@ -1432,26 +1436,29 @@ How to use : CCpySIESTAAnal.py [option] [sub_option1] [sub_option2..]
     ex) CCpySIESTAAnal.py 0
     ex) CCpySIESTAAnal.py 0 -sub
 
- 1 : Extract ONLY the final structure (last MD_CAR frame, via pos2car.py +
-     FDF atom order) as a standalone <dirname>_final.car file - no full ARC
-     trajectory. Shows an interactive picker (CCpySIESTABandSubmit.py style):
+ 1 : Extract ONLY the final structure (last MD_CAR frame, parsed with
+     pymatgen - same approach as CCpyVASPAnal.py's getFinalStructure) as a
+     standalone <dirname>_final.cif file - no full ARC trajectory, no
+     pos2car.py/pos2car.pl dependency (so it works the same regardless of
+     what's installed on a given cluster). Shows an interactive picker
+     (CCpySIESTABandSubmit.py style):
          1 : Ti2CTx_O_NT_2
          2 : Ti2CTx_O_NT_Bandtest
          ...
          0 : All directories
          choose file :
      (accepts a single number, a comma/range list like 1-3,5, or 0 for all)
-     By default the .car is written ONE LEVEL UP from each job directory
+     By default the .cif is written ONE LEVEL UP from each job directory
      (so all final structures land together, not buried among each job's
      own output files) - use -here to write it inside the job directory
-     instead (as <base>_final.car).
+     instead (as <base>_final.cif).
     ex) CCpySIESTAAnal.py 1
     ex) CCpySIESTAAnal.py 1 -sub                  -> search sub-directories recursively
     ex) CCpySIESTAAnal.py 1 -a                    -> select all directories, no prompt
     ex) CCpySIESTAAnal.py 1 -systems=1-3,5        -> pick specific numbers, no prompt
     ex) CCpySIESTAAnal.py 1 -here                 -> save inside each job dir instead of the parent
     ex) CCpySIESTAAnal.py 1 --base=SystemName     -> override basename (applies to every selected dir)
-    ex) CCpySIESTAAnal.py 1 --out=final_structure.car   -> explicit path/name (single dir only)
+    ex) CCpySIESTAAnal.py 1 --out=final_structure.cif   -> explicit path/name (single dir only)
 
  2 : Get final total energy list across SIESTA job directories
      -> saves 03_<folder>_FinalEnergies.txt / .csv / .png
@@ -1542,9 +1549,9 @@ elif sys.argv[1] == "1":
     out_name = _get_kv_arg("out", None, str)
     preselect = _get_kv_arg("systems", None, str)
     ask = "-a" not in sys.argv
-    # 기본값: 각 job 디렉토리의 "상위" 폴더에 <디렉토리이름>_final.car 로 모아서 저장
-    # (계산 폴더 안에 넣으면 파일이 너무 많아서 안 보이므로). -here 주면 예전처럼
-    # job 디렉토리 안에 <base>_final.car 로 저장.
+    # Default: collect them in the PARENT folder of each job directory as <dirname>_final.cif
+    # (putting them inside the calculation folder buries them among the many output files).
+    # With -here, save inside the job directory as <base>_final.cif instead.
     write_here = "-here" in sys.argv
 
     dirs = find_siesta_dirs("./", sub=sub)
@@ -1563,9 +1570,9 @@ elif sys.argv[1] == "1":
             if out_name:
                 this_out = out_name
             elif write_here:
-                this_out = None  # use the run_final_structure default (<base>_final.car)
+                this_out = None  # use the run_final_structure default (<base>_final.cif)
             else:
-                this_out = str(Path("..") / f"{dirname}_final.car")
+                this_out = str(Path("..") / f"{dirname}_final.cif")
             run_final_structure(base=base, out_name=this_out)
         except Exception as e:
             print(f"Error extracting final structure for {d}: {e}")
