@@ -1351,6 +1351,28 @@ _WARNING_DEFS = [
 # and no error message, it is more likely dead than "still running", so it is marked separately.
 _STALE_SECONDS = 600
 
+# Main reason option 0 (bulk status check over many jobs) was slow: a SIESTA .out file grows to
+# hundreds of MB or even several GB when there are many relax/MD steps, and the status check was
+# read_text()-ing all of it for every job. The head (atom-overlap warnings and the like are usually
+# printed near the top) and the tail (End of run / fatal errors are usually printed at the very end)
+# are enough, so cap the read at head+tail bytes regardless of file size.
+_STATUS_HEAD_BYTES = 200_000
+_STATUS_TAIL_BYTES = 200_000
+
+
+def _read_out_snippet(path: Path, head_bytes: int = _STATUS_HEAD_BYTES, tail_bytes: int = _STATUS_TAIL_BYTES) -> str:
+    """Read only what the status check needs (head + tail), to avoid reading a huge .out in full."""
+    size = path.stat().st_size
+    if size <= head_bytes + tail_bytes:
+        return path.read_text(errors="ignore")
+
+    with path.open("rb") as f:
+        head = f.read(head_bytes)
+        f.seek(max(0, size - tail_bytes))
+        tail = f.read()
+
+    return (head + b"\n...[truncated - only head/tail scanned]...\n" + tail).decode(errors="ignore")
+
 
 def get_siesta_status(d) -> Dict[str, Optional[str]]:
     """
@@ -1363,6 +1385,13 @@ def get_siesta_status(d) -> Dict[str, Optional[str]]:
     - Warning phrases such as "Atoms .. too close" / "Bad DM normalization" are
       appended after the status as [Warning: ...] together with their counts
       (can show up even if it ended as Converged - geometry is odd but SCF itself ran)
+    Performance: only part of the .out file (head/tail, 200KB each by default, via
+      _read_out_snippet) is read rather than the whole thing. A SIESTA .out with many relax/MD
+      steps can reach hundreds of MB or GB, so option 0 - which sweeps many jobs at once - gets
+      very slow if it reads them in full. The trade-off: on a very large file whose "Atoms too
+      close" style warnings sit only in the middle, the warning count can come out lower than
+      the real one (the Error/Converged verdict itself is unaffected, since those phrases almost
+      always appear at the very start or the very end of the file).
     (Heuristic - if you hit error wording different from this, report it so it can be tuned more precisely)
     """
     d = Path(d)
@@ -1380,7 +1409,7 @@ def get_siesta_status(d) -> Dict[str, Optional[str]]:
     if out_path is None:
         return {"base": base, "status": "Not started", "detail": "no .out file"}
 
-    text = out_path.read_text(errors="ignore")
+    text = _read_out_snippet(out_path)
     has_end = ">> End of run:" in text
     err_match = _ERROR_RE.search(text)
 
