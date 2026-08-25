@@ -3747,6 +3747,17 @@ def generate_ccpy_vasp_inputs(
             if os.path.abspath(reuse_src) != os.path.abspath(".prev_incar.yaml"):
                 shutil.copy(reuse_src, ".prev_incar.yaml")
             _normalize_prev_incar()
+            # -- VASPio 는 .prev_incar.yaml 옆에 "사용자가 직접 고친 INCAR 키" 목록
+            #    (.prev_incar_user_edits.yaml) 을 같이 남긴다. 그 목록이 있어야
+            #    twin 폴더에서도 -ldau/-mag 등이 사용자 값을 덮어쓰지 않는다.
+            #    원본에 없으면 이 폴더에 남아 있던 옛 목록을 지운다.
+            _lock_name = ".prev_incar_user_edits.yaml"
+            _lock_src = os.path.join(os.path.dirname(os.path.abspath(reuse_src)), _lock_name)
+            if os.path.isfile(_lock_src):
+                if os.path.abspath(_lock_src) != os.path.abspath(_lock_name):
+                    shutil.copy(_lock_src, _lock_name)
+            elif os.path.isfile(_lock_name):
+                os.remove(_lock_name)
 
         interactive_first = not (batch or reuse_incar_from)
         template_dir = None          # folder whose INCAR/KPOINTS/POTCAR we reuse

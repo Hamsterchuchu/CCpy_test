@@ -42,6 +42,48 @@ if version[0] == '3':
 ENCUT_SCALE = 1.3
 ENCUT_ROUND = 10
 
+# -- 여러 구조를 한 번에 만들 때("Use this INCAR to others? (y/n)" -> y),
+#    첫 구조의 "Anything want to modify or add?" 단계에서 사용자가 직접 타이핑한
+#    INCAR 키 이름을 기록해 두는 파일. 뒤이은 구조들은 이 목록에 있는 키에 대해
+#    -isif / -ldau / -mag / -vdw / -sp / -spin 같은 커맨드 옵션의 기본값 재적용을
+#    건너뛰고, 물려받은 사용자 값을 그대로 유지한다 (.prev_incar.yaml 의 짝 파일).
+USER_EDIT_LOCK_FILE = ".prev_incar_user_edits.yaml"
+# -- 예전 버전이 ENCUT 만을 위해 쓰던 파일. 이제 위 파일로 통합되었고, 남아 있으면 지운다.
+LEGACY_ENCUT_LOCK_FILE = ".prev_incar_encut_locked"
+
+
+def incar_key_base(key):
+    """INCAR 키에서 주석 표시와 공백을 떼어낸 비교용 이름. ('# LDAUU' -> 'LDAUU')"""
+    return str(key).replace("#", "").strip().upper()
+
+
+def load_user_edited_keys(path=USER_EDIT_LOCK_FILE):
+    """USER_EDIT_LOCK_FILE 에 저장된, 사용자가 직접 고친 INCAR 키 집합을 읽는다."""
+    if not os.path.isfile(path):
+        return set()
+    try:
+        with open(path) as f:
+            data = yaml.load(f, Loader=yaml.FullLoader)
+    except Exception:
+        return set()
+    if isinstance(data, dict):
+        data = data.get("user_edited_keys", [])
+    if not data:
+        return set()
+    return set(incar_key_base(k) for k in data)
+
+
+def save_user_edited_keys(keys, path=USER_EDIT_LOCK_FILE):
+    """사용자가 직접 고친 INCAR 키 집합을 .prev_incar.yaml 의 짝 파일로 남긴다."""
+    yaml_str = yaml.dump({"user_edited_keys": sorted(keys)},
+                         default_flow_style=False, sort_keys=False)
+    file_writer(path, yaml_str)
+    if os.path.exists(LEGACY_ENCUT_LOCK_FILE):
+        try:
+            os.remove(LEGACY_ENCUT_LOCK_FILE)
+        except Exception:
+            pass
+
 
 class VASPInput():
     def __init__(self, filename=None, dirname=None, preset_yaml=None, additional_dir=False, refine_poscar=False, keep_files=[]):
@@ -263,12 +305,30 @@ class VASPInput():
 
         :return: no return, but write VASP input files at dirname
         """
-        # -- 이전 구조에서 사용자가 대화형으로 ENCUT 을 직접 타이핑했는지 표시하는 파일.
-        #    "다음 INCAR 도 동일하게?" 로 이어지는 구조들(get_pre_incar 지정)이 이 파일을
-        #    보고, 자기 자신의 POTCAR 로 자동 재계산할지 물려받은 값을 유지할지 정한다.
-        #    -encut= (encut 인자) 을 명시한 경우는 이 파일과 무관하게 항상 그 값이 최우선이다.
-        encut_lock_file = ".prev_incar_encut_locked"
-        user_locked_encut = bool(get_pre_incar) and encut is None and os.path.exists(encut_lock_file)
+        # -- 이전 구조의 "Anything want to modify or add?" 단계에서 사용자가 직접 타이핑한
+        #    INCAR 키 목록. "다음 INCAR 도 동일하게?" 로 이어지는 구조들(get_pre_incar 지정)
+        #    은 그 키들에 대해서는 아래의 옵션(-sp/-isif/-spin/-mag/-ldau/-vdw/ENCUT 자동지정)
+        #    재적용을 건너뛰고, 물려받은 사용자 값을 그대로 유지한다.
+        #    사용자가 손대지 않은 키는 지금까지와 똑같이 구조마다 다시 계산된다.
+        #    -encut= (encut 인자) 을 명시한 경우는 이 목록과 무관하게 항상 그 값이 최우선이다.
+        locked_keys = load_user_edited_keys() if get_pre_incar else set()
+
+        def locked(key):
+            """이 키를 사용자가 직접 고쳤는가 (= 옵션 기본값으로 덮어쓰면 안 되는가)"""
+            return incar_key_base(key) in locked_keys
+
+        def apply_opt(incar_dict, update, maintain_block=False):
+            """커맨드 옵션이 만든 값을 INCAR 에 반영하되, 사용자가 고친 키는 건드리지 않는다."""
+            update = OrderedDict((k, v) for k, v in update.items() if not locked(k))
+            if not update:
+                return incar_dict
+            return update_incar(incar_dict, update, maintain_block=maintain_block)
+
+        def set_opt(incar_dict, key, value):
+            """apply_opt 의 단일 키 버전 (주석 처리 여부를 바꾸지 않는 직접 대입)."""
+            if not locked(key):
+                incar_dict[key] = value
+            return incar_dict
 
         structure = self.structure
         dirname = self.dirname
@@ -331,11 +391,11 @@ class VASPInput():
 
         # -- Parsing system arguments from user commands
         if single_point:
-            incar_dict['NSW'] = 0
+            incar_dict = set_opt(incar_dict, 'NSW', 0)
         if isif:
-            incar_dict['ISIF'] = isif
+            incar_dict = set_opt(incar_dict, 'ISIF', isif)
         if spin:
-            incar_dict['ISPIN'] = 2
+            incar_dict = set_opt(incar_dict, 'ISPIN', 2)
 
         # -- edit magmom parameters
         magmom = self.magmom
@@ -359,9 +419,9 @@ class VASPInput():
             mag_string = incar_dict['MAGMOM']
 
         if mag:
-            incar_dict = update_incar(incar_dict, {"MAGMOM": mag_string})
+            incar_dict = apply_opt(incar_dict, {"MAGMOM": mag_string})
         elif 'MAGMOM' in incar_dict.keys() or '# MAGMOM' in incar_dict.keys():
-            incar_dict = update_incar(incar_dict, {"MAGMOM": mag_string}, maintain_block=True)
+            incar_dict = apply_opt(incar_dict, {"MAGMOM": mag_string}, maintain_block=True)
 
 
         # -- LDA+U parameters
@@ -413,9 +473,28 @@ class VASPInput():
             update_ldau = {"LDAU": val_ldau, "LMAXMIX": val_lmix, "LDAUTYPE": val_ldau_type,
                            "LDAUL": LDAUL_string, "LDAUU": LDAUU_string, "LDAUJ": LDAUJ_string}
             if ldau:           # if use ldau option, uncomment LDAU options
-                incar_dict = update_incar(incar_dict, update_ldau)
+                incar_dict = apply_opt(incar_dict, update_ldau)
             else:              # else, up to yaml file
-                incar_dict = update_incar(incar_dict, update_ldau, maintain_block=True)
+                incar_dict = apply_opt(incar_dict, update_ldau, maintain_block=True)
+
+        # -- 사용자가 직접 고친 원소 의존 값(MAGMOM / LDAUL / LDAUU / LDAUJ)은 위에서
+        #    덮어쓰지 않고 그대로 유지된다. 앞 구조와 조성이 다르면 항목 수가 맞지 않을
+        #    수 있으므로, 그런 경우에만 경고를 띄운다 (값은 사용자 지정대로 유지).
+        for locked_key, n_expected, unit in (("MAGMOM", len(n_of_atoms), "atom groups"),
+                                             ("LDAUL", len(elts), "elements"),
+                                             ("LDAUU", len(elts), "elements"),
+                                             ("LDAUJ", len(elts), "elements")):
+            if not locked(locked_key):
+                continue
+            kept = incar_dict.get(locked_key, incar_dict.get("# " + locked_key))
+            if kept is None:
+                continue
+            if len(str(kept).split()) != n_expected:
+                print(bcolors.WARNING
+                      + "* %s: keeping the value you typed for the previous structure (%s = %s), "
+                        "but this structure has %d %s. Check it before running."
+                        % (locked_key, locked_key, str(kept).strip(), n_expected, unit)
+                      + bcolors.ENDC)
 
         # vdw parameters
         if vdw:
@@ -427,28 +506,28 @@ class VASPInput():
                 for el in elements:
                     C6+=str(vdw_C6[el])+" "
                     R0+=str(vdw_R0[el])+" "
-                incar_dict['LVDW']=".TRUE."
-                incar_dict['VDW_RADIUS']=30.0
-                incar_dict['VDW_SCALING']=0.75
-                incar_dict['VDW_D']=20.0
-                incar_dict['VDW_C6']=C6
-                incar_dict['VDW_R0']=R0
+                incar_dict = set_opt(incar_dict, 'LVDW', ".TRUE.")
+                incar_dict = set_opt(incar_dict, 'VDW_RADIUS', 30.0)
+                incar_dict = set_opt(incar_dict, 'VDW_SCALING', 0.75)
+                incar_dict = set_opt(incar_dict, 'VDW_D', 20.0)
+                incar_dict = set_opt(incar_dict, 'VDW_C6', C6)
+                incar_dict = set_opt(incar_dict, 'VDW_R0', R0)
             elif vdw == "optb88":
-                incar_dict['LUSE_VDW'] = True
-                incar_dict['AGGAC'] = 0.0
-                incar_dict['GGA'] = "BO"
-                incar_dict['PARAM1'] = 0.183333333
-                incar_dict['PARAM2'] = 0.22
+                incar_dict = set_opt(incar_dict, 'LUSE_VDW', True)
+                incar_dict = set_opt(incar_dict, 'AGGAC', 0.0)
+                incar_dict = set_opt(incar_dict, 'GGA', "BO")
+                incar_dict = set_opt(incar_dict, 'PARAM1', 0.183333333)
+                incar_dict = set_opt(incar_dict, 'PARAM2', 0.22)
                 #shutil.copy('%s' % MODULE_DIR + '/vdw_kernel.bindat', './%s/' % dirname)
             elif vdw == "optb86b":
-                incar_dict['LUSE_VDW'] = True
-                incar_dict['AGGAC'] = 0.0
-                incar_dict['GGA'] = "MK"
-                incar_dict['PARAM1'] = 0.1234
-                incar_dict['PARAM2'] = 1.0
+                incar_dict = set_opt(incar_dict, 'LUSE_VDW', True)
+                incar_dict = set_opt(incar_dict, 'AGGAC', 0.0)
+                incar_dict = set_opt(incar_dict, 'GGA', "MK")
+                incar_dict = set_opt(incar_dict, 'PARAM1', 0.1234)
+                incar_dict = set_opt(incar_dict, 'PARAM2', 1.0)
                 #shutil.copy('%s' % MODULE_DIR + '/vdw_kernel.bindat', './%s/' % dirname)
             else:
-                if "LVDW" in incar_dict.keys():     # If LVDW=.TRUE. is defined, IVDW is automatically set to 1
+                if "LVDW" in incar_dict.keys() and not locked("LVDW"):     # If LVDW=.TRUE. is defined, IVDW is automatically set to 1
                     incar_dict = change_dict_key(incar_dict, "LVDW", "# LVDW", ".FALSE.")
                 if vdw == "D3":
                     ivdw = "11"
@@ -456,7 +535,7 @@ class VASPInput():
                     ivdw = "12"
                 elif vdw == "dDsC":
                     ivdw = "4"
-                incar_dict = update_incar(incar_dict, {"IVDW": ivdw})
+                incar_dict = apply_opt(incar_dict, {"IVDW": ivdw})
         if 'LUSE_VDW' in incar_dict.keys():
             if incar_dict['LUSE_VDW'] in [True, "True", ".True.", ".TRUE.", "T"]:
                 shutil.copy('%s' % MODULE_DIR + '/vdw_kernel.bindat', './%s/' % dirname)
@@ -537,12 +616,12 @@ class VASPInput():
 
             if encut is not None:
                 incar_dict = update_incar(incar_dict, {"ENCUT": str(encut)})
-            elif not user_locked_encut:
+            elif not locked("ENCUT"):
                 incar_dict = self.set_encut(incar_dict, potcar, pot_elt)
-            # else: 이전 구조에서 사용자가 ENCUT 을 직접 타이핑했다(encut_lock_file 참고).
+            # else: 이전 구조에서 사용자가 ENCUT 을 직접 타이핑했다(USER_EDIT_LOCK_FILE 참고).
             #       get_pre_incar 로 물려받은 그 값을 그대로 쓰고, 이 구조 자신의 POTCAR
             #       기준 자동 지정으로 덮어쓰지 않는다. ENCUT 을 건드리지 않은 경우라면
-            #       user_locked_encut 은 False 이므로 지금까지처럼 구조마다(Cu/Zn/Li 등)
+            #       locked("ENCUT") 이 False 이므로 지금까지처럼 구조마다(Cu/Zn/Li 등)
             #       각자의 POTCAR 로 독립적으로 자동 지정된다.
 
         ## --------------------------- Update INCAR  values -------------------------- ##
@@ -584,17 +663,17 @@ class VASPInput():
                 incar_string = incar_dict_to_str(incar_dict, incar_dict_desc)
                 incar = incar_string
 
-                # -- 이번 세션에서 사용자가 ENCUT 을 직접 타이핑했는지 기록해 둔다.
-                #    "다음 INCAR 도 동일하게?" 로 재사용되는 뒤이은 구조들이 이 표시를 보고
-                #    자동 지정을 건너뛸지 정한다 (위 encut_lock_file, user_locked_encut 참고).
-                #    -encut= 을 명시한 경우는 모든 구조가 이미 그 값으로 강제되므로 잠금이
-                #    필요 없다 (덮어쓸 일이 없다).
-                if encut is None:
-                    if "ENCUT" in warnings or "# ENCUT" in warnings:
-                        locked_value = incar_dict.get("ENCUT", incar_dict.get("# ENCUT", ""))
-                        file_writer(encut_lock_file, str(locked_value))
-                    elif os.path.exists(encut_lock_file):
-                        os.remove(encut_lock_file)
+                # -- 이번 세션에서 사용자가 직접 타이핑한 INCAR 키를 기록해 둔다.
+                #    "다음 INCAR 도 동일하게?" 로 재사용되는 뒤이은 구조들이 이 목록을 보고
+                #    해당 키에 대해서만 옵션 기본값 재적용(-ldau 의 LDAUU 재계산, -mag 의
+                #    MAGMOM 재계산, -isif/-vdw 값, ENCUT 자동 지정 등)을 건너뛴다.
+                #    (위 locked_keys / locked() / apply_opt() 참고)
+                #    -encut= 을 명시한 경우는 모든 구조가 이미 그 값으로 강제되므로 ENCUT 은
+                #    잠금 목록에서 뺀다 (덮어쓸 일이 없다).
+                edited_keys = set(incar_key_base(k) for k in warnings)
+                if encut is not None:
+                    edited_keys.discard("ENCUT")
+                save_user_edited_keys(edited_keys)
             else:
                 incar_string = incar_dict_to_str(incar_dict, incar_dict_desc)
                 incar = incar_string
@@ -610,6 +689,15 @@ class VASPInput():
         # sort_keys=False keeps the INCAR key order in the dumped file.
         yaml_str = yaml.dump(dict(incar_dict), default_flow_style=False, sort_keys=False)
         file_writer(".prev_incar.yaml", yaml_str)
+
+        # -- 사용자가 직접 고친 키 목록은 항상 .prev_incar.yaml 과 짝을 맞춰 남긴다.
+        #    (대화형 첫 구조는 위 INCAR 확인 단계에서 이미 기록했다)
+        #    get_pre_incar: 물려받은 목록을 그대로 유지 -> 3번째, 4번째 구조에도 이어진다.
+        #    batch 첫 구조: 사용자 입력이 없었으므로 이전 실행에서 남은 목록을 비운다.
+        if get_pre_incar:
+            save_user_edited_keys(locked_keys)
+        elif batch:
+            save_user_edited_keys(set())
 
 
         ## ----------------------------- Write inputs ---------------------------- ##
