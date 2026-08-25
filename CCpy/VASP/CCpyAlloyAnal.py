@@ -51,14 +51,13 @@ S000001 of the twin).
     The redox twins are assigned too, not just the main folder: whatever is
     left after a redox step usually relaxes into a different site, and that
     move is the comparison worth having. The site table gets one row per
-    adsorbate atom PER FOLDER, marked in the 'folder' column (main, r1, r2 ..),
-    and the per-structure table gets a Sites_r1 / Sites_r2 .. column beside
-    Sites. Atom numbers restart in every folder, so 'main_atom' carries the
-    number the same atom has in the main folder -- read down that column to
-    follow one atom across the redox steps. The map is read off the unrelaxed
-    POSCARs, which are identical apart from the removed atoms, so it is exact;
-    when a POSCAR is missing the column is left blank rather than guessed.
-    Turn it off with -no_twins (the main folder only).
+    adsorbate atom PER FOLDER, marked in the 'folder' column (main, r1, r2 ..).
+    Atom numbers restart in every folder, so 'atom' carries the number the
+    same atom has in the MAIN folder and 'local_no' the number it has in its
+    own -- read down the 'atom' column to follow one atom across the redox
+    steps. The map is read off the unrelaxed POSCARs, which are identical apart
+    from the removed atoms, so it is exact; without both POSCARs the column is
+    left blank rather than guessed. Turn it all off with -no_twins.
 
 2 : Energy differences against the twins, per structure:
         dE_surface = E(set) - E(set_surface)
@@ -159,6 +158,11 @@ every other atom is what makes them invisible.
   place by naming the SUBSURFACE elements under the site, which is what makes
   two geometrically identical sites of a substituted surface differ in energy.
 
+  The redox twins get their own fit, against `_rN - _surface` (option 4's
+  column, or the same number derived from option 2's two columns), so a twin's
+  rows carry contributions too -- read down one folder to see whether the
+  preference survives the redox step.
+
 [output files]
 04_[SET]_AlloyAnal.csv / .txt        : one row per structure (option 1-3)
 04_[SET]_AdsorptionSites.csv / .txt  : one row per adsorbate atom (option 1, 3)
@@ -249,21 +253,22 @@ for set_dir in sets:
         if ensembles is not None and len(ensembles):
             print("")
             print(ensembles.to_string())
-            fit = ensembles.attrs.get("fit") or {}
-            if fit:
-                print("* 'dE vs group avg' is a least-squares split of %s over the "
-                      "adsorbate sites of each structure (%d structures, %d terms"
-                      "%s)."
-                      % (fit["column"], fit["n_structures"], fit["n_terms"],
-                         ", %d left out as unconverged or far off the set"
-                         % fit["dropped"] if fit["dropped"] else ""))
-                print("  It explains R2=%s of the spread (residual RMS %s eV "
-                      "against a spread of %s eV). Compare values only WITHIN "
-                      "one element+site group: each is relative to the average "
-                      "ensemble of its own group, because the absolute level of "
-                      "a group is not identifiable when every structure holds "
-                      "the same number of each site type."
-                      % (fit["r2"], fit["rms"], fit["spread"]))
+            fits = ensembles.attrs.get("fit") or []
+            if fits:
+                print("* 'dE vs group avg' is a least-squares split of one energy "
+                      "column over the adsorbate sites of each structure, done "
+                      "per folder:")
+                for fit in fits:
+                    print("    %-6s %-26s %d structures, %d terms, R2=%s, "
+                          "residual RMS %s eV vs a spread of %s eV%s"
+                          % (fit["folder"], fit["column"], fit["n_structures"],
+                             fit["n_terms"], fit["r2"], fit["rms"], fit["spread"],
+                             "   (%d left out)" % fit["dropped"] if fit["dropped"] else ""))
+                print("  Compare values only WITHIN one folder + element + site "
+                      "group: each is relative to the average ensemble of its own "
+                      "group, because the absolute level of a group is not "
+                      "identifiable when every structure holds the same number of "
+                      "each site type.")
         disagreed = 0 if diff_table is None else len(diff_table)
         print("")
         print("* site methods: %d of %d atom(s) disagree"
