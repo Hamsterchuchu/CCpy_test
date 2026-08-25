@@ -45,7 +45,10 @@ Checks
  13b. the convergence columns are dropped, with one note, when the verdict
      could not be made for any folder (no vasp.out, or no custodian). The
      True/False path needs custodian and a vasp.out, so it is not covered here
- 14. a surface buckled by more than -layer_tol is REPORTED (that split is the
+ 14. the per-ensemble energy contribution is RECOVERED from a set built with
+     a known answer: structures whose hollow holds one Fe are made exactly
+     0.5 eV lower than the all-Pt ones, and the fit has to report that gap
+ 15. a surface buckled by more than -layer_tol is REPORTED (that split is the
      one real failure mode of the projection method), and raising -layer_tol
      puts the layer back together
 """
@@ -224,6 +227,32 @@ def build(root):
         put(os.path.join(root, "H_set_surface", sid),
             plain, -280.0 - 0.01 * number + (35.0 if number == 3 else 0.0))
 
+    # -- set I: a set whose answer is known. One S in an fcc hollow; in half
+    #    the structures one of the three atoms under it is Fe instead of Pt,
+    #    and those structures are given an energy exactly 0.5 eV lower. The
+    #    least-squares split has to hand that 0.5 eV back as the difference
+    #    between the two ensembles of the same (element, site) group.
+    i_slab = fcc111("Pt", size=(3, 3, 4), vacuum=10.0)
+    probe = i_slab.copy()
+    add_adsorbate(probe, "S", 1.8, "fcc")
+    zt = probe.get_positions()[:, 2].max()
+    top = [j for j in range(len(i_slab))
+           if abs(probe.get_positions()[j, 2] - probe.get_positions()[:len(i_slab), 2].max()) < 0.1]
+    near = sorted(top, key=lambda j: probe.get_distance(len(probe) - 1, j, mic=True))[:3]
+    for number in range(1, 25):
+        sid = "S%06d" % number
+        doped = i_slab.copy()
+        with_fe = (number % 2 == 0)
+        if with_fe:
+            symbols = doped.get_chemical_symbols()
+            symbols[near[0]] = "Fe"
+            doped.set_chemical_symbols(symbols)
+        one = doped.copy()
+        add_adsorbate(one, "S", 1.8, "fcc")
+        put(os.path.join(root, "I_set", sid), one,
+            -300.0 - (0.5 if with_fe else 0.0))
+        put(os.path.join(root, "I_set_surface", sid), doped, -280.0)
+
     # -- set D: top layer buckled by more than the default -layer_tol (1.2 A).
     #    Relaxation does this, and it is what tears the top layer in half: the
     #    projection method would then triangulate only the atoms that stayed
@@ -323,7 +352,7 @@ try:
     check("adsorbate came from the _surface twin",
           "_surface twin composition" in output)
     check("twins are not analysed as targets",
-          output.count("# ---------- ") == 8 and "_surface ---" not in output,
+          output.count("# ---------- ") == 9 and "_surface ---" not in output,
           output.count("# ---------- "))
     check("bottom-face adsorbate reported as bottom",
           sites[("C_set", "S000001", "Li")]["side"] == "bottom",
@@ -494,6 +523,21 @@ try:
           "with one note",
           "Converged" not in list(read_csv(os.path.join(work, "04_A_set_AlloyAnal.csv"))[0])
           and "convergence was not checked" in output)
+
+    # The known answer: Pt2Fe1 under the hollow is worth exactly -0.5 eV
+    # against Pt3, and the split has to return that difference.
+    ens = read_csv(os.path.join(work, "04_I_set_SiteEnsembles.csv"))
+    by_ens = {row["ensemble"]: row for row in ens if row["folder"] == "main"}
+    check("the energy split has a column at all", 
+          all("dE per site (eV)" in row for row in ens), list(ens[0]) if ens else None)
+    if {"Pt3", "Fe1Pt2"} <= set(by_ens):
+        gap = (float(by_ens["Fe1Pt2"]["dE per site (eV)"])
+               - float(by_ens["Pt3"]["dE per site (eV)"]))
+        check("the known -0.5 eV contribution is recovered", abs(gap + 0.5) < 0.05, gap)
+    else:
+        check("both ensembles of the known set appear", False, sorted(by_ens))
+    check("the fit reports how well it explains the set",
+          "explains R2=" in output, [l for l in output.splitlines() if "R2" in l])
 
     # The buckled slab: the warning has to appear, and -layer_tol has to fix it.
     default_run = run(work).stdout

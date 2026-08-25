@@ -125,7 +125,8 @@ DIFF_COLUMNS = ["Structure", "folder", "atom", "local_no",
                 "weights", "d_min (A)", "height (A)", "agree"]
 # The roll-up: how often each (site geometry, element composition) occurs.
 ENSEMBLE_COLUMNS = ["folder", "element", "site", "ensemble", "atoms",
-                    "structures", "mean d_min (A)", "mean height (A)"]
+                    "structures", "dE per site (eV)", "+- (eV)",
+                    "mean d_min (A)", "mean height (A)"]
 
 
 def _is_dir(path):
@@ -1194,10 +1195,9 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
                 info["warnings"].append("%s: no readable POSCAR/CONTCAR" % main_dir)
             else:
                 if resolved is None:
-                    # Which elements are the adsorbate is a property of the
-                    # SET, not of one structure -- every structure of a set has
-                    # the same composition. Resolving it once saves reading the
-                    # surface twin again for every structure.
+                    # WHICH ELEMENTS ARE THE ADSORBATE is a property of the set,
+                    # so it is resolved once instead of reading the surface twin
+                    # again for every structure.
                     surface_atoms = None
                     if surface_dir:
                         twin = surface_dir if single else os.path.join(surface_dir, structure_id)
@@ -1206,6 +1206,15 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
                     resolved = resolve_adsorbate_elements(
                         atoms, surface_atoms=surface_atoms, metadata=metadata,
                         ads_override=ads_override, pool_override=pool_override)
+                # ...but WHICH ELEMENTS FORM THE SURFACE is not: a set can hold
+                # structures with different substitution patterns, and one that
+                # has an element the first structure lacked would otherwise have
+                # those atoms dropped from its surface -- leaving a hole in the
+                # triangulation and a site assigned against the atoms that
+                # remain. Only an explicit -pool= fixes the list for the set.
+                substrate = pool_override or [
+                    element for element in sorted(set(atoms.get_chemical_symbols()))
+                    if element not in set(resolved["elements"])]
                 if info["adsorbate"] is None:
                     info["adsorbate"] = resolved
                 if not quiet and not adsorbate_reported:
@@ -1242,7 +1251,7 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
                 for folder_label, folder_dir, folder_atoms in folders:
                     site_result, site_info = analyze_sites(
                         folder_atoms, resolved["elements"],
-                        substrate_elements=resolved.get("substrate"),
+                        substrate_elements=substrate,
                         dist_tol=dist_tol, layer_tol=layer_tol, hcp_tol=hcp_tol,
                         main=main)
                     if site_info["warning"]:
@@ -1310,7 +1319,7 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
     info["skipped_ids"] = skipped_ids
     table = pd.DataFrame(rows)
     site_table, diff_table = split_site_tables(site_rows)
-    info["ensemble_table"] = ensemble_counts(site_rows)
+    info["ensemble_table"] = ensemble_counts(site_rows, rows)
     info["n_atoms_checked"] = len(site_rows)
     info["n_disagree"] = len(diff_table) if diff_table is not None else 0
     return table, site_table, diff_table, info
@@ -1352,7 +1361,129 @@ def energy_outliers(rows, floor=3.0, mad_factor=6.0):
     return found
 
 
-def ensemble_counts(site_rows):
+def ensemble_energy_fit(site_rows, rows, min_atoms=5):
+    """
+    How much each element combination contributes to the adsorption energy.
+
+    A structure carries ONE energy but several adsorbate atoms, so no site owns
+    a share of it outright. What can be done is to fit the shares: with the
+    structures of a set differing only in their substitution pattern,
+
+        dE(structure) = sum over its adsorbate atoms of contribution(site type)
+
+    is a least-squares problem whose unknowns are the per-(element, site,
+    ensemble) contributions. That is an ADDITIVITY assumption, and R^2 and the
+    residual RMS are reported so it can be judged rather than believed.
+
+    ⭐ Only differences WITHIN one (element, site) group are meaningful, and
+    that is what the returned numbers are -- each contribution is expressed
+    relative to the average ensemble of its own group. The reason is that every
+    structure of a set holds the same number of each site type (e.g. always two
+    fcc hollows and one bridge), so adding a constant to every bridge
+    contribution and taking it off every hollow one changes no prediction at
+    all: the absolute level of a group is not identifiable from this data, only
+    the spread inside it. Returning raw coefficients would put a precise-looking
+    number on something the data cannot say. The centring is a linear contrast,
+    so its standard error is exact, not approximated.
+
+    Structures whose energy could not be trusted -- an unconverged folder, or a
+    value far outside the set -- are left out of the fit.
+
+    Returns (contributions, stats): {key: (value, stderr)} keyed by
+    "element site ensemble", and a dict with r2 / rms / n_structures / column.
+    """
+    if not rows or not site_rows:
+        return {}, {}
+    frame = pd.DataFrame(rows)
+    column = None
+    for candidate in ("dE_surface (eV)", "main - _surface (eV)"):
+        if candidate in frame:
+            column = candidate
+            break
+    if column is None:
+        return {}, {}
+
+    energies = {}
+    suspect = set()
+    for _i, row in frame.iterrows():
+        if row.get("unconverged"):
+            suspect.add(row["Structure"])
+        value = pd.to_numeric(pd.Series([row.get(column)]), errors="coerce")[0]
+        if pd.notna(value):
+            energies[row["Structure"]] = float(value)
+    for odd in energy_outliers(rows).get(column, []):
+        suspect.add(odd)
+    for structure in suspect:
+        energies.pop(structure, None)
+    if len(energies) < 10:
+        return {}, {}
+
+    # counts[structure][key] -- only the main folder: the twins have their own
+    # energy columns and mixing them would fit two different quantities at once.
+    counts, totals = {}, Counter()
+    for row in site_rows:
+        if row.get("folder") != "main" or row["Structure"] not in energies:
+            continue
+        key = "%s %s %s" % (str(row["atom"]).split("#")[0], row["site"], row["ensemble"])
+        counts.setdefault(row["Structure"], Counter())[key] += 1
+        totals[key] += 1
+    if not counts:
+        return {}, {}
+
+    keys = sorted(k for k, n in totals.items() if n >= min_atoms)
+    if not keys:
+        return {}, {}
+    index = {k: i for i, k in enumerate(keys)}
+    structures = sorted(counts)
+    matrix = np.zeros((len(structures), len(keys) + 1))
+    target = np.zeros(len(structures))
+    for r, structure in enumerate(structures):
+        target[r] = energies[structure]
+        for key, n in counts[structure].items():
+            # Everything too rare to fit on its own still has to be in the sum,
+            # or its energy would be pushed onto the sites that are.
+            matrix[r, index.get(key, len(keys))] += n
+
+    coefficients, _res, _rank, _sv = np.linalg.lstsq(matrix, target, rcond=None)
+    residual = target - matrix.dot(coefficients)
+    rank = int(np.linalg.matrix_rank(matrix))
+    dof = max(1, len(structures) - rank)
+    variance = float(residual.dot(residual)) / dof
+    covariance = variance * np.linalg.pinv(matrix.T.dot(matrix))
+
+    # Centre within each (element, site) group -- see the note above.
+    groups = {}
+    for key in keys:
+        element, site, _ensemble = key.split(" ", 2)
+        groups.setdefault((element, site), []).append(key)
+    contributions = {}
+    for members in groups.values():
+        weights = np.array([totals[k] for k in members], dtype=float)
+        weights /= weights.sum()
+        for key in members:
+            contrast = np.zeros(len(keys) + 1)
+            contrast[index[key]] = 1.0
+            for other, weight in zip(members, weights):
+                contrast[index[other]] -= weight
+            value = float(contrast.dot(coefficients))
+            error = float(np.sqrt(max(0.0, contrast.dot(covariance).dot(contrast))))
+            contributions[key] = (round(value, 3), round(error, 3))
+
+    spread = target - target.mean()
+    stats = {
+        "column": column,
+        "n_structures": len(structures),
+        "n_terms": len(keys),
+        "r2": round(1.0 - float(residual.dot(residual)) / float(spread.dot(spread)), 3)
+              if float(spread.dot(spread)) > 0 else None,
+        "rms": round(float(np.sqrt(residual.dot(residual) / len(structures))), 3),
+        "spread": round(float(target.std()), 3),
+        "dropped": len(suspect),
+    }
+    return contributions, stats
+
+
+def ensemble_counts(site_rows, rows=None):
     """
     Count how often each (site geometry, element composition) is occupied.
 
@@ -1387,8 +1518,21 @@ def ensemble_counts(site_rows):
     }).reset_index()
     out["mean d_min (A)"] = out["mean d_min (A)"].round(3)
     out["mean height (A)"] = out["mean height (A)"].round(3)
+    contributions, stats = ensemble_energy_fit(site_rows, rows) if rows else ({}, {})
+    if contributions:
+        keys = out.element + " " + out.site + " " + out.ensemble
+        out["dE per site (eV)"] = [contributions.get(k, (None, None))[0]
+                                   if folder == "main" else None
+                                   for k, folder in zip(keys, out.folder)]
+        out["+- (eV)"] = [contributions.get(k, (None, None))[1]
+                          if folder == "main" else None
+                          for k, folder in zip(keys, out.folder)]
+        out.attrs["fit"] = stats
     out = out.sort_values(["folder", "element", "atoms"], ascending=[True, True, False])
-    return out[[c for c in ENSEMBLE_COLUMNS if c in out]].reset_index(drop=True)
+    columns = [c for c in ENSEMBLE_COLUMNS if c in out]
+    result = out[columns].reset_index(drop=True)
+    result.attrs["fit"] = out.attrs.get("fit", {})
+    return result
 
 
 def split_site_tables(site_rows):

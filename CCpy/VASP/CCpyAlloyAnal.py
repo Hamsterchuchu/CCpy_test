@@ -249,6 +249,21 @@ for set_dir in sets:
         if ensembles is not None and len(ensembles):
             print("")
             print(ensembles.to_string())
+            fit = ensembles.attrs.get("fit") or {}
+            if fit:
+                print("* 'dE per site' is a least-squares split of %s over the "
+                      "adsorbate sites of each structure (%d structures, %d terms"
+                      "%s)."
+                      % (fit["column"], fit["n_structures"], fit["n_terms"],
+                         ", %d left out as unconverged or far off the set"
+                         % fit["dropped"] if fit["dropped"] else ""))
+                print("  It explains R2=%s of the spread (residual RMS %s eV "
+                      "against a spread of %s eV). Compare values only WITHIN "
+                      "one element+site group: each is relative to the average "
+                      "ensemble of its own group, because the absolute level of "
+                      "a group is not identifiable when every structure holds "
+                      "the same number of each site type."
+                      % (fit["r2"], fit["rms"], fit["spread"]))
         disagreed = 0 if diff_table is None else len(diff_table)
         print("")
         print("* site methods: %d of %d atom(s) disagree"
