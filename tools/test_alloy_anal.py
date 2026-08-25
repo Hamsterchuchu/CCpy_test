@@ -224,6 +224,49 @@ def build(root):
         put(os.path.join(root, "H_set_surface", sid),
             plain, -280.0 - 0.01 * number + (35.0 if number == 3 else 0.0))
 
+    # -- set I: exercises check_converged()'s True/False path against real
+    #    custodian, plus the one edge case its own docstring does not spell
+    #    out: a folder that has OUTCAR and vasp.out but no vasp.done (a job
+    #    killed mid-run -- walltime, a dead node -- leaves exactly this). Only
+    #    the branch of vasp_status() that ALSO requires vasp.done fills in a
+    #    real True/False; without it the field stays at its unset default,
+    #    which is neither "True" nor "False" and must not be read as either.
+    incar_text = "NSW = 0\n"
+    outcar_text = "  free  energy   TOTEN  =  -100.0 eV\n reached required accuracy\n"
+    vaspout_clean = "running on 1 total cores\nWriting wavefunctions\n"
+    vaspout_error = "ZBRENT: fatal error in bracketing\nplease rerun with smaller EDIFF\n"
+
+    def put_vasp_run(directory, atoms, energy, vasp_out, mark_done):
+        put(directory, atoms, energy)
+        with open(os.path.join(directory, "INCAR"), "w") as f:
+            f.write(incar_text)
+        with open(os.path.join(directory, "OUTCAR"), "w") as f:
+            f.write(outcar_text)
+        with open(os.path.join(directory, "vasp.out"), "w") as f:
+            f.write(vasp_out)
+        if mark_done:
+            open(os.path.join(directory, "vasp.done"), "w").close()
+
+    i_main = plain.copy()
+    add_adsorbate(i_main, "S", 1.8, "fcc")
+    put_vasp_run(os.path.join(root, "I_set", "S000001"), i_main, -300.0,
+                 vaspout_clean, mark_done=True)
+    put_vasp_run(os.path.join(root, "I_set_surface", "S000001"), plain, -280.0,
+                 vaspout_clean, mark_done=False)   # the vasp.done-less crash
+    put_vasp_run(os.path.join(root, "I_set_r1", "S000001"), i_main, -290.0,
+                 vaspout_error, mark_done=True)     # a real custodian error
+
+    # -- set J: ONLY the vasp.done-less edge case, alone, so its verdict is the
+    #    single one across the whole set. That makes the "all folders unknown"
+    #    cleanup (column dropped + one note) the observable proxy for whether
+    #    this case actually normalizes to "Unknown": if it fell through as the
+    #    unset default instead, {"Unknown"} would not match and the column
+    #    would stay -- with that blank sitting in it unexplained.
+    j_main = plain.copy()
+    add_adsorbate(j_main, "S", 1.8, "fcc")
+    put_vasp_run(os.path.join(root, "J_set", "S000001"), j_main, -300.0,
+                 vaspout_clean, mark_done=False)
+
     # -- set D: top layer buckled by more than the default -layer_tol (1.2 A).
     #    Relaxation does this, and it is what tears the top layer in half: the
     #    projection method would then triangulate only the atoms that stayed
@@ -323,7 +366,7 @@ try:
     check("adsorbate came from the _surface twin",
           "_surface twin composition" in output)
     check("twins are not analysed as targets",
-          output.count("# ---------- ") == 8 and "_surface ---" not in output,
+          output.count("# ---------- ") == 10 and "_surface ---" not in output,
           output.count("# ---------- "))
     check("bottom-face adsorbate reported as bottom",
           sites[("C_set", "S000001", "Li")]["side"] == "bottom",
@@ -494,6 +537,40 @@ try:
           "with one note",
           "Converged" not in list(read_csv(os.path.join(work, "04_A_set_AlloyAnal.csv"))[0])
           and "convergence was not checked" in output)
+
+    # The True/False path needs real custodian; skip gracefully without it,
+    # same as the module-wide ase check at the top of this file.
+    try:
+        import custodian  # noqa: F401
+        have_custodian = True
+    except Exception:
+        have_custodian = False
+    if not have_custodian:
+        skip("custodian available (check_converged True/False/edge-case path)",
+             "custodian not installed")
+    else:
+        i_row = read_csv(os.path.join(work, "04_I_set_AlloyAnal.csv"))[0]
+        check("a cleanly finished main folder is Converged = True",
+              i_row.get("Converged") == "True", i_row.get("Converged"))
+        check("a twin with a real custodian-caught error is named in "
+              "'unconverged'",
+              i_row.get("unconverged") == "_r1", i_row.get("unconverged"))
+        check("a twin with OUTCAR+vasp.out but no vasp.done is not counted "
+              "as a plain failure (that would hide a genuinely bad twin "
+              "behind a wrong-looking pass)",
+              "_surface" not in (i_row.get("unconverged") or "").split(","),
+              i_row.get("unconverged"))
+
+        # J_set isolates that same vasp.done-less folder as the ONLY verdict
+        # in its set: the column-drop cleanup only fires on an exact
+        # {"Unknown"} match, so this is what actually proves the value came
+        # out as "Unknown" and not some other blank standing in for it.
+        j_row = read_csv(os.path.join(work, "04_J_set_AlloyAnal.csv"))[0]
+        check("OUTCAR+vasp.out without vasp.done normalizes to 'Unknown' "
+              "(seen via: the all-Unknown column drop fires for it too, same "
+              "as the no-vasp.out case)",
+              "Converged" not in j_row,
+              j_row)
 
     # The buckled slab: the warning has to appear, and -layer_tol has to fix it.
     default_run = run(work).stdout

@@ -398,6 +398,16 @@ def check_converged(directory, _cache={}):
     that simply does not keep vasp.out as failed. That is not a verdict, so it
     is reported as "Unknown" here and left out of the counts.
 
+    A second, narrower case falls the same way: vasp_status() only fills in
+    its convergence verdict inside the branch that also requires a "vasp.done"
+    marker file -- without one it leaves the field as its unset default (a
+    blank string), not "False". A job killed mid-run (walltime, a node dying)
+    can easily have OUTCAR and vasp.out without ever writing vasp.done, and
+    that blank does not equal "False" or "Unknown", so it would silently slip
+    past both checks below instead of being counted as one or the other.
+    Anything that is not literally "True" or "False" is normalized to
+    "Unknown" here for that reason.
+
     Returns "True" / "False" / "Unknown" (also "Unknown" when custodian is
     missing). Results are cached per folder: a twin is asked about once per
     structure it takes part in.
@@ -417,11 +427,12 @@ def check_converged(directory, _cache={}):
         pwd = os.getcwd()
         try:
             os.chdir(directory)
-            verdict = str(VASPOutput().vasp_status()[2])
+            raw = str(VASPOutput().vasp_status()[2])
         except Exception:
-            verdict = "Unknown"
+            raw = "Unknown"
         finally:
             os.chdir(pwd)
+        verdict = raw if raw in ("True", "False") else "Unknown"
     _cache[directory] = verdict
     return verdict
 
