@@ -67,6 +67,8 @@ import os
 import re
 import sys
 
+from collections import Counter
+
 import numpy as np
 import pandas as pd
 from ase.io import read as ase_read
@@ -106,6 +108,23 @@ BARY_TOP_MIN = 0.60         # barycentric weight above which it is a vertex
 BARY_EDGE_MAX = 0.15        # barycentric weight below which the vertex is out
 
 SITE_NAMES = {1: "top", 2: "bridge", 3: "hollow3", 4: "hollow4"}
+
+# What the site file shows. One answer per atom (-main, projection by default)
+# plus the flag that says whether the other method agreed -- the other method's
+# own answer lives in the separate diff file, so this table stays readable.
+# 'side' is added only when something actually sits on the bottom face.
+SITE_COLUMNS = ["Structure", "folder", "atom", "local_no", "site", "ensemble",
+                "neighbors", "sub_site", "sub_ensemble", "sub_neighbors",
+                "d_min (A)", "height (A)", "agree"]
+# The cross-check file: only the atoms the two methods disagree on, with both
+# answers side by side and the numbers needed to judge which one to believe.
+DIFF_COLUMNS = ["Structure", "folder", "atom", "local_no",
+                "site_proj", "ensemble_proj", "neighbors_proj",
+                "site_dist", "ensemble_dist", "neighbors_dist",
+                "weights", "d_min (A)", "height (A)", "agree"]
+# The roll-up: how often each (site geometry, element composition) occurs.
+ENSEMBLE_COLUMNS = ["folder", "element", "site", "ensemble", "atoms",
+                    "structures", "mean d_min (A)", "mean height (A)"]
 
 
 def _is_dir(path):
@@ -511,6 +530,23 @@ def in_plane(vectors, normal):
     return vectors - np.outer(np.dot(vectors, normal), normal)
 
 
+def ensemble_label(atoms, indices):
+    """
+    The site's element composition, e.g. 'Fe1Ni2' -- what the adsorbate is
+    actually sitting on.
+
+    On a substituted / HEA surface this, not 'hollow3', is the quantity that
+    changes the adsorption energy: two hollows of the same geometry made of
+    different elements are different sites. Elements are sorted alphabetically
+    so the label is canonical and rows can be grouped and counted by it.
+    """
+    if not indices:
+        return ""
+    symbols = atoms.get_chemical_symbols()
+    counts = Counter(symbols[i] for i in indices)
+    return "".join("%s%d" % (element, counts[element]) for element in sorted(counts))
+
+
 def label_atom(atoms, index):
     """'Pt#12' -- element plus 1-based number in this folder's own POSCAR."""
     return "%s#%d" % (atoms.get_chemical_symbols()[index], index + 1)
@@ -821,7 +857,7 @@ def analyze_sites(atoms, adsorbate_elements, substrate_elements=None,
             primary = secondary
         main_neighbours = primary.get("neighbour_labels", "")
 
-        sub_site, sub_neighbours, d_min_sub = "", "", None
+        sub_site, sub_neighbours, sub_ensemble, d_min_sub = "", "", "", None
         if second_layer:
             sub_dist, sub_proj = classify_atom(atoms, index, second_layer,
                                                third_layer, normal, basis,
@@ -831,6 +867,7 @@ def analyze_sites(atoms, adsorbate_elements, substrate_elements=None,
                 sub_primary = sub_dist
             sub_site = site_label(sub_primary)
             sub_neighbours = sub_primary.get("neighbour_labels", "")
+            sub_ensemble = ensemble_label(atoms, sub_primary.get("neighbours", []))
             d_min_sub = round(float(sub_dist["d_min"]), 3)
 
         height = float(signed[index] - np.mean(signed[top_layer]))
@@ -840,40 +877,25 @@ def analyze_sites(atoms, adsorbate_elements, substrate_elements=None,
             "atom_no": index + 1,
             "side": "top" if side > 0 else "bottom",
             "site": site_label(primary),
+            "ensemble": ensemble_label(atoms, primary.get("neighbours", [])),
             "neighbors": main_neighbours,
             "agree": agree,
             "sub_site": sub_site,
+            "sub_ensemble": sub_ensemble,
             "sub_neighbors": sub_neighbours,
             "site_dist": site_label(by_dist),
+            "ensemble_dist": ensemble_label(atoms, by_dist.get("neighbours", [])),
             "neighbors_dist": by_dist["neighbour_labels"],
             "site_proj": site_label(by_proj),
+            "ensemble_proj": ensemble_label(atoms, by_proj.get("neighbours", [])),
             "neighbors_proj": by_proj.get("neighbour_labels", ""),
             "d_min (A)": round(by_dist["d_min"], 3),
             "d_min_sub (A)": d_min_sub,
             "height (A)": round(height, 3),
+            "weights": by_proj.get("weights", ""),
         })
     info["warning"] = "; ".join(warnings_seen)
     return rows, info
-
-
-def summarize_sites(rows):
-    """
-    One short string per structure: 'Li#33 top>hollow3 / S#35 hollow3-fcc'.
-
-    The sub-layer part is appended only where it says something new. For a
-    three-fold hollow the fcc/hcp flavour already IS the second-layer answer,
-    so repeating it would only make the line longer.
-    """
-    if not rows:
-        return ""
-    pieces = []
-    for row in rows:
-        label = row["site"]
-        sub = row.get("sub_site") or ""
-        if sub and not label.startswith("hollow3"):
-            label = "%s>%s" % (label, sub.split("-")[0])
-        pieces.append("%s %s" % (row["atom"], label))
-    return " / ".join(pieces)
 
 
 # -----------------------------------------------------------------------------
@@ -999,7 +1021,6 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
         if do_sites:
             atoms, filename = read_structure(main_dir, prefer_poscar=prefer_poscar)
             if atoms is None:
-                row["Sites"] = ""
                 info["warnings"].append("%s: no readable POSCAR/CONTCAR" % main_dir)
             else:
                 surface_atoms = None
@@ -1053,22 +1074,91 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
                               else map_to_main_labels(folder_dir, main_dir, folder_atoms))
                     for site_row in site_result:
                         entry = {"Structure": row["Structure"], "folder": folder_label}
-                        entry["main_atom"] = (site_row["atom"] if folder_label == "main"
-                                              else (labels[site_row["atom_no"] - 1]
-                                                    if labels else ""))
                         entry.update(site_row)
+                        # One identity per atom: the number it carries in the
+                        # main folder, so a row means the same atom in every
+                        # folder. 'local_no' is that folder's own number, for
+                        # looking the atom up in its CONTCAR.
+                        entry["local_no"] = site_row["atom_no"]
+                        if folder_label != "main":
+                            mapped = (labels[site_row["atom_no"] - 1] if labels else "")
+                            if mapped:
+                                entry["atom"] = mapped
                         site_rows.append(entry)
-                    column = "Sites" if folder_label == "main" else "Sites_%s" % folder_label
-                    row[column] = summarize_sites(site_result)
         rows.append(row)
 
     table = pd.DataFrame(rows)
-    site_table = pd.DataFrame(site_rows)
-    return table, site_table, info
+    site_table, diff_table = split_site_tables(site_rows)
+    info["ensemble_table"] = ensemble_counts(site_rows)
+    info["n_atoms_checked"] = len(site_rows)
+    info["n_disagree"] = len(diff_table) if diff_table is not None else 0
+    return table, site_table, diff_table, info
+
+
+def ensemble_counts(site_rows):
+    """
+    Count how often each (site geometry, element composition) is occupied.
+
+    'hollow3' repeated 500 times says little; 'hollow3 on Fe1Ni2, 46 times'
+    is the sentence a substituted surface is actually asked about. Structures
+    are counted as well as atoms, because one structure can hold the same
+    ensemble more than once and a raw atom count would read as more
+    independent evidence than there is.
+
+    Energies are deliberately not averaged in here: a structure carries one
+    energy but can contain several different sites at once, so a per-site
+    energy would be an unattributed share of it.
+    """
+    if not site_rows:
+        return pd.DataFrame()
+    frame = pd.DataFrame(site_rows)
+    if "ensemble" not in frame:
+        return pd.DataFrame()
+    frame = frame.copy()
+    frame["element"] = [str(atom).split("#")[0] for atom in frame["atom"]]
+    grouped = frame.groupby(["folder", "element", "site", "ensemble"], dropna=False)
+    out = grouped.agg(**{
+        "atoms": ("atom", "size"),
+        "structures": ("Structure", "nunique"),
+        "mean d_min (A)": ("d_min (A)", "mean"),
+        "mean height (A)": ("height (A)", "mean"),
+    }).reset_index()
+    out["mean d_min (A)"] = out["mean d_min (A)"].round(3)
+    out["mean height (A)"] = out["mean height (A)"].round(3)
+    out = out.sort_values(["folder", "element", "atoms"], ascending=[True, True, False])
+    return out[[c for c in ENSEMBLE_COLUMNS if c in out]].reset_index(drop=True)
+
+
+def split_site_tables(site_rows):
+    """
+    Turn the rich per-atom rows into the two tables that get written:
+
+    - the site table: one answer per atom plus the agree flag
+    - the diff table: only the atoms where the two methods did not agree,
+      with both answers and the numbers needed to settle it by hand
+
+    Keeping the losing method out of the first table is the point. With both
+    methods' columns side by side nothing stands out, and the few rows that
+    actually need a human get lost among the many that do not.
+    """
+    if not site_rows:
+        return pd.DataFrame(), pd.DataFrame()
+    frame = pd.DataFrame(site_rows)
+    columns = list(SITE_COLUMNS)
+    # A slab with nothing on its underside does not need a column saying so.
+    if "side" in frame and (frame["side"] == "top").all():
+        columns = [c for c in columns if c != "side"]
+    elif "side" in frame:
+        columns.insert(columns.index("atom") + 1, "side")
+    site_table = frame[[c for c in columns if c in frame]]
+    disagreed = frame[frame["agree"] != "same"] if "agree" in frame else frame.iloc[0:0]
+    diff_table = disagreed[[c for c in DIFF_COLUMNS if c in disagreed]]
+    return site_table.reset_index(drop=True), diff_table.reset_index(drop=True)
 
 
 def write_tables(table, site_table, set_name, out_dir="./", do_sites=True,
-                 do_energy=True, kind="AlloyAnal"):
+                 do_energy=True, kind="AlloyAnal", diff_table=None,
+                 ensemble_table=None):
     """
     Save the results next to the other CCpy analysis files, following the same
     '<number>_<folder>_<what>' naming as 03_..._FinalEnergies of CCpyVASPAnal.
@@ -1077,7 +1167,9 @@ def write_tables(table, site_table, set_name, out_dir="./", do_sites=True,
     Returns the list of file names written.
     """
     written = []
-    if table is not None and len(table):
+    # With option 1 the per-structure table holds nothing but the ID column;
+    # writing a file of row labels only would be noise.
+    if table is not None and len(table) and len(table.columns) > 1:
         base = os.path.join(out_dir, "04_" + set_name + "_" + kind)
         table.to_csv(base + ".csv")
         with open(base + ".txt", "w") as handle:
@@ -1088,5 +1180,17 @@ def write_tables(table, site_table, set_name, out_dir="./", do_sites=True,
         site_table.to_csv(base + ".csv")
         with open(base + ".txt", "w") as handle:
             handle.write(site_table.to_string())
+        written.extend([base + ".csv", base + ".txt"])
+    if do_sites and ensemble_table is not None and len(ensemble_table):
+        base = os.path.join(out_dir, "04_" + set_name + "_SiteEnsembles")
+        ensemble_table.to_csv(base + ".csv")
+        with open(base + ".txt", "w") as handle:
+            handle.write(ensemble_table.to_string())
+        written.extend([base + ".csv", base + ".txt"])
+    if do_sites and diff_table is not None and len(diff_table):
+        base = os.path.join(out_dir, "04_" + set_name + "_SiteDiff")
+        diff_table.to_csv(base + ".csv")
+        with open(base + ".txt", "w") as handle:
+            handle.write(diff_table.to_string())
         written.extend([base + ".csv", base + ".txt"])
     return written

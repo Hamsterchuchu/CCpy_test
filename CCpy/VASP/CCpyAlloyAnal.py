@@ -16,6 +16,9 @@ import sys
 
 import pandas as pd
 
+# Above this many rows the site table is left to the file instead of the screen.
+SITE_PRINT_LIMIT = 40
+
 version = sys.version
 if version[0] == '3':
     raw_input = input
@@ -36,6 +39,14 @@ S000001 of the twin).
     on top of, which two it bridges, or which three/four form the hollow
     (a 3-fold hollow is also reported as fcc or hcp).
     ex) CCpyAlloyAnal.py 1
+
+    On a substituted surface the geometry is only half the answer: a hollow of
+    three Ni is not the site a hollow of two Ni and one Fe is. So every atom
+    also gets an 'ensemble' column -- the element composition of the site it
+    occupies, written canonically (Fe1Ni2) so rows can be grouped by it -- and
+    the counts are rolled up per (site, ensemble) into
+    04_[SET]_SiteEnsembles.csv, which is the table to read to see which
+    element combination the adsorbate actually prefers.
 
     The redox twins are assigned too, not just the main folder: whatever is
     left after a redox step usually relaxes into a different site, and that
@@ -107,20 +118,25 @@ S000001 of the twin).
 -main=[M]      : which method fills the single 'site' column and the per
                  structure summary: proj | dist   (DEFAULT : proj)
 
-Two independent methods are always reported side by side:
-  site_dist : nearest-neighbour counting (how many substrate atoms share the
-              shortest distance, within -tol)
-  site_proj : geometric projection onto the surface plane, located in the
-              Delaunay triangulation of the top layer (vertex / edge / inside)
-The 'agree' column flags where they differ -- that is where the position is
-genuinely ambiguous and worth looking at by hand. 'site' is the -main answer,
-falling back to the other method if the primary one cannot resolve it.
+Two independent methods are used, but only ONE answer is tabulated:
+  site      : the -main answer (projection by default), one column
+  agree     : same / DIFF / unresolved -- did the other method concur
+The other method's answer is not carried through the site file. It is written
+only for the atoms where the two disagree, to 04_[SET]_SiteDiff.csv, with both
+answers, the barycentric weights and d_min side by side -- those few rows are
+the ones a human has to settle, and burying them among identical columns for
+every other atom is what makes them invisible.
 
   Projection leads because its barycentric test is scale-free, so a surface
   whose elements have different atomic radii does not shift the answer the way
   a distance window can. It has one blind spot by construction: height is not
   part of it, so an adsorbate that drifted off the surface still gets a
   confident label. 'd_min (A)' and 'height (A)' are the columns that catch it.
+
+  Columns are one per fact: 'atom' is the number the atom carries in the MAIN
+  folder (the same row means the same atom in every folder), 'local_no' is its
+  number inside its own folder's CONTCAR. 'side' appears only when something
+  is actually adsorbed on the underside of the slab.
 
   sub_site / sub_neighbors : the same classification against the SECOND
   substrate layer. The adsorbate does not bond to that layer, so this is a
@@ -132,6 +148,14 @@ falling back to the other method if the primary one cannot resolve it.
 [output files]
 04_[SET]_AlloyAnal.csv / .txt        : one row per structure (option 1-3)
 04_[SET]_AdsorptionSites.csv / .txt  : one row per adsorbate atom (option 1, 3)
+04_[SET]_SiteEnsembles.csv / .txt     : how often each (site, element
+                                       composition) is occupied
+04_[SET]_SiteDiff.csv / .txt         : only the atoms the two methods disagree
+                                       on, both answers side by side
+
+The per-structure table of option 2 / 3 carries energies only. The sites are
+in their own files above, so the same answer is not printed twice in two
+shapes.
 04_[SET]_RedoxVsSurface.csv / .txt   : one row per structure (option 4)
 ''')
     quit()
@@ -183,7 +207,7 @@ pd.set_option('display.max_rows', None)
 pd.set_option('expand_frame_repr', False)
 
 for set_dir in sets:
-    table, site_table, info = analyze_set(
+    table, site_table, diff_table, info = analyze_set(
         set_dir, do_sites=do_sites, do_energy=do_energy,
         prefer_poscar=prefer_poscar, ads_override=ads, pool_override=pool,
         dist_tol=dist_tol, layer_tol=layer_tol, hcp_tol=hcp_tol, main=main,
@@ -193,11 +217,30 @@ for set_dir in sets:
         print("  nothing to report in this folder.")
         continue
 
-    print("")
-    print(table.to_string())
-    if do_sites and site_table is not None and len(site_table):
+    if len(table.columns) > 1:
         print("")
-        print(site_table.to_string())
+        print(table.to_string())
+    if do_sites and site_table is not None and len(site_table):
+        # A long site table scrolls the useful part off the screen; the file
+        # holds it either way, so past a screenful only the summary is printed.
+        print("")
+        if len(site_table) <= SITE_PRINT_LIMIT:
+            print(site_table.to_string())
+        else:
+            print("%d adsorbate atom row(s) -- see 04_%s_AdsorptionSites.txt"
+                  % (len(site_table), info["set_name"]))
+        ensembles = info.get("ensemble_table")
+        if ensembles is not None and len(ensembles):
+            print("")
+            print(ensembles.to_string())
+        disagreed = 0 if diff_table is None else len(diff_table)
+        print("")
+        print("* site methods: %d of %d atom(s) disagree"
+              % (disagreed, info["n_atoms_checked"]))
+        if disagreed:
+            print("  (these are the positions that are genuinely between two "
+                  "sites -- worth a look by hand)")
+            print(diff_table.to_string())
 
     for warning in info["warnings"]:
         print("* %s" % warning)
@@ -213,6 +256,8 @@ for set_dir in sets:
 
     written = write_tables(table, site_table, info["set_name"], out_dir="./",
                            do_sites=do_sites, do_energy=do_energy,
-                           kind="RedoxVsSurface" if do_redox_surface else "AlloyAnal")
+                           kind="RedoxVsSurface" if do_redox_surface else "AlloyAnal",
+                           diff_table=diff_table,
+                           ensemble_table=info.get("ensemble_table"))
     if written:
         print("Analysis files have been saved: " + ", ".join(os.path.basename(f) for f in written))

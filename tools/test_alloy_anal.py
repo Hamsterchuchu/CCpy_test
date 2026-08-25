@@ -14,7 +14,7 @@ differences are known exactly too.
 
 Checks
   1. fcc(111): ontop / bridge / fcc / hcp are labelled correctly, by BOTH
-     the distance method and the projection method
+     methods -- projection in the default run, distance under -main=dist
   2. fcc(100): the four-fold hollow is not mistaken for a bridge
      (the Delaunay diagonal trap), and a real bridge / top still work
   3. the adsorbate is taken from the _surface twin without any heuristic
@@ -24,7 +24,10 @@ Checks
   7. a folder with no OUTCAR / OSZICAR yields a blank energy, not a crash
   8. the csv / txt files are written
   9. the 'site' column follows -main (projection by default, distance when
-     asked), and falls back only when the primary method cannot resolve
+     asked), and the site file carries ONE answer -- the other method's
+     columns are not in it, they are in 04_[SET]_SiteDiff.csv, which appears
+     only when the two disagree
+ 9b. 'side' is left out unless something really sits on the underside
  10. sub_site -- the same classification against the second layer -- matches
      the stacking that was built: an hcp hollow sits on a second-layer ATOM
      ('top'), an fcc hollow on a second-layer hollow, and the four-fold hollow
@@ -204,13 +207,26 @@ try:
     check("command runs without a traceback", "Traceback" not in output and process.returncode == 0,
           output[-800:])
 
+    # The distance method no longer has a column of its own in the site file,
+    # so its answer is checked from a run that asks for it as the main one.
+    run(work, ["-main=dist"])
+    dist_sites = {}
+    for name in ("A_set", "B_set", "C_set"):
+        path = os.path.join(work, "04_%s_AdsorptionSites.csv" % name)
+        if os.path.exists(path):
+            for row in read_csv(path):
+                if row.get("folder", "main") == "main":
+                    dist_sites[(name, row["Structure"], row["atom"].split("#")[0])] = row
+    run(work)
+
     sites = {}
     for name in ("A_set", "B_set", "C_set", "D_set"):
         path = os.path.join(work, "04_%s_AdsorptionSites.csv" % name)
         if os.path.exists(path):
             for row in read_csv(path):
                 if row.get("folder", "main") == "main":
-                    sites[(name, row["Structure"], row["element"])] = row
+                    element = row["atom"].split("#")[0]
+                    sites[(name, row["Structure"], element)] = row
 
     check("site files written",
           all(os.path.exists(os.path.join(work, "04_%s_AdsorptionSites.csv" % n))
@@ -225,15 +241,16 @@ try:
         if row is None:
             check("%s %s -> %s" % (set_name, sid, expected_label), False, "no row for this atom")
             continue
+        dist_row = dist_sites.get((set_name, sid, element), {})
         check("%s %s distance method -> %s" % (set_name, sid, expected_label),
-              row["site_dist"] == expected_label, row["site_dist"])
+              dist_row.get("site") == expected_label, dist_row.get("site"))
         # The projection method does not tell fcc from hcp any better than the
         # distance one does, so only the site type is compared there.
         want = expected_label.split("-")[0]
         check("%s %s projection method -> %s" % (set_name, sid, want),
-              row["site_proj"].split("-")[0] == want, row["site_proj"])
-        check("%s %s 'site' column follows projection by default" % (set_name, sid),
-              row["site"] == row["site_proj"], "%s vs %s" % (row["site"], row["site_proj"]))
+              row["site"].split("-")[0] == want, row["site"])
+        check("%s %s both methods agree here" % (set_name, sid),
+              row["agree"] == "same", row["agree"])
         if expected_sub:
             check("%s %s sub_site -> %s" % (set_name, sid, expected_sub),
                   row["sub_site"].split("-")[0] == expected_sub, row["sub_site"])
@@ -272,10 +289,65 @@ try:
           process.stdout[-800:])
     rows = read_csv(os.path.join(work, "04_A_set_AdsorptionSites.csv"))
     check("-main=dist puts the distance answer in 'site'",
-          all(row["site"] == row["site_dist"] for row in rows),
-          [(row["site"], row["site_dist"]) for row in rows])
+          rows[0]["site"] == "top" and rows[3]["site"] == "hollow3-hcp",
+          [row["site"] for row in rows])
+    run(work)
     check("-main= rejects an unknown method",
           "takes 'proj' or 'dist'" in run(work, ["-main=xyz"]).stdout)
+
+    # The site file must carry one answer, not both, and no bookkeeping columns.
+    header = list(read_csv(os.path.join(work, "04_A_set_AdsorptionSites.csv"))[0])
+    for gone in ("site_dist", "site_proj", "neighbors_dist", "neighbors_proj",
+                 "element", "atom_no", "main_atom", "d_min_sub (A)"):
+        check("site file drops the '%s' column" % gone, gone not in header, header)
+    for kept in ("atom", "local_no", "site", "ensemble", "neighbors",
+                 "sub_site", "sub_ensemble", "agree"):
+        check("site file keeps the '%s' column" % kept, kept in header, header)
+    check("'side' is left out when nothing is on the underside",
+          "side" not in header, header)
+    check("'side' appears where an atom IS on the underside",
+          "side" in list(read_csv(os.path.join(work, "04_C_set_AdsorptionSites.csv"))[0]))
+    # The element composition of the site, and its roll-up.
+    a_rows = read_csv(os.path.join(work, "04_A_set_AdsorptionSites.csv"))
+    check("ensemble names the elements of the site",
+          all(row["ensemble"] and row["ensemble"][0].isalpha() for row in a_rows),
+          [row["ensemble"] for row in a_rows])
+    check("ensemble size matches the site geometry",
+          all(sum(int(c) for c in row["ensemble"] if c.isdigit())
+              == {"top": 1, "bridge": 2, "hollow3": 3, "hollow4": 4}[row["site"].split("-")[0]]
+              for row in a_rows),
+          [(row["site"], row["ensemble"]) for row in a_rows])
+    ens_path = os.path.join(work, "04_A_set_SiteEnsembles.csv")
+    check("ensemble roll-up file is written", os.path.exists(ens_path))
+    if os.path.exists(ens_path):
+        ens = read_csv(ens_path)
+        check("roll-up counts every adsorbate atom once",
+              sum(int(row["atoms"]) for row in ens) == len(a_rows),
+              (sum(int(row["atoms"]) for row in ens), len(a_rows)))
+        check("roll-up counts structures as well as atoms",
+              all(int(row["structures"]) <= int(row["atoms"]) for row in ens))
+
+    check("no diff file when the methods never disagree",
+          not os.path.exists(os.path.join(work, "04_A_set_SiteDiff.csv")))
+
+    # A wide -tol makes the distance method over-count, so the two disagree and
+    # the diff file has to appear with BOTH answers in it.
+    wide_tol = run(work, ["-tol=0.6"])
+    check("a disagreement is announced on screen",
+          "site methods:" in wide_tol.stdout and "of" in wide_tol.stdout,
+          wide_tol.stdout[-400:])
+    diff_path = os.path.join(work, "04_A_set_SiteDiff.csv")
+    check("diff file is written when the methods disagree", os.path.exists(diff_path))
+    if os.path.exists(diff_path):
+        diff_rows = read_csv(diff_path)
+        check("diff file carries both answers",
+              all(row["site_proj"] and row["site_dist"] and row["agree"] != "same"
+                  for row in diff_rows),
+              diff_rows[:1])
+        check("diff file holds only the disagreeing atoms",
+              len(diff_rows) < len(read_csv(os.path.join(work, "04_A_set_AdsorptionSites.csv"))),
+              len(diff_rows))
+    run(work)
 
     # Sites in the redox twins, and the number map back to the main folder.
     twin_rows = read_csv(os.path.join(work, "04_E_set_AdsorptionSites.csv"))
@@ -284,19 +356,21 @@ try:
           set(by_folder) == {"r1", "r2"}, sorted(by_folder))
     if set(by_folder) == {"r1", "r2"}:
         # _r1 kept the hcp atom: folder-local #37, main #38 -- the shifted case.
-        check("main_atom follows the shifted numbering of _r1",
-              by_folder["r1"]["main_atom"] == "S#38" and by_folder["r1"]["atom"] == "S#37",
-              (by_folder["r1"]["main_atom"], by_folder["r1"]["atom"]))
+        check("the atom keeps its main-folder identity in _r1, with the "
+              "folder's own number beside it",
+              by_folder["r1"]["atom"] == "S#38" and by_folder["r1"]["local_no"] == "37",
+              (by_folder["r1"]["atom"], by_folder["r1"]["local_no"]))
         check("_r1 keeps the hcp site", by_folder["r1"]["site"] == "hollow3-hcp",
               by_folder["r1"]["site"])
         # _r2 kept the fcc atom, whose number did not move.
-        check("main_atom unchanged where nothing shifted",
-              by_folder["r2"]["main_atom"] == "S#37", by_folder["r2"]["main_atom"])
+        check("identity unchanged where nothing shifted",
+              by_folder["r2"]["atom"] == "S#37" and by_folder["r2"]["local_no"] == "37",
+              (by_folder["r2"]["atom"], by_folder["r2"]["local_no"]))
         check("_r2 keeps the fcc site", by_folder["r2"]["site"] == "hollow3-fcc",
               by_folder["r2"]["site"])
     e_row = [row for row in read_csv(os.path.join(work, "04_E_set_AlloyAnal.csv"))][0]
-    check("per-structure table gains a Sites_r1 column",
-          "hollow3-hcp" in e_row.get("Sites_r1", ""), e_row.get("Sites_r1"))
+    check("the per-structure table carries energies only, not sites",
+          not any(key.startswith("Sites") for key in e_row), list(e_row))
 
     no_twins = run(work, ["-no_twins"])
     check("-no_twins runs without a traceback",
