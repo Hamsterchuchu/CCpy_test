@@ -124,8 +124,11 @@ DIFF_COLUMNS = ["Structure", "folder", "atom", "local_no",
                 "site_dist", "ensemble_dist", "neighbors_dist",
                 "weights", "d_min (A)", "height (A)", "agree"]
 # The roll-up: how often each (site geometry, element composition) occurs.
+# A header must not start with '+', '=', '-' or '@': a spreadsheet reads such a
+# cell as a formula and shows #NAME? instead of the column. That is why the
+# error bar is "stderr (eV)" and not "+- (eV)".
 ENSEMBLE_COLUMNS = ["folder", "element", "site", "ensemble", "atoms",
-                    "structures", "dE per site (eV)", "+- (eV)",
+                    "structures", "dE vs group avg (eV)", "stderr (eV)",
                     "mean d_min (A)", "mean height (A)"]
 
 
@@ -1521,10 +1524,10 @@ def ensemble_counts(site_rows, rows=None):
     contributions, stats = ensemble_energy_fit(site_rows, rows) if rows else ({}, {})
     if contributions:
         keys = out.element + " " + out.site + " " + out.ensemble
-        out["dE per site (eV)"] = [contributions.get(k, (None, None))[0]
+        out["dE vs group avg (eV)"] = [contributions.get(k, (None, None))[0]
                                    if folder == "main" else None
                                    for k, folder in zip(keys, out.folder)]
-        out["+- (eV)"] = [contributions.get(k, (None, None))[1]
+        out["stderr (eV)"] = [contributions.get(k, (None, None))[1]
                           if folder == "main" else None
                           for k, folder in zip(keys, out.folder)]
         out.attrs["fit"] = stats

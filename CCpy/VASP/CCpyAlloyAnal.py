@@ -251,7 +251,7 @@ for set_dir in sets:
             print(ensembles.to_string())
             fit = ensembles.attrs.get("fit") or {}
             if fit:
-                print("* 'dE per site' is a least-squares split of %s over the "
+                print("* 'dE vs group avg' is a least-squares split of %s over the "
                       "adsorbate sites of each structure (%d structures, %d terms"
                       "%s)."
                       % (fit["column"], fit["n_structures"], fit["n_terms"],
