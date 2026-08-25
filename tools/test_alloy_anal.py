@@ -193,6 +193,20 @@ def build(root):
     f_keep_hcp = f_both[[i for i in range(len(f_both) - 2)] + [len(f_both) - 1]]
     put(os.path.join(root, "F_set_r1", "S000001"), f_keep_hcp, -290.0)   # S#38 stays
 
+    # -- set G: NO POSCAR anywhere, and CONTCARs that happen to sit exactly on
+    #    the generated coordinates. Matching those would "work" -- and that is
+    #    the trap: CONTCAR coordinates have relaxed, and on a real run the
+    #    substrate atoms move too, so a match found there is a nearest-neighbour
+    #    guess wearing an identity's clothes. The map must refuse and say why.
+    g_both = plain.copy()
+    add_adsorbate(g_both, "S", 1.8, "fcc")
+    add_adsorbate(g_both, "S", 1.8, "hcp")
+    put(os.path.join(root, "G_set", "S000001"), g_both, -300.0)
+    os.remove(os.path.join(root, "G_set", "S000001", "POSCAR"))
+    put(os.path.join(root, "G_set_surface", "S000001"), plain, -280.0)
+    g_keep_hcp = g_both[[i for i in range(len(g_both) - 2)] + [len(g_both) - 1]]
+    put(os.path.join(root, "G_set_r1", "S000001"), g_keep_hcp, -290.0)
+
     # -- set D: top layer buckled by more than the default -layer_tol (1.2 A).
     #    Relaxation does this, and it is what tears the top layer in half: the
     #    projection method would then triangulate only the atoms that stayed
@@ -292,7 +306,7 @@ try:
     check("adsorbate came from the _surface twin",
           "_surface twin composition" in output)
     check("twins are not analysed as targets",
-          output.count("# ---------- ") == 6 and "_surface ---" not in output,
+          output.count("# ---------- ") == 7 and "_surface ---" not in output,
           output.count("# ---------- "))
     check("bottom-face adsorbate reported as bottom",
           sites[("C_set", "S000001", "Li")]["side"] == "bottom",
@@ -353,6 +367,16 @@ try:
         check("a blank 'atom' does not lose the element in the roll-up",
               all(row["element"] for row in read_csv(f_ens)),
               [row["element"] for row in read_csv(f_ens)])
+
+    # No POSCAR -> the cross-reference is refused outright, even though the
+    # CONTCARs would have matched. Blank column, and a stated reason.
+    g_rows = [row for row in read_csv(os.path.join(work, "04_G_set_AdsorptionSites.csv"))
+              if row["folder"] != "main"]
+    check("no POSCAR -> the twin's atom stays blank instead of matching CONTCARs",
+          g_rows and all(row["atom"] == "" for row in g_rows),
+          [row["atom"] for row in g_rows])
+    check("and the reason is printed, not left as a silent blank",
+          "cannot be cross-referenced" in output, output[-900:])
 
     check("no diff file when the methods never disagree",
           not os.path.exists(os.path.join(work, "04_A_set_SiteDiff.csv")))

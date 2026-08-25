@@ -731,6 +731,17 @@ def site_label(result):
 UNRESOLVED = ("unresolved", "unavailable")
 
 
+def _read_poscar_only(directory):
+    """POSCAR of this folder, or None. Never falls back to CONTCAR."""
+    path = os.path.join(directory, "POSCAR")
+    if not (os.path.exists(path) and os.path.getsize(path) > 0):
+        return None
+    try:
+        return ase_read(path, format="vasp")
+    except Exception:
+        return None
+
+
 def map_to_main_labels(twin_dir, main_dir, twin_atoms):
     """
     Label every atom of a redox twin with the number it carries in the MAIN
@@ -739,20 +750,29 @@ def map_to_main_labels(twin_dir, main_dir, twin_atoms):
     The two folders' POSCARs come from the same generated structure -- the twin
     is that structure minus the removed atoms, written by the same writer, with
     nothing relaxed yet -- so the unrelaxed positions match exactly and the map
-    can be read off instead of guessed. It is built from POSCAR even when the
-    sites are taken from CONTCAR, because CONTCAR positions have moved apart
-    during relaxation and would only support a nearest-neighbour guess.
+    can be read off instead of guessed.
 
-    Returns a list as long as twin_atoms ("" where nothing matched), and an
-    empty list when either POSCAR is missing -- a missing cross-reference is
-    reported as blank, never as a wrong number.
+    POSCAR is REQUIRED here, and CONTCAR is never accepted in its place. During
+    relaxation the substrate atoms themselves shift, so matching relaxed
+    coordinates would be a nearest-neighbour guess dressed up as an identity,
+    and it would succeed for the atoms that happened to move least -- a partial
+    map that looks authoritative. Without both POSCARs the answer is "unknown",
+    which is a blank column and a warning, not a number.
+
+    Returns (labels, note): a list as long as twin_atoms ("" where that atom
+    could not be matched) and a reason string when no map could be built.
     """
-    twin_poscar, _ = read_structure(twin_dir, prefer_poscar=True)
-    main_poscar, _ = read_structure(main_dir, prefer_poscar=True)
+    twin_poscar = _read_poscar_only(twin_dir)
+    main_poscar = _read_poscar_only(main_dir)
     if twin_poscar is None or main_poscar is None:
-        return []
+        missing = twin_dir if twin_poscar is None else main_dir
+        return [], ("no POSCAR in %s, so the atoms cannot be cross-referenced "
+                    "with the main folder (CONTCAR is not used for this: its "
+                    "coordinates have relaxed)" % missing)
     if len(twin_poscar) != len(twin_atoms):
-        return []
+        return [], ("POSCAR and the analysed structure of %s hold a different "
+                    "number of atoms, so the cross-reference was not attempted"
+                    % twin_dir)
     main_symbols = main_poscar.get_chemical_symbols()
     main_frac = main_poscar.get_scaled_positions(wrap=True)
     twin_symbols = twin_poscar.get_chemical_symbols()
@@ -766,7 +786,15 @@ def map_to_main_labels(twin_dir, main_dir, twin_atoms):
                   if main_symbols[j] != twin_symbols[i]]] = np.inf
         j = int(np.argmin(distance))
         labels.append("%s#%d" % (main_symbols[j], j + 1) if distance[j] < 1e-3 else "")
-    return labels
+    # Two twin atoms landing on one main atom would mean the map is not a map.
+    # It cannot happen with unrelaxed coordinates, which is exactly why it is
+    # worth checking: if it ever does, the assumption behind the whole
+    # cross-reference is wrong and every number here is suspect.
+    filled = [label for label in labels if label]
+    if len(set(filled)) != len(filled):
+        return [], ("two atoms of %s map onto the same atom of the main folder; "
+                    "the cross-reference was dropped" % twin_dir)
+    return labels, ""
 
 
 # -----------------------------------------------------------------------------
@@ -1070,8 +1098,12 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
                     # Atom numbers restart in every folder, so carry the main
                     # folder's number along; without it the same atom looks
                     # like a different one after a redox step.
-                    labels = ([] if folder_label == "main"
-                              else map_to_main_labels(folder_dir, main_dir, folder_atoms))
+                    labels, map_note = [], ""
+                    if folder_label != "main":
+                        labels, map_note = map_to_main_labels(
+                            folder_dir, main_dir, folder_atoms)
+                    if map_note and map_note not in info["warnings"]:
+                        info["warnings"].append(map_note)
                     for site_row in site_result:
                         entry = {"Structure": row["Structure"], "folder": folder_label}
                         entry.update(site_row)
