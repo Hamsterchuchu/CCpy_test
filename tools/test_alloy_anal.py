@@ -610,13 +610,17 @@ try:
     ens = read_csv(os.path.join(work, "04_K_set_SiteEnsembles.csv"))
     by_ens = {row["ensemble"]: row for row in ens if row["folder"] == "main"}
     check("the energy split has a column at all",
-          all("dE per site (eV)" in row for row in ens), list(ens[0]) if ens else None)
+          all("dE vs group avg (eV)" in row for row in ens), list(ens[0]) if ens else None)
     if {"Pt3", "Fe1Pt2"} <= set(by_ens):
-        gap = (float(by_ens["Fe1Pt2"]["dE per site (eV)"])
-               - float(by_ens["Pt3"]["dE per site (eV)"]))
+        gap = (float(by_ens["Fe1Pt2"]["dE vs group avg (eV)"])
+               - float(by_ens["Pt3"]["dE vs group avg (eV)"]))
         check("the known -0.5 eV contribution is recovered", abs(gap + 0.5) < 0.05, gap)
     else:
         check("both ensembles of the known set appear", False, sorted(by_ens))
+    # A header starting with '+' or '=' is read as a formula by spreadsheets.
+    for header in (list(ens[0]) if ens else []):
+        check("header '%s' is safe to open in a spreadsheet" % header,
+              not header.startswith(("+", "=", "-", "@")), header)
     check("the fit reports how well it explains the set",
           "explains R2=" in output, [l for l in output.splitlines() if "R2" in l])
 
