@@ -105,7 +105,11 @@ S000001 of the twin).
                  ex) -pool=Pt,Fe,Co,Ni,Cu
 -no_twins      : assign sites only in the main folder, not in the redox twins
 -poscar        : read POSCAR instead of CONTCAR (DEFAULT : CONTCAR, i.e. the
-                 relaxed result; POSCAR is used anyway when CONTCAR is missing)
+                 relaxed result). Without it, a folder with no CONTCAR is one
+                 VASP has not run yet: it is left out of the tables and counted
+                 in a note, rather than filling a row with blanks. With
+                 -poscar the unrelaxed input is what was asked for, so nothing
+                 is skipped.
 -tol=#         : nearest-neighbour window for the distance method, as a
                  fraction of the shortest distance   (DEFAULT : 0.15)
 -layer_tol=#   : thickness of one substrate layer in A (DEFAULT : 1.2)

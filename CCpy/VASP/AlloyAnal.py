@@ -74,8 +74,9 @@ import pandas as pd
 from ase.io import read as ase_read
 
 # Energy reading is shared with CCpyVASPAnal.py option 2 -- same functions,
-# same OUTCAR-then-OSZICAR order, so the two commands can never disagree.
-from CCpy.VASP.VASPio import energy_from_outcar, energy_from_oszicar, natoms_from_poscar
+# same OUTCAR-then-OSZICAR order, so the two commands can never disagree. The
+# import is deferred into the two functions that need it because VASPio pulls
+# in pymatgen and matplotlib (~2 s), which a sites-only run never uses.
 
 # The slab normal / adsorbate heuristics live in AlloyGen and are used through
 # the module so there is a single definition of "which axis is the vacuum".
@@ -129,6 +130,12 @@ ENSEMBLE_COLUMNS = ["folder", "element", "site", "ensemble", "atoms",
 
 def _is_dir(path):
     return os.path.isdir(path)
+
+
+def has_contcar(directory):
+    """True when this folder holds a non-empty CONTCAR, i.e. VASP has run."""
+    path = os.path.join(directory, "CONTCAR")
+    return os.path.exists(path) and os.path.getsize(path) > 0
 
 
 def read_metadata(directory):
@@ -344,12 +351,20 @@ def select_alloy_sets(directory="./", ask=True, chosen=None):
 # Reading one job folder
 # -----------------------------------------------------------------------------
 
+def _vaspio():
+    """The VASPio helpers, imported on first use (see the note at the top)."""
+    from CCpy.VASP.VASPio import (energy_from_outcar, energy_from_oszicar,
+                                  natoms_from_poscar)
+    return energy_from_outcar, energy_from_oszicar, natoms_from_poscar
+
+
 def count_atoms(directory):
     """
     Number of atoms of one folder. POSCAR is read with VASPio's own counter
     (the same one CCpyVASPAnal uses); CONTCAR is only looked at when POSCAR is
     missing, so a folder holding just a relaxed result still gets a count.
     """
+    _outcar, _oszicar, natoms_from_poscar = _vaspio()
     natoms = natoms_from_poscar(directory)
     if natoms:
         return natoms
@@ -377,6 +392,7 @@ def read_energy(directory):
     first, the last E0 of OSZICAR only as a fallback. Returns (energy, source)
     with source "" when nothing could be read.
     """
+    energy_from_outcar, energy_from_oszicar, _natoms = _vaspio()
     energy = energy_from_outcar(directory)
     if energy is not None:
         return energy, "OUTCAR"
@@ -606,53 +622,83 @@ def site_by_distance(atoms, adsorbate_index, top_layer, second_layer, normal,
 # Method 2: projection onto the surface plane
 # -----------------------------------------------------------------------------
 
-def site_by_projection(atoms, adsorbate_index, top_layer, second_layer, normal,
+def projection_frame(atoms, layer, normal, basis):
+    """
+    The surface plane's triangulation, built once per (structure, layer).
+
+    Every atom of the layer is projected onto the plane in ABSOLUTE in-plane
+    coordinates and replicated over the neighbouring periodic images, then
+    triangulated. The triangulation does not depend on which adsorbate is being
+    asked about -- only the query point does -- so building it per atom (as
+    this did at first) repeats the most expensive step of the whole analysis
+    once per adsorbate atom for no gain. Translating a point set does not
+    change its Delaunay triangulation, which is why the switch from
+    adsorbate-relative to absolute coordinates is exact and not an
+    approximation.
+
+    Returns None when there is nothing to triangulate.
+    """
+    try:
+        from scipy.spatial import Delaunay
+    except Exception:
+        return {"error": "scipy is required for the projection method"}
+    if len(layer) < 3:
+        return {"error": "too few surface atoms"}
+    u1, u2, (a1, a2) = basis
+    flat = in_plane(atoms.get_positions()[list(layer)], normal)
+    base = np.column_stack([flat.dot(u1), flat.dot(u2)])
+    shifts = []
+    for k1 in (-1, 0, 1):
+        for k2 in (-1, 0, 1):
+            translation = in_plane(k1 * np.asarray(a1) + k2 * np.asarray(a2), normal)[0]
+            shifts.append([float(translation.dot(u1)), float(translation.dot(u2))])
+    points = np.concatenate([base + shift for shift in shifts])
+    sources = list(layer) * len(shifts)
+    # Spacing of the layer itself, used below to tell a real bridge from a
+    # triangulation diagonal. Computed on the unreplicated layer: the images
+    # add no shorter distance and squaring the point count is what made this
+    # expensive.
+    if len(base) > 1:
+        spread = np.linalg.norm(base[:, None, :] - base[None, :, :], axis=-1)
+        np.fill_diagonal(spread, np.inf)
+        nn_spacing = float(spread.min())
+    else:
+        nn_spacing = None
+    try:
+        triangulation = Delaunay(points)
+    except Exception as error:
+        return {"error": "triangulation failed (%s)" % error}
+    return {"points": points, "sources": sources, "tri": triangulation,
+            "nn_spacing": nn_spacing, "error": None}
+
+
+def in_plane_point(atoms, index, normal, basis):
+    """One atom's absolute position on the surface plane, as (u1, u2)."""
+    u1, u2, _cell = basis
+    flat = in_plane(atoms.get_positions()[index], normal)[0]
+    return np.array([float(flat.dot(u1)), float(flat.dot(u2))])
+
+
+def site_by_projection(atoms, adsorbate_index, frame, second_layer, normal,
                        basis, hcp_tol=DEFAULT_HCP_TOL):
     """
-    Project the adsorbate onto the surface plane and locate it inside the
-    Delaunay triangulation of the top-layer atoms, replicated over the
-    neighbouring periodic images. Barycentric coordinates then decide
-    vertex (top) / edge (bridge) / interior (3-fold hollow).
+    Locate the adsorbate's projected position inside the triangulation of the
+    surface plane. Barycentric coordinates then decide vertex (top) /
+    edge (bridge) / interior (3-fold hollow).
 
     Returns a dict with site="unresolved" when the projected point falls
     outside every triangle, which happens on a badly broken surface -- that is
     reported rather than guessed.
     """
-    try:
-        from scipy.spatial import Delaunay
-    except Exception:
-        return {"site": "unavailable", "flavour": "", "neighbours": [],
-                "neighbour_labels": "", "note": "scipy is required for the "
-                                                "projection method"}
-    u1, u2, (a1, a2) = basis
-    vectors = atoms.get_distances(adsorbate_index, top_layer, mic=True, vector=True)
-    points, sources = [], []
-    for shift1 in (-1, 0, 1):
-        for shift2 in (-1, 0, 1):
-            translation = shift1 * np.asarray(a1) + shift2 * np.asarray(a2)
-            shifted = vectors + translation
-            flat = in_plane(shifted, normal)
-            for k in range(len(top_layer)):
-                points.append([float(np.dot(flat[k], u1)), float(np.dot(flat[k], u2))])
-                sources.append(top_layer[k])
-    points = np.array(points)
-    # Spacing of the top layer itself, used below to tell a real bridge from a
-    # triangulation diagonal.
-    if len(points) > 1:
-        spread = np.linalg.norm(points[:, None, :] - points[None, :, :], axis=-1)
-        np.fill_diagonal(spread, np.inf)
-        nn_spacing = float(spread.min())
-    else:
-        nn_spacing = None
-    if len(points) < 3:
-        return {"site": "unresolved", "flavour": "", "neighbours": [],
-                "neighbour_labels": "", "note": "too few surface atoms"}
-    try:
-        triangulation = Delaunay(points)
-    except Exception as error:
-        return {"site": "unresolved", "flavour": "", "neighbours": [],
-                "neighbour_labels": "", "note": "triangulation failed (%s)" % error}
-    simplex = int(triangulation.find_simplex(np.array([[0.0, 0.0]]))[0])
+    if frame is None or frame.get("error"):
+        note = frame.get("error") if frame else "no surface plane"
+        site = "unavailable" if "scipy" in note else "unresolved"
+        return {"site": site, "flavour": "", "neighbours": [],
+                "neighbour_labels": "", "note": note}
+    points, sources = frame["points"], frame["sources"]
+    triangulation, nn_spacing = frame["tri"], frame["nn_spacing"]
+    query = in_plane_point(atoms, adsorbate_index, normal, basis)
+    simplex = int(triangulation.find_simplex(query.reshape(1, 2))[0])
     if simplex < 0:
         return {"site": "unresolved", "flavour": "", "neighbours": [],
                 "neighbour_labels": "",
@@ -660,7 +706,7 @@ def site_by_projection(atoms, adsorbate_index, top_layer, second_layer, normal,
 
     vertices = triangulation.simplices[simplex]
     transform = triangulation.transform[simplex]
-    bary2 = transform[:2].dot(np.array([0.0, 0.0]) - transform[2])
+    bary2 = transform[:2].dot(query - transform[2])
     weights = np.array([bary2[0], bary2[1], 1.0 - bary2.sum()])
     order = np.argsort(-weights)
     ranked = [vertices[i] for i in order]
@@ -678,7 +724,7 @@ def site_by_projection(atoms, adsorbate_index, top_layer, second_layer, normal,
         edge = float(np.linalg.norm(points[ranked[0]] - points[ranked[1]]))
         if nn_spacing and edge > 1.25 * nn_spacing:
             radius = edge / 2.0 * 1.2
-            distances2d = np.linalg.norm(points, axis=1)
+            distances2d = np.linalg.norm(points - query, axis=1)
             corners = []
             for k in np.argsort(distances2d):
                 if distances2d[k] > radius:
@@ -693,7 +739,8 @@ def site_by_projection(atoms, adsorbate_index, top_layer, second_layer, normal,
     flavour = ""
     if site == "hollow3":
         centre2d = np.array([points[v] for v in vertices]).mean(axis=0)
-        centre = centre2d[0] * u1 + centre2d[1] * u2
+        offset2d = centre2d - query
+        centre = offset2d[0] * basis[0] + offset2d[1] * basis[1]
         flavour, _ = hollow_flavour(atoms, adsorbate_index, centre,
                                    second_layer, normal, hcp_tol)
     return {
@@ -707,16 +754,20 @@ def site_by_projection(atoms, adsorbate_index, top_layer, second_layer, normal,
 
 
 def classify_atom(atoms, index, layer, next_layer, normal, basis,
-                  dist_tol=DEFAULT_DIST_TOL, hcp_tol=DEFAULT_HCP_TOL):
+                  dist_tol=DEFAULT_DIST_TOL, hcp_tol=DEFAULT_HCP_TOL,
+                  frame=None):
     """
     Run both methods against ONE substrate layer and return (dist, proj).
 
     `next_layer` is used only to tell fcc from hcp, i.e. to ask whether
-    anything sits directly under a three-fold hollow.
+    anything sits directly under a three-fold hollow. `frame` is that layer's
+    triangulation; pass it in to reuse one across the atoms of a structure.
     """
     by_dist = site_by_distance(atoms, index, layer, next_layer, normal,
                                dist_tol=dist_tol, hcp_tol=hcp_tol)
-    by_proj = site_by_projection(atoms, index, layer, next_layer, normal,
+    if frame is None:
+        frame = projection_frame(atoms, layer, normal, basis)
+    by_proj = site_by_projection(atoms, index, frame, next_layer, normal,
                                  basis, hcp_tol=hcp_tol)
     return by_dist, by_proj
 
@@ -742,7 +793,7 @@ def _read_poscar_only(directory):
         return None
 
 
-def map_to_main_labels(twin_dir, main_dir, twin_atoms):
+def map_to_main_labels(twin_dir, main_dir, twin_atoms, main_poscar=None):
     """
     Label every atom of a redox twin with the number it carries in the MAIN
     folder, so a site can be followed across the redox step.
@@ -763,7 +814,7 @@ def map_to_main_labels(twin_dir, main_dir, twin_atoms):
     could not be matched) and a reason string when no map could be built.
     """
     twin_poscar = _read_poscar_only(twin_dir)
-    main_poscar = _read_poscar_only(main_dir)
+    main_poscar = main_poscar if main_poscar is not None else _read_poscar_only(main_dir)
     if twin_poscar is None or main_poscar is None:
         missing = twin_dir if twin_poscar is None else main_dir
         return [], ("no POSCAR in %s, so the atoms cannot be cross-referenced "
@@ -849,6 +900,15 @@ def analyze_sites(atoms, adsorbate_elements, substrate_elements=None,
     substrate_mid = float(np.mean(coord[sub_idx]))
     rows = []
     thin_layer_reported = False
+    # One triangulation per layer, shared by every adsorbate atom that asks
+    # about that layer -- the atoms of a structure nearly always share one.
+    frames = {}
+
+    def frame_for(layer):
+        key = tuple(layer)
+        if key not in frames:
+            frames[key] = projection_frame(atoms, layer, normal, basis)
+        return frames[key]
     for index in ads_idx:
         # Which face of the slab this atom sits on decides which layer is "top".
         side = 1.0 if coord[index] >= substrate_mid else -1.0
@@ -871,7 +931,8 @@ def analyze_sites(atoms, adsorbate_elements, substrate_elements=None,
 
         by_dist, by_proj = classify_atom(atoms, index, top_layer, second_layer,
                                          normal, basis, dist_tol=dist_tol,
-                                         hcp_tol=hcp_tol)
+                                         hcp_tol=hcp_tol,
+                                         frame=frame_for(top_layer))
         agree = "same" if by_dist["site"] == by_proj.get("site") else "DIFF"
         if by_proj.get("site") in UNRESOLVED:
             agree = by_proj["site"]
@@ -889,7 +950,8 @@ def analyze_sites(atoms, adsorbate_elements, substrate_elements=None,
         if second_layer:
             sub_dist, sub_proj = classify_atom(atoms, index, second_layer,
                                                third_layer, normal, basis,
-                                               dist_tol=dist_tol, hcp_tol=hcp_tol)
+                                               dist_tol=dist_tol, hcp_tol=hcp_tol,
+                                               frame=frame_for(second_layer))
             sub_primary = sub_proj if main == "proj" else sub_dist
             if sub_primary.get("site") in UNRESOLVED:
                 sub_primary = sub_dist
@@ -977,7 +1039,14 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
     }
     if not quiet:
         print("\n# ---------- %s ----------" % set_dir)
-        print("  structures : %s" % ("1 (folder itself)" if single else len(ids)))
+        if single:
+            print("  structures : 1 (folder itself)")
+        else:
+            ready = sum(1 for i in ids
+                        if prefer_poscar or has_contcar(os.path.join(set_dir, i)))
+            print("  structures : %d%s"
+                  % (ready, "" if ready == len(ids)
+                     else "   (of %d; the rest have no CONTCAR yet)" % len(ids)))
         print("  surface twin : %s" % (surface_dir if surface_dir else "not found"))
         if redox_dirs:
             for label, path in redox_dirs:
@@ -989,12 +1058,25 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
 
     rows, site_rows = [], []
     adsorbate_reported = False
+    resolved = None
+    skipped_ids = []
     for structure_id in (["."] if single else ids):
         main_dir = set_dir if single else os.path.join(set_dir, structure_id)
+        # A folder with no CONTCAR is one VASP has not run yet. It has no
+        # energy and no relaxed geometry, so every column it could fill would
+        # be blank -- listing it only lengthens the table. -poscar is the
+        # exception: there the unrelaxed input IS what was asked for.
+        if not prefer_poscar and not single and not has_contcar(main_dir):
+            skipped_ids.append(structure_id)
+            continue
         row = {"Structure": set_name if single else structure_id}
 
-        energy, source = read_energy(main_dir)
-        natoms = count_atoms(main_dir)
+        # Option 1 asks for sites only; reading energies there would load
+        # VASPio (pymatgen, matplotlib) for numbers nobody asked for.
+        energy, source, natoms = None, "", None
+        if do_energy or do_redox_surface:
+            energy, source = read_energy(main_dir)
+            natoms = count_atoms(main_dir)
         if do_energy:
             row["N atoms"] = natoms
             row["Energy (eV)"] = energy
@@ -1051,14 +1133,19 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
             if atoms is None:
                 info["warnings"].append("%s: no readable POSCAR/CONTCAR" % main_dir)
             else:
-                surface_atoms = None
-                if surface_dir:
-                    twin = surface_dir if single else os.path.join(surface_dir, structure_id)
-                    if _is_dir(twin):
-                        surface_atoms, _ = read_structure(twin, prefer_poscar=prefer_poscar)
-                resolved = resolve_adsorbate_elements(
-                    atoms, surface_atoms=surface_atoms, metadata=metadata,
-                    ads_override=ads_override, pool_override=pool_override)
+                if resolved is None:
+                    # Which elements are the adsorbate is a property of the
+                    # SET, not of one structure -- every structure of a set has
+                    # the same composition. Resolving it once saves reading the
+                    # surface twin again for every structure.
+                    surface_atoms = None
+                    if surface_dir:
+                        twin = surface_dir if single else os.path.join(surface_dir, structure_id)
+                        if _is_dir(twin):
+                            surface_atoms, _ = read_structure(twin, prefer_poscar=prefer_poscar)
+                    resolved = resolve_adsorbate_elements(
+                        atoms, surface_atoms=surface_atoms, metadata=metadata,
+                        ads_override=ads_override, pool_override=pool_override)
                 if info["adsorbate"] is None:
                     info["adsorbate"] = resolved
                 if not quiet and not adsorbate_reported:
@@ -1074,10 +1161,15 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
                 # is the point of the comparison. _surface is skipped -- there
                 # is no adsorbate left in it by construction.
                 folders = [("main", main_dir, atoms)]
+                main_poscar = None
+                if do_twin_sites and redox_dirs:
+                    main_poscar = _read_poscar_only(main_dir)
                 if do_twin_sites:
                     for label, path in redox_dirs:
                         twin = path if single else os.path.join(path, structure_id)
                         if not _is_dir(twin):
+                            continue
+                        if not prefer_poscar and not has_contcar(twin):
                             continue
                         twin_atoms, _twin_file = read_structure(
                             twin, prefer_poscar=prefer_poscar)
@@ -1101,7 +1193,8 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
                     labels, map_note = [], ""
                     if folder_label != "main":
                         labels, map_note = map_to_main_labels(
-                            folder_dir, main_dir, folder_atoms)
+                            folder_dir, main_dir, folder_atoms,
+                            main_poscar=main_poscar)
                     if map_note and map_note not in info["warnings"]:
                         info["warnings"].append(map_note)
                     for site_row in site_result:
@@ -1123,6 +1216,12 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
                         site_rows.append(entry)
         rows.append(row)
 
+    if skipped_ids:
+        info["warnings"].append(
+            "%d structure(s) have no CONTCAR yet and were left out: %s"
+            % (len(skipped_ids), ", ".join(skipped_ids[:10])
+               + (" ..." if len(skipped_ids) > 10 else "")))
+    info["skipped_ids"] = skipped_ids
     table = pd.DataFrame(rows)
     site_table, diff_table = split_site_tables(site_rows)
     info["ensemble_table"] = ensemble_counts(site_rows)
