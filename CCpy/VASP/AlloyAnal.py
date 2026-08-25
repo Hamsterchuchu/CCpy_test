@@ -386,6 +386,46 @@ def count_atoms(directory):
     return None
 
 
+def check_converged(directory, _cache={}):
+    """
+    Did VASP finish this folder cleanly? Same verdict as CCpyVASPAnal option 0
+    and the 'Converged' column of option 2 -- VASPOutput.vasp_status(), which
+    runs custodian's VaspErrorHandler over vasp.out and adds the max-ionic
+    check built from the INCAR's NSW.
+
+    One difference, on purpose: vasp_status() reports "False" when there is no
+    vasp.out at all, which for this command would mark every folder of a run
+    that simply does not keep vasp.out as failed. That is not a verdict, so it
+    is reported as "Unknown" here and left out of the counts.
+
+    Returns "True" / "False" / "Unknown" (also "Unknown" when custodian is
+    missing). Results are cached per folder: a twin is asked about once per
+    structure it takes part in.
+    """
+    directory = os.path.abspath(directory)
+    if directory in _cache:
+        return _cache[directory]
+    verdict = "Unknown"
+    try:
+        names = os.listdir(directory)
+    except Exception:
+        names = []
+    has_log = any(name in names for name in ("vasp.out", "vasp.out.gz"))
+    has_outcar = any(name in names for name in ("OUTCAR", "OUTCAR.gz"))
+    if has_log and has_outcar:
+        from CCpy.VASP.VASPio import VASPOutput
+        pwd = os.getcwd()
+        try:
+            os.chdir(directory)
+            verdict = str(VASPOutput().vasp_status()[2])
+        except Exception:
+            verdict = "Unknown"
+        finally:
+            os.chdir(pwd)
+    _cache[directory] = verdict
+    return verdict
+
+
 def read_energy(directory):
     """
     Final energy of one VASP folder, the CCpyVASPAnal.py way: OUTCAR TOTEN
@@ -996,7 +1036,7 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
                 ads_override=None, pool_override=None, dist_tol=DEFAULT_DIST_TOL,
                 layer_tol=DEFAULT_LAYER_TOL, hcp_tol=DEFAULT_HCP_TOL,
                 main=DEFAULT_MAIN_METHOD, do_redox_surface=False,
-                do_twin_sites=True, quiet=False):
+                do_twin_sites=True, check_errors=True, quiet=False):
     """
     Analyze one AlloyGen output set and return (table, site_table, info).
 
@@ -1077,6 +1117,26 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
         if do_energy or do_redox_surface:
             energy, source = read_energy(main_dir)
             natoms = count_atoms(main_dir)
+        # Which folders of this row did not finish cleanly. A difference is
+        # only as good as the worse of its two folders, so the twin's verdict
+        # belongs on the row that uses it -- an unconverged _surface silently
+        # poisons dE_surface and every _rN - _surface with it.
+        failed = []
+        if check_errors and (do_energy or do_redox_surface):
+            row["Converged"] = check_converged(main_dir)
+            if row["Converged"] == "False":
+                failed.append("main")
+            twin_dirs = []
+            if surface_dir:
+                twin_dirs.append(("_surface", surface_dir if single
+                                  else os.path.join(surface_dir, structure_id)))
+            for label, path in redox_dirs:
+                twin_dirs.append(("_" + label, path if single
+                                  else os.path.join(path, structure_id)))
+            for label, path in twin_dirs:
+                if _is_dir(path) and check_converged(path) == "False":
+                    failed.append(label)
+            row["unconverged"] = ",".join(failed)
         if do_energy:
             row["N atoms"] = natoms
             row["Energy (eV)"] = energy
@@ -1216,6 +1276,32 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
                         site_rows.append(entry)
         rows.append(row)
 
+    for column, odd in energy_outliers(rows).items():
+        info["warnings"].append(
+            "%s is far from the rest of the set in %d structure(s): %s -- a "
+            "difference this size usually means the folder it came from ended "
+            "in a different state, not that the chemistry changed"
+            % (column, len(odd), ", ".join(odd[:10])
+               + (" ..." if len(odd) > 10 else "")))
+    # Two columns of "Unknown" say nothing. That happens when custodian is not
+    # installed, or when these runs do not keep vasp.out -- either way the
+    # check could not be made, and saying so once beats repeating it per row.
+    verdicts = {r.get("Converged") for r in rows if "Converged" in r}
+    if verdicts and verdicts == {"Unknown"}:
+        for r in rows:
+            r.pop("Converged", None)
+            r.pop("unconverged", None)
+        info["warnings"].append(
+            "convergence was not checked: no vasp.out in these folders, or "
+            "custodian is not installed (use -nocheck to stop trying)")
+    unconverged_rows = [r["Structure"] for r in rows if r.get("unconverged")]
+    info["unconverged_rows"] = unconverged_rows
+    if unconverged_rows:
+        info["warnings"].append(
+            "%d structure(s) have a folder custodian reports as not converged, "
+            "so their differences are not trustworthy: %s"
+            % (len(unconverged_rows), ", ".join(unconverged_rows[:10])
+               + (" ..." if len(unconverged_rows) > 10 else "")))
     if skipped_ids:
         info["warnings"].append(
             "%d structure(s) have no CONTCAR yet and were left out: %s"
@@ -1228,6 +1314,42 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
     info["n_atoms_checked"] = len(site_rows)
     info["n_disagree"] = len(diff_table) if diff_table is not None else 0
     return table, site_table, diff_table, info
+
+
+def energy_outliers(rows, floor=3.0, mad_factor=6.0):
+    """
+    Structures whose energy column sits far outside the rest of the set.
+
+    custodian answers "did VASP report an error"; it cannot answer "did this
+    job converge to a different state than its siblings". The structures of one
+    AlloyGen set differ only in their substitution pattern, so their energies
+    and differences live in a narrow band -- a value tens of eV away is a
+    calculation to look at, whatever the error handler said.
+
+    Spread is measured with the median absolute deviation, not the standard
+    deviation: the outliers themselves would inflate a standard deviation until
+    they no longer look unusual. `floor` keeps a set whose values are nearly
+    identical (MAD ~ 0) from flagging ordinary scatter.
+
+    Returns {column: [structure ids]}.
+    """
+    if not rows:
+        return {}
+    frame = pd.DataFrame(rows)
+    found = {}
+    for column in frame.columns:
+        if "(eV)" not in column or column == "Energy (eV)":
+            continue
+        values = pd.to_numeric(frame[column], errors="coerce")
+        if values.notna().sum() < 5:
+            continue
+        median = float(values.median())
+        mad = float((values - median).abs().median())
+        limit = max(floor, mad_factor * mad)
+        odd = frame.loc[(values - median).abs() > limit, "Structure"]
+        if len(odd):
+            found[column] = [str(x) for x in odd]
+    return found
 
 
 def ensemble_counts(site_rows):

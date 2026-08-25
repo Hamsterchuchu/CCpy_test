@@ -39,7 +39,13 @@ Checks
      shifted the numbering (-no_twins turns the whole thing off); when that
      cross-reference cannot be made (no matching POSCAR position) 'atom' is
      blank, never the twin's own local number mistaken for a main-folder one
- 13. a surface buckled by more than -layer_tol is REPORTED (that split is the
+ 13. an energy that sits far outside the rest of the set is reported by
+     structure id (median-absolute-deviation, so the outliers cannot hide
+     themselves), and an ordinary spread is NOT reported
+ 13b. the convergence columns are dropped, with one note, when the verdict
+     could not be made for any folder (no vasp.out, or no custodian). The
+     True/False path needs custodian and a vasp.out, so it is not covered here
+ 14. a surface buckled by more than -layer_tol is REPORTED (that split is the
      one real failure mode of the projection method), and raising -layer_tol
      puts the layer back together
 """
@@ -207,6 +213,17 @@ def build(root):
     g_keep_hcp = g_both[[i for i in range(len(g_both) - 2)] + [len(g_both) - 1]]
     put(os.path.join(root, "G_set_r1", "S000001"), g_keep_hcp, -290.0)
 
+    # -- set H: energies in a narrow band, with ONE surface twin 35 eV off.
+    #    That is what a job which ended in a different state looks like, and it
+    #    is invisible in the site tables: the difference just comes out wrong.
+    for number in range(1, 8):
+        sid = "S%06d" % number
+        one = plain.copy()
+        add_adsorbate(one, "S", 1.8, "fcc")
+        put(os.path.join(root, "H_set", sid), one, -300.0 - 0.01 * number)
+        put(os.path.join(root, "H_set_surface", sid),
+            plain, -280.0 - 0.01 * number + (35.0 if number == 3 else 0.0))
+
     # -- set D: top layer buckled by more than the default -layer_tol (1.2 A).
     #    Relaxation does this, and it is what tears the top layer in half: the
     #    projection method would then triangulate only the atoms that stayed
@@ -306,7 +323,7 @@ try:
     check("adsorbate came from the _surface twin",
           "_surface twin composition" in output)
     check("twins are not analysed as targets",
-          output.count("# ---------- ") == 7 and "_surface ---" not in output,
+          output.count("# ---------- ") == 8 and "_surface ---" not in output,
           output.count("# ---------- "))
     check("bottom-face adsorbate reported as bottom",
           sites[("C_set", "S000001", "Li")]["side"] == "bottom",
@@ -465,6 +482,18 @@ try:
               first.get("_r2 - _surface (eV)"))
         check("option 4: the shared reference energy is reported",
               abs(float(first["E_surface (eV)"]) + 280.0) < 1e-6, first.get("E_surface (eV)"))
+
+    # The energy that does not belong to the band, named by structure.
+    check("an energy far outside the set is reported, by structure id",
+          "far from the rest of the set" in output and "S000003" in output,
+          [line for line in output.splitlines() if "far from the rest" in line])
+    check("an ordinary spread of energies is not reported as an outlier",
+          sum(1 for line in output.splitlines() if "far from the rest" in line) == 1,
+          [line for line in output.splitlines() if "far from the rest" in line])
+    check("no vasp.out anywhere -> the convergence columns are dropped, "
+          "with one note",
+          "Converged" not in list(read_csv(os.path.join(work, "04_A_set_AlloyAnal.csv"))[0])
+          and "convergence was not checked" in output)
 
     # The buckled slab: the warning has to appear, and -layer_tol has to fix it.
     default_run = run(work).stdout

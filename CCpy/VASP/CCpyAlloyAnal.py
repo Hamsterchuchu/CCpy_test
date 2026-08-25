@@ -103,6 +103,16 @@ S000001 of the twin).
                  assigned (DEFAULT : everything that is not the adsorbate,
                  so a substituted HEA surface keeps all of its elements)
                  ex) -pool=Pt,Fe,Co,Ni,Cu
+-nocheck       : skip the custodian convergence check (it reads vasp.out and
+                 the INCAR of every folder). Without it the tables carry a
+                 'Converged' column for the main folder and an 'unconverged'
+                 column naming any twin of that row that failed -- a difference
+                 is only as good as the worse of its two folders, and an
+                 unconverged _surface poisons dE_surface and every
+                 _rN - _surface built on it. Same verdict as CCpyVASPAnal
+                 option 0 / the 'Converged' column of option 2, except that a
+                 folder with no vasp.out is reported as 'Unknown' rather than
+                 as a failure.
 -no_twins      : assign sites only in the main folder, not in the redox twins
 -poscar        : read POSCAR instead of CONTCAR (DEFAULT : CONTCAR, i.e. the
                  relaxed result). Without it, a folder with no CONTCAR is one
@@ -180,6 +190,7 @@ do_redox_surface = option == "4"
 chosen, ads, pool = None, None, None
 prefer_poscar = "-poscar" in sys.argv
 do_twin_sites = "-no_twins" not in sys.argv
+check_errors = "-nocheck" not in sys.argv
 take_all = "-all" in sys.argv
 dist_tol, layer_tol, hcp_tol = DEFAULT_DIST_TOL, DEFAULT_LAYER_TOL, DEFAULT_HCP_TOL
 main = DEFAULT_MAIN_METHOD
@@ -215,7 +226,8 @@ for set_dir in sets:
         set_dir, do_sites=do_sites, do_energy=do_energy,
         prefer_poscar=prefer_poscar, ads_override=ads, pool_override=pool,
         dist_tol=dist_tol, layer_tol=layer_tol, hcp_tol=hcp_tol, main=main,
-        do_redox_surface=do_redox_surface, do_twin_sites=do_twin_sites)
+        do_redox_surface=do_redox_surface, do_twin_sites=do_twin_sites,
+        check_errors=check_errors)
 
     if table is None or not len(table):
         print("  nothing to report in this folder.")
