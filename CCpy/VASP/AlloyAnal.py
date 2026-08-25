@@ -1119,7 +1119,12 @@ def ensemble_counts(site_rows):
     if "ensemble" not in frame:
         return pd.DataFrame()
     frame = frame.copy()
-    frame["element"] = [str(atom).split("#")[0] for atom in frame["atom"]]
+    # The element comes from the row itself, not from parsing the 'atom' label.
+    # 'atom' is blank whenever the map back to the main folder failed, and
+    # splitting that string would file those atoms under an empty element --
+    # the same species would then be counted in two separate groups.
+    if "element" not in frame:
+        frame["element"] = [str(atom).split("#")[0] for atom in frame["atom"]]
     grouped = frame.groupby(["folder", "element", "site", "ensemble"], dropna=False)
     out = grouped.agg(**{
         "atoms": ("atom", "size"),

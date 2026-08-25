@@ -346,6 +346,13 @@ try:
               (sum(int(row["atoms"]) for row in ens), len(a_rows)))
         check("roll-up counts structures as well as atoms",
               all(int(row["structures"]) <= int(row["atoms"]) for row in ens))
+    # F_set is the set whose twin cannot be mapped, so its 'atom' is blank.
+    # The roll-up must still file those atoms under their real element.
+    f_ens = os.path.join(work, "04_F_set_SiteEnsembles.csv")
+    if os.path.exists(f_ens):
+        check("a blank 'atom' does not lose the element in the roll-up",
+              all(row["element"] for row in read_csv(f_ens)),
+              [row["element"] for row in read_csv(f_ens)])
 
     check("no diff file when the methods never disagree",
           not os.path.exists(os.path.join(work, "04_A_set_SiteDiff.csv")))
