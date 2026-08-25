@@ -1081,9 +1081,13 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
                         # looking the atom up in its CONTCAR.
                         entry["local_no"] = site_row["atom_no"]
                         if folder_label != "main":
+                            # Blank, not a wrong number: 'atom' otherwise still
+                            # holds the value analyze_sites gave it, which is
+                            # this folder's OWN local label (label_atom() on
+                            # folder_atoms) -- a plausible-looking main-folder
+                            # identity that is not actually one.
                             mapped = (labels[site_row["atom_no"] - 1] if labels else "")
-                            if mapped:
-                                entry["atom"] = mapped
+                            entry["atom"] = mapped
                         site_rows.append(entry)
         rows.append(row)
 

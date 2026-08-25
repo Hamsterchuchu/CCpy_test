@@ -34,9 +34,11 @@ Checks
      of fcc(100) sits on a second-layer atom
  11. option 4 puts every twin on the _surface reference
      (main - _surface, _r1 - _surface, _r2 - _surface) and writes its own file
- 12. sites are assigned in the redox twins too, and 'main_atom' maps a twin
-     atom back to the number it has in the main folder even when the removed
-     atom shifted the numbering (-no_twins turns the whole thing off)
+ 12. sites are assigned in the redox twins too, and 'atom' maps a twin atom
+     back to the number it has in the main folder even when the removed atom
+     shifted the numbering (-no_twins turns the whole thing off); when that
+     cross-reference cannot be made (no matching POSCAR position) 'atom' is
+     blank, never the twin's own local number mistaken for a main-folder one
  13. a surface buckled by more than -layer_tol is REPORTED (that split is the
      one real failure mode of the projection method), and raising -layer_tol
      puts the layer back together
@@ -173,6 +175,24 @@ def build(root):
     keep_fcc = both[[i for i in range(len(both) - 1)]]
     put(os.path.join(root, "E_set_r2", "S000001"), keep_fcc, -291.0)   # S#37 stays
 
+    # -- set F: same two-adsorbate layout as E, but the main folder's POSCAR is
+    #    gone and its CONTCAR has moved (a relaxed job that only kept CONTCAR).
+    #    map_to_main_labels() then falls back to that CONTCAR and the positions
+    #    no longer match either twin atom within its 1e-3 tolerance, so the
+    #    mapping must come back blank -- not the twin's own local number
+    #    mistaken for a main-folder one.
+    f_both = plain.copy()
+    add_adsorbate(f_both, "S", 1.8, "fcc")    # S#37 in the main folder
+    add_adsorbate(f_both, "S", 1.8, "hcp")    # S#38
+    put(os.path.join(root, "F_set", "S000001"), f_both, -300.0)
+    f_relaxed = f_both.copy()
+    f_relaxed.positions += 0.03
+    ase_write(os.path.join(root, "F_set", "S000001", "CONTCAR"), f_relaxed, format="vasp")
+    os.remove(os.path.join(root, "F_set", "S000001", "POSCAR"))
+    put(os.path.join(root, "F_set_surface", "S000001"), plain, -280.0)
+    f_keep_hcp = f_both[[i for i in range(len(f_both) - 2)] + [len(f_both) - 1]]
+    put(os.path.join(root, "F_set_r1", "S000001"), f_keep_hcp, -290.0)   # S#38 stays
+
     # -- set D: top layer buckled by more than the default -layer_tol (1.2 A).
     #    Relaxation does this, and it is what tears the top layer in half: the
     #    projection method would then triangulate only the atoms that stayed
@@ -272,7 +292,7 @@ try:
     check("adsorbate came from the _surface twin",
           "_surface twin composition" in output)
     check("twins are not analysed as targets",
-          output.count("# ---------- ") == 5 and "_surface ---" not in output,
+          output.count("# ---------- ") == 6 and "_surface ---" not in output,
           output.count("# ---------- "))
     check("bottom-face adsorbate reported as bottom",
           sites[("C_set", "S000001", "Li")]["side"] == "bottom",
@@ -371,6 +391,17 @@ try:
     e_row = [row for row in read_csv(os.path.join(work, "04_E_set_AlloyAnal.csv"))][0]
     check("the per-structure table carries energies only, not sites",
           not any(key.startswith("Sites") for key in e_row), list(e_row))
+
+    # Set F: the main folder's POSCAR is gone and its CONTCAR has moved, so the
+    # cross-reference cannot match either twin atom. 'atom' has to come back
+    # blank -- the whole point of the fix is that it must NOT silently show
+    # the twin's own local number as if it were a main-folder identity.
+    f_rows = read_csv(os.path.join(work, "04_F_set_AdsorptionSites.csv"))
+    f_twin = [row for row in f_rows if row["folder"] != "main"]
+    check("a redox twin whose atoms cannot be cross-referenced gets a blank "
+          "'atom', not its own local number mistaken for one",
+          len(f_twin) == 1 and f_twin[0]["atom"] == "" and f_twin[0]["local_no"] == "37",
+          f_twin)
 
     no_twins = run(work, ["-no_twins"])
     check("-no_twins runs without a traceback",
