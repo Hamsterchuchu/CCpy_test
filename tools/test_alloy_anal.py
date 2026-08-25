@@ -31,7 +31,10 @@ Checks
      of fcc(100) sits on a second-layer atom
  11. option 4 puts every twin on the _surface reference
      (main - _surface, _r1 - _surface, _r2 - _surface) and writes its own file
- 12. a surface buckled by more than -layer_tol is REPORTED (that split is the
+ 12. sites are assigned in the redox twins too, and 'main_atom' maps a twin
+     atom back to the number it has in the main folder even when the removed
+     atom shifted the numbering (-no_twins turns the whole thing off)
+ 13. a surface buckled by more than -layer_tol is REPORTED (that split is the
      one real failure mode of the projection method), and raising -layer_tol
      puts the layer back together
 """
@@ -153,6 +156,20 @@ def build(root):
     put(os.path.join(root, "C_set_surface", "S000001"), base, -90.0)
     truth.append(("C_set", "S000001", "hollow3-hcp", "top"))
 
+    # -- set E: two S adsorbates and a redox twin for each of them, so the
+    #    remaining atom's number SHIFTS in one twin but not the other. That is
+    #    the case a naive per-folder numbering gets wrong.
+    plain = fcc111("Pt", size=(3, 3, 4), vacuum=10.0)
+    both = plain.copy()
+    add_adsorbate(both, "S", 1.8, "fcc")     # becomes S#37 in the main folder
+    add_adsorbate(both, "S", 1.8, "hcp")     # becomes S#38
+    put(os.path.join(root, "E_set", "S000001"), both, -300.0)
+    put(os.path.join(root, "E_set_surface", "S000001"), plain, -280.0)
+    keep_hcp = both[[i for i in range(len(both) - 2)] + [len(both) - 1]]
+    put(os.path.join(root, "E_set_r1", "S000001"), keep_hcp, -290.0)   # S#38 stays
+    keep_fcc = both[[i for i in range(len(both) - 1)]]
+    put(os.path.join(root, "E_set_r2", "S000001"), keep_fcc, -291.0)   # S#37 stays
+
     # -- set D: top layer buckled by more than the default -layer_tol (1.2 A).
     #    Relaxation does this, and it is what tears the top layer in half: the
     #    projection method would then triangulate only the atoms that stayed
@@ -192,7 +209,8 @@ try:
         path = os.path.join(work, "04_%s_AdsorptionSites.csv" % name)
         if os.path.exists(path):
             for row in read_csv(path):
-                sites[(name, row["Structure"], row["element"])] = row
+                if row.get("folder", "main") == "main":
+                    sites[(name, row["Structure"], row["element"])] = row
 
     check("site files written",
           all(os.path.exists(os.path.join(work, "04_%s_AdsorptionSites.csv" % n))
@@ -237,7 +255,7 @@ try:
     check("adsorbate came from the _surface twin",
           "_surface twin composition" in output)
     check("twins are not analysed as targets",
-          output.count("# ---------- ") == 4 and "_surface ---" not in output,
+          output.count("# ---------- ") == 5 and "_surface ---" not in output,
           output.count("# ---------- "))
     check("bottom-face adsorbate reported as bottom",
           sites[("C_set", "S000001", "Li")]["side"] == "bottom",
@@ -258,6 +276,36 @@ try:
           [(row["site"], row["site_dist"]) for row in rows])
     check("-main= rejects an unknown method",
           "takes 'proj' or 'dist'" in run(work, ["-main=xyz"]).stdout)
+
+    # Sites in the redox twins, and the number map back to the main folder.
+    twin_rows = read_csv(os.path.join(work, "04_E_set_AdsorptionSites.csv"))
+    by_folder = {row["folder"]: row for row in twin_rows if row["folder"] != "main"}
+    check("redox twins get their own site rows",
+          set(by_folder) == {"r1", "r2"}, sorted(by_folder))
+    if set(by_folder) == {"r1", "r2"}:
+        # _r1 kept the hcp atom: folder-local #37, main #38 -- the shifted case.
+        check("main_atom follows the shifted numbering of _r1",
+              by_folder["r1"]["main_atom"] == "S#38" and by_folder["r1"]["atom"] == "S#37",
+              (by_folder["r1"]["main_atom"], by_folder["r1"]["atom"]))
+        check("_r1 keeps the hcp site", by_folder["r1"]["site"] == "hollow3-hcp",
+              by_folder["r1"]["site"])
+        # _r2 kept the fcc atom, whose number did not move.
+        check("main_atom unchanged where nothing shifted",
+              by_folder["r2"]["main_atom"] == "S#37", by_folder["r2"]["main_atom"])
+        check("_r2 keeps the fcc site", by_folder["r2"]["site"] == "hollow3-fcc",
+              by_folder["r2"]["site"])
+    e_row = [row for row in read_csv(os.path.join(work, "04_E_set_AlloyAnal.csv"))][0]
+    check("per-structure table gains a Sites_r1 column",
+          "hollow3-hcp" in e_row.get("Sites_r1", ""), e_row.get("Sites_r1"))
+
+    no_twins = run(work, ["-no_twins"])
+    check("-no_twins runs without a traceback",
+          "Traceback" not in no_twins.stdout and no_twins.returncode == 0,
+          no_twins.stdout[-800:])
+    check("-no_twins leaves only the main folder",
+          all(row["folder"] == "main"
+              for row in read_csv(os.path.join(work, "04_E_set_AdsorptionSites.csv"))))
+    run(work)   # restore the full tables for whatever follows
 
     # Option 4: every twin against the clean surface.
     #   A_set S000001: main -301, _surface -280, _r1 -291, _r2 -296

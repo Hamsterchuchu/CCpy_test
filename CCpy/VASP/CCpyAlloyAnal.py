@@ -37,6 +37,18 @@ S000001 of the twin).
     (a 3-fold hollow is also reported as fcc or hcp).
     ex) CCpyAlloyAnal.py 1
 
+    The redox twins are assigned too, not just the main folder: whatever is
+    left after a redox step usually relaxes into a different site, and that
+    move is the comparison worth having. The site table gets one row per
+    adsorbate atom PER FOLDER, marked in the 'folder' column (main, r1, r2 ..),
+    and the per-structure table gets a Sites_r1 / Sites_r2 .. column beside
+    Sites. Atom numbers restart in every folder, so 'main_atom' carries the
+    number the same atom has in the main folder -- read down that column to
+    follow one atom across the redox steps. The map is read off the unrelaxed
+    POSCARs, which are identical apart from the removed atoms, so it is exact;
+    when a POSCAR is missing the column is left blank rather than guessed.
+    Turn it off with -no_twins (the main folder only).
+
 2 : Energy differences against the twins, per structure:
         dE_surface = E(set) - E(set_surface)
         dE_r1      = E(set) - E(set_r1),  dE_r2 = ...
@@ -80,6 +92,7 @@ S000001 of the twin).
                  assigned (DEFAULT : everything that is not the adsorbate,
                  so a substituted HEA surface keeps all of its elements)
                  ex) -pool=Pt,Fe,Co,Ni,Cu
+-no_twins      : assign sites only in the main folder, not in the redox twins
 -poscar        : read POSCAR instead of CONTCAR (DEFAULT : CONTCAR, i.e. the
                  relaxed result; POSCAR is used anyway when CONTCAR is missing)
 -tol=#         : nearest-neighbour window for the distance method, as a
@@ -138,6 +151,7 @@ do_redox_surface = option == "4"
 
 chosen, ads, pool = None, None, None
 prefer_poscar = "-poscar" in sys.argv
+do_twin_sites = "-no_twins" not in sys.argv
 take_all = "-all" in sys.argv
 dist_tol, layer_tol, hcp_tol = DEFAULT_DIST_TOL, DEFAULT_LAYER_TOL, DEFAULT_HCP_TOL
 main = DEFAULT_MAIN_METHOD
@@ -173,7 +187,7 @@ for set_dir in sets:
         set_dir, do_sites=do_sites, do_energy=do_energy,
         prefer_poscar=prefer_poscar, ads_override=ads, pool_override=pool,
         dist_tol=dist_tol, layer_tol=layer_tol, hcp_tol=hcp_tol, main=main,
-        do_redox_surface=do_redox_surface)
+        do_redox_surface=do_redox_surface, do_twin_sites=do_twin_sites)
 
     if table is None or not len(table):
         print("  nothing to report in this folder.")

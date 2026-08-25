@@ -695,6 +695,44 @@ def site_label(result):
 UNRESOLVED = ("unresolved", "unavailable")
 
 
+def map_to_main_labels(twin_dir, main_dir, twin_atoms):
+    """
+    Label every atom of a redox twin with the number it carries in the MAIN
+    folder, so a site can be followed across the redox step.
+
+    The two folders' POSCARs come from the same generated structure -- the twin
+    is that structure minus the removed atoms, written by the same writer, with
+    nothing relaxed yet -- so the unrelaxed positions match exactly and the map
+    can be read off instead of guessed. It is built from POSCAR even when the
+    sites are taken from CONTCAR, because CONTCAR positions have moved apart
+    during relaxation and would only support a nearest-neighbour guess.
+
+    Returns a list as long as twin_atoms ("" where nothing matched), and an
+    empty list when either POSCAR is missing -- a missing cross-reference is
+    reported as blank, never as a wrong number.
+    """
+    twin_poscar, _ = read_structure(twin_dir, prefer_poscar=True)
+    main_poscar, _ = read_structure(main_dir, prefer_poscar=True)
+    if twin_poscar is None or main_poscar is None:
+        return []
+    if len(twin_poscar) != len(twin_atoms):
+        return []
+    main_symbols = main_poscar.get_chemical_symbols()
+    main_frac = main_poscar.get_scaled_positions(wrap=True)
+    twin_symbols = twin_poscar.get_chemical_symbols()
+    twin_frac = twin_poscar.get_scaled_positions(wrap=True)
+    labels = []
+    for i in range(len(twin_poscar)):
+        delta = main_frac - twin_frac[i]
+        delta -= np.round(delta)                      # nearest periodic image
+        distance = np.linalg.norm(delta, axis=1)
+        distance[[j for j in range(len(main_poscar))
+                  if main_symbols[j] != twin_symbols[i]]] = np.inf
+        j = int(np.argmin(distance))
+        labels.append("%s#%d" % (main_symbols[j], j + 1) if distance[j] < 1e-3 else "")
+    return labels
+
+
 # -----------------------------------------------------------------------------
 # Site analysis of one structure
 # -----------------------------------------------------------------------------
@@ -845,7 +883,8 @@ def summarize_sites(rows):
 def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
                 ads_override=None, pool_override=None, dist_tol=DEFAULT_DIST_TOL,
                 layer_tol=DEFAULT_LAYER_TOL, hcp_tol=DEFAULT_HCP_TOL,
-                main=DEFAULT_MAIN_METHOD, do_redox_surface=False, quiet=False):
+                main=DEFAULT_MAIN_METHOD, do_redox_surface=False,
+                do_twin_sites=True, quiet=False):
     """
     Analyze one AlloyGen output set and return (table, site_table, info).
 
@@ -860,6 +899,11 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
     All of them share one reference (the clean surface), so the numbers can be
     read as one ladder -- what is left adsorbed after each redox step -- which
     differencing against the main folder cannot give.
+
+    With do_twin_sites (the default) the sites are assigned in every redox twin
+    as well, not only in the main folder: the atoms that survive a redox step
+    often move to another site, and the 'folder' / 'main_atom' columns of the
+    site table are what let that move be followed.
     """
     set_dir = os.path.normpath(set_dir)
     set_name = os.path.basename(os.path.abspath(set_dir))
@@ -975,18 +1019,47 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
                     if resolved["note"]:
                         print("  note : %s" % resolved["note"])
                     adsorbate_reported = True
-                site_result, site_info = analyze_sites(
-                    atoms, resolved["elements"],
-                    substrate_elements=resolved.get("substrate"),
-                    dist_tol=dist_tol, layer_tol=layer_tol, hcp_tol=hcp_tol,
-                    main=main)
-                if site_info["warning"]:
-                    info["warnings"].append("%s: %s" % (main_dir, site_info["warning"]))
-                for site_row in site_result:
-                    entry = {"Structure": row["Structure"]}
-                    entry.update(site_row)
-                    site_rows.append(entry)
-                row["Sites"] = summarize_sites(site_result)
+
+                # The main folder, then every redox twin: after a redox step
+                # the atoms that are left can sit somewhere else, and that move
+                # is the point of the comparison. _surface is skipped -- there
+                # is no adsorbate left in it by construction.
+                folders = [("main", main_dir, atoms)]
+                if do_twin_sites:
+                    for label, path in redox_dirs:
+                        twin = path if single else os.path.join(path, structure_id)
+                        if not _is_dir(twin):
+                            continue
+                        twin_atoms, _twin_file = read_structure(
+                            twin, prefer_poscar=prefer_poscar)
+                        if twin_atoms is None:
+                            info["warnings"].append(
+                                "%s: no readable POSCAR/CONTCAR" % twin)
+                            continue
+                        folders.append((label, twin, twin_atoms))
+
+                for folder_label, folder_dir, folder_atoms in folders:
+                    site_result, site_info = analyze_sites(
+                        folder_atoms, resolved["elements"],
+                        substrate_elements=resolved.get("substrate"),
+                        dist_tol=dist_tol, layer_tol=layer_tol, hcp_tol=hcp_tol,
+                        main=main)
+                    if site_info["warning"]:
+                        info["warnings"].append("%s: %s" % (folder_dir, site_info["warning"]))
+                    # Atom numbers restart in every folder, so carry the main
+                    # folder's number along; without it the same atom looks
+                    # like a different one after a redox step.
+                    labels = ([] if folder_label == "main"
+                              else map_to_main_labels(folder_dir, main_dir, folder_atoms))
+                    for site_row in site_result:
+                        entry = {"Structure": row["Structure"], "folder": folder_label}
+                        entry["main_atom"] = (site_row["atom"] if folder_label == "main"
+                                              else (labels[site_row["atom_no"] - 1]
+                                                    if labels else ""))
+                        entry.update(site_row)
+                        site_rows.append(entry)
+                    column = "Sites" if folder_label == "main" else "Sites_%s" % folder_label
+                    row[column] = summarize_sites(site_result)
         rows.append(row)
 
     table = pd.DataFrame(rows)
