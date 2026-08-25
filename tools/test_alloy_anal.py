@@ -541,7 +541,7 @@ try:
         check("header '%s' is safe to open in a spreadsheet" % header,
               not header.startswith(("+", "=", "-", "@")), header)
     check("the fit reports how well it explains the set",
-          "explains R2=" in output, [l for l in output.splitlines() if "R2" in l])
+          "R2=" in output, [l for l in output.splitlines() if "R2" in l])
 
     # The buckled slab: the warning has to appear, and -layer_tol has to fix it.
     default_run = run(work).stdout

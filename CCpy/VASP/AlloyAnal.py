@@ -1364,7 +1364,37 @@ def energy_outliers(rows, floor=3.0, mad_factor=6.0):
     return found
 
 
-def ensemble_energy_fit(site_rows, rows, min_atoms=5):
+def fit_target(frame, folder):
+    """
+    The energy a folder's sites are responsible for, and its name.
+
+    For the main folder that is dE_surface. For a redox twin it is
+    `_rN - _surface` -- the same quantity one redox step further along, and the
+    only one whose value is a sum over THAT folder's sites. When option 4 has
+    not been run the column is not there, but it is still recoverable from the
+    two option-2 columns:
+
+        (main - surface) - (main - rN) = rN - surface
+
+    so the twins get their contributions either way.
+    """
+    if folder == "main":
+        for candidate in ("dE_surface (eV)", "main - _surface (eV)"):
+            if candidate in frame:
+                return pd.to_numeric(frame[candidate], errors="coerce"), candidate
+        return None, None
+    direct = "_%s - _surface (eV)" % folder
+    if direct in frame:
+        return pd.to_numeric(frame[direct], errors="coerce"), direct
+    surface, twin = "dE_surface (eV)", "dE_%s (eV)" % folder
+    if surface in frame and twin in frame:
+        derived = (pd.to_numeric(frame[surface], errors="coerce")
+                   - pd.to_numeric(frame[twin], errors="coerce"))
+        return derived, "_%s - _surface (eV)" % folder
+    return None, None
+
+
+def ensemble_energy_fit(site_rows, rows, folder="main", min_atoms=5):
     """
     How much each element combination contributes to the adsorption energy.
 
@@ -1398,34 +1428,32 @@ def ensemble_energy_fit(site_rows, rows, min_atoms=5):
     if not rows or not site_rows:
         return {}, {}
     frame = pd.DataFrame(rows)
-    column = None
-    for candidate in ("dE_surface (eV)", "main - _surface (eV)"):
-        if candidate in frame:
-            column = candidate
-            break
+    values, column = fit_target(frame, folder)
     if column is None:
         return {}, {}
 
     energies = {}
     suspect = set()
-    for _i, row in frame.iterrows():
+    for position, (_i, row) in enumerate(frame.iterrows()):
         if row.get("unconverged"):
             suspect.add(row["Structure"])
-        value = pd.to_numeric(pd.Series([row.get(column)]), errors="coerce")[0]
+        value = values.iloc[position]
         if pd.notna(value):
             energies[row["Structure"]] = float(value)
-    for odd in energy_outliers(rows).get(column, []):
-        suspect.add(odd)
+    for name, odd in energy_outliers(rows).items():
+        # A structure whose main energy is off poisons every column built on
+        # it, so one bad row is dropped from every folder's fit, not just its own.
+        suspect.update(odd)
     for structure in suspect:
         energies.pop(structure, None)
     if len(energies) < 10:
         return {}, {}
 
-    # counts[structure][key] -- only the main folder: the twins have their own
-    # energy columns and mixing them would fit two different quantities at once.
+    # counts[structure][key] -- one folder at a time: each folder answers to its
+    # own energy column, and mixing them would fit two quantities at once.
     counts, totals = {}, Counter()
     for row in site_rows:
-        if row.get("folder") != "main" or row["Structure"] not in energies:
+        if row.get("folder") != folder or row["Structure"] not in energies:
             continue
         key = "%s %s %s" % (str(row["atom"]).split("#")[0], row["site"], row["ensemble"])
         counts.setdefault(row["Structure"], Counter())[key] += 1
@@ -1474,6 +1502,7 @@ def ensemble_energy_fit(site_rows, rows, min_atoms=5):
 
     spread = target - target.mean()
     stats = {
+        "folder": folder,
         "column": column,
         "n_structures": len(structures),
         "n_terms": len(keys),
@@ -1521,20 +1550,25 @@ def ensemble_counts(site_rows, rows=None):
     }).reset_index()
     out["mean d_min (A)"] = out["mean d_min (A)"].round(3)
     out["mean height (A)"] = out["mean height (A)"].round(3)
-    contributions, stats = ensemble_energy_fit(site_rows, rows) if rows else ({}, {})
+    contributions, fits = {}, []
+    if rows:
+        for folder in sorted(out.folder.unique(), key=lambda f: (f != "main", f)):
+            found, stats = ensemble_energy_fit(site_rows, rows, folder=folder)
+            if not found:
+                continue
+            contributions.update({(folder, k): v for k, v in found.items()})
+            fits.append(stats)
     if contributions:
         keys = out.element + " " + out.site + " " + out.ensemble
-        out["dE vs group avg (eV)"] = [contributions.get(k, (None, None))[0]
-                                   if folder == "main" else None
-                                   for k, folder in zip(keys, out.folder)]
-        out["stderr (eV)"] = [contributions.get(k, (None, None))[1]
-                          if folder == "main" else None
-                          for k, folder in zip(keys, out.folder)]
-        out.attrs["fit"] = stats
+        pairs = [contributions.get((folder, k), (None, None))
+                 for k, folder in zip(keys, out.folder)]
+        out["dE vs group avg (eV)"] = [p[0] for p in pairs]
+        out["stderr (eV)"] = [p[1] for p in pairs]
+        out.attrs["fit"] = fits
     out = out.sort_values(["folder", "element", "atoms"], ascending=[True, True, False])
     columns = [c for c in ENSEMBLE_COLUMNS if c in out]
     result = out[columns].reset_index(drop=True)
-    result.attrs["fit"] = out.attrs.get("fit", {})
+    result.attrs["fit"] = out.attrs.get("fit", [])
     return result
 
 
