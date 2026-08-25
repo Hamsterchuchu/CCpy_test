@@ -29,7 +29,9 @@ Checks
      the stacking that was built: an hcp hollow sits on a second-layer ATOM
      ('top'), an fcc hollow on a second-layer hollow, and the four-fold hollow
      of fcc(100) sits on a second-layer atom
- 11. a surface buckled by more than -layer_tol is REPORTED (that split is the
+ 11. option 4 puts every twin on the _surface reference
+     (main - _surface, _r1 - _surface, _r2 - _surface) and writes its own file
+ 12. a surface buckled by more than -layer_tol is REPORTED (that split is the
      one real failure mode of the projection method), and raising -layer_tol
      puts the layer back together
 """
@@ -168,10 +170,10 @@ def build(root):
     return truth
 
 
-def run(work, extra=()):
+def run(work, extra=(), option="3"):
     environment = dict(os.environ)
     environment["PYTHONPATH"] = REPO + os.pathsep + environment.get("PYTHONPATH", "")
-    return subprocess.run([sys.executable, BIN, "3", "-all"] + list(extra),
+    return subprocess.run([sys.executable, BIN, option, "-all"] + list(extra),
                           cwd=work, env=environment,
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                           universal_newlines=True)
@@ -256,6 +258,29 @@ try:
           [(row["site"], row["site_dist"]) for row in rows])
     check("-main= rejects an unknown method",
           "takes 'proj' or 'dist'" in run(work, ["-main=xyz"]).stdout)
+
+    # Option 4: every twin against the clean surface.
+    #   A_set S000001: main -301, _surface -280, _r1 -291, _r2 -296
+    process = run(work, option="4")
+    check("option 4 runs without a traceback",
+          "Traceback" not in process.stdout and process.returncode == 0,
+          process.stdout[-800:])
+    path = os.path.join(work, "04_A_set_RedoxVsSurface.csv")
+    check("option 4 writes its own file (option 1-3 table not overwritten)",
+          os.path.exists(path) and os.path.exists(os.path.join(work, "04_A_set_AlloyAnal.csv")))
+    if os.path.exists(path):
+        first = read_csv(path)[0]
+        check("option 4: main - _surface exact",
+              abs(float(first["main - _surface (eV)"]) - (-301.0 + 280.0)) < 1e-6,
+              first.get("main - _surface (eV)"))
+        check("option 4: _r1 - _surface exact",
+              abs(float(first["_r1 - _surface (eV)"]) - (-291.0 + 280.0)) < 1e-6,
+              first.get("_r1 - _surface (eV)"))
+        check("option 4: _r2 - _surface exact (OSZICAR twin)",
+              abs(float(first["_r2 - _surface (eV)"]) - (-296.0 + 280.0)) < 1e-6,
+              first.get("_r2 - _surface (eV)"))
+        check("option 4: the shared reference energy is reported",
+              abs(float(first["E_surface (eV)"]) + 280.0) < 1e-6, first.get("E_surface (eV)"))
 
     # The buckled slab: the warning has to appear, and -layer_tol has to fix it.
     default_run = run(work).stdout

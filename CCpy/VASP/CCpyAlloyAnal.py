@@ -45,6 +45,19 @@ S000001 of the twin).
 3 : Both of the above in one table.
     ex) CCpyAlloyAnal.py 3
 
+4 : Every twin against the SURFACE twin, per structure:
+        main - _surface = E(set)     - E(set_surface)
+        _r1  - _surface = E(set_r1)  - E(set_surface),  _r2 - _surface = ...
+    ex) CCpyAlloyAnal.py 4
+
+    Option 2 differences each redox twin against the main folder, which
+    answers "what did this redox step cost". Option 4 puts every twin on ONE
+    reference, the clean surface, so the column of a redox twin is what is
+    still adsorbed after that step -- the same quantity as dE_surface, one
+    redox state further along. Read down a row and it is a ladder.
+    Written to 04_[SET]_RedoxVsSurface.csv / .txt, so it does not overwrite
+    the table of option 1-3.
+
     NOTE  dE_surface is only the difference between the two folders. The
     reference energy of the adsorbate itself is NOT subtracted, so it is not
     a complete adsorption energy.
@@ -104,8 +117,9 @@ falling back to the other method if the primary one cannot resolve it.
   two geometrically identical sites of a substituted surface differ in energy.
 
 [output files]
-04_[SET]_AlloyAnal.csv / .txt        : one row per structure
-04_[SET]_AdsorptionSites.csv / .txt  : one row per adsorbate atom
+04_[SET]_AlloyAnal.csv / .txt        : one row per structure (option 1-3)
+04_[SET]_AdsorptionSites.csv / .txt  : one row per adsorbate atom (option 1, 3)
+04_[SET]_RedoxVsSurface.csv / .txt   : one row per structure (option 4)
 ''')
     quit()
 
@@ -114,12 +128,13 @@ from CCpy.VASP.AlloyAnal import (select_alloy_sets, analyze_set, write_tables,
                                  DEFAULT_HCP_TOL, DEFAULT_MAIN_METHOD)
 
 option = sys.argv[1]
-if option not in ("1", "2", "3"):
-    print("Unknown option: %s   (use 1, 2, 3, or -h)" % option)
+if option not in ("1", "2", "3", "4"):
+    print("Unknown option: %s   (use 1, 2, 3, 4, or -h)" % option)
     quit()
 
 do_sites = option in ("1", "3")
 do_energy = option in ("2", "3")
+do_redox_surface = option == "4"
 
 chosen, ads, pool = None, None, None
 prefer_poscar = "-poscar" in sys.argv
@@ -157,7 +172,8 @@ for set_dir in sets:
     table, site_table, info = analyze_set(
         set_dir, do_sites=do_sites, do_energy=do_energy,
         prefer_poscar=prefer_poscar, ads_override=ads, pool_override=pool,
-        dist_tol=dist_tol, layer_tol=layer_tol, hcp_tol=hcp_tol, main=main)
+        dist_tol=dist_tol, layer_tol=layer_tol, hcp_tol=hcp_tol, main=main,
+        do_redox_surface=do_redox_surface)
 
     if table is None or not len(table):
         print("  nothing to report in this folder.")
@@ -174,11 +190,15 @@ for set_dir in sets:
     for twin, ids in info["missing_twin_ids"].items():
         print("* %s has no folder for %d structure(s): %s"
               % (twin, len(ids), ", ".join(ids[:10]) + (" ..." if len(ids) > 10 else "")))
-    if do_energy and info["surface_dir"]:
-        print("* dE_surface is the difference between the two folders only; the "
-              "adsorbate reference energy is not included.")
+    if (do_energy or do_redox_surface) and info["surface_dir"]:
+        print("* the difference is between the two folders only; the adsorbate "
+              "reference energy is not included.")
+    if do_redox_surface and not info["surface_dir"]:
+        print("* no _surface twin next to this set, so there is nothing to "
+              "measure the twins against.")
 
     written = write_tables(table, site_table, info["set_name"], out_dir="./",
-                           do_sites=do_sites, do_energy=do_energy)
+                           do_sites=do_sites, do_energy=do_energy,
+                           kind="RedoxVsSurface" if do_redox_surface else "AlloyAnal")
     if written:
         print("Analysis files have been saved: " + ", ".join(os.path.basename(f) for f in written))

@@ -845,12 +845,21 @@ def summarize_sites(rows):
 def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
                 ads_override=None, pool_override=None, dist_tol=DEFAULT_DIST_TOL,
                 layer_tol=DEFAULT_LAYER_TOL, hcp_tol=DEFAULT_HCP_TOL,
-                main=DEFAULT_MAIN_METHOD, quiet=False):
+                main=DEFAULT_MAIN_METHOD, do_redox_surface=False, quiet=False):
     """
     Analyze one AlloyGen output set and return (table, site_table, info).
 
     `table` has one row per structure ID (energy, dE against every twin, site
     summary); `site_table` has one row per adsorbate atom.
+
+    With do_redox_surface, every twin is measured against the SURFACE twin
+    instead of against the main folder:
+
+        main - _surface,  _r1 - _surface,  _r2 - _surface, ...
+
+    All of them share one reference (the clean surface), so the numbers can be
+    read as one ladder -- what is left adsorbed after each redox step -- which
+    differencing against the main folder cannot give.
     """
     set_dir = os.path.normpath(set_dir)
     set_name = os.path.basename(os.path.abspath(set_dir))
@@ -920,6 +929,29 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
                     row[column] = None
                     info["missing_twin_ids"].setdefault("_" + label, []).append(structure_id)
 
+        if do_redox_surface:
+            # One shared reference for the whole ladder: the clean surface.
+            surface_energy = None
+            if surface_dir:
+                twin = surface_dir if single else os.path.join(surface_dir, structure_id)
+                if _is_dir(twin):
+                    surface_energy, _source = read_energy(twin)
+                else:
+                    info["missing_twin_ids"].setdefault("_surface", []).append(structure_id)
+            row["E_surface (eV)"] = surface_energy
+            row["main - _surface (eV)"] = (None if (energy is None or surface_energy is None)
+                                           else energy - surface_energy)
+            for label, path in redox_dirs:
+                twin = path if single else os.path.join(path, structure_id)
+                column = "_%s - _surface (eV)" % label
+                if not _is_dir(twin):
+                    row[column] = None
+                    info["missing_twin_ids"].setdefault("_" + label, []).append(structure_id)
+                    continue
+                twin_energy, _source = read_energy(twin)
+                row[column] = (None if (twin_energy is None or surface_energy is None)
+                               else twin_energy - surface_energy)
+
         if do_sites:
             atoms, filename = read_structure(main_dir, prefer_poscar=prefer_poscar)
             if atoms is None:
@@ -963,15 +995,17 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
 
 
 def write_tables(table, site_table, set_name, out_dir="./", do_sites=True,
-                 do_energy=True):
+                 do_energy=True, kind="AlloyAnal"):
     """
     Save the results next to the other CCpy analysis files, following the same
     '<number>_<folder>_<what>' naming as 03_..._FinalEnergies of CCpyVASPAnal.
+    `kind` keeps a different question in a different file instead of
+    overwriting the previous answer with a table of other columns.
     Returns the list of file names written.
     """
     written = []
     if table is not None and len(table):
-        base = os.path.join(out_dir, "04_" + set_name + "_AlloyAnal")
+        base = os.path.join(out_dir, "04_" + set_name + "_" + kind)
         table.to_csv(base + ".csv")
         with open(base + ".txt", "w") as handle:
             handle.write(table.to_string())
