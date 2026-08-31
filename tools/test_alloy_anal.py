@@ -106,6 +106,13 @@ def put(directory, atoms, energy=None, use_outcar=True):
     ase_write(os.path.join(directory, "POSCAR"), atoms, format="vasp")
     if energy is not None:
         fake_energy(directory, energy, use_outcar=use_outcar)
+        # check_finished() reads this as "this folder's output is the CURRENT
+        # run's, not a leftover from an earlier attempt". Every fixture built
+        # with a real energy here represents a normally finished job, so it
+        # gets the marker -- the folders that test the vasp.done-less cases
+        # (check_converged's Unknown path, check_finished itself) use
+        # put_vasp_run() instead, which sets it explicitly either way.
+        open(os.path.join(directory, "vasp.done"), "w").close()
 
 
 def read_csv(path):
@@ -244,15 +251,15 @@ def build(root):
     vaspout_error = "ZBRENT: fatal error in bracketing\nplease rerun with smaller EDIFF\n"
 
     def put_vasp_run(directory, atoms, energy, vasp_out, mark_done):
-        put(directory, atoms, energy)
+        put(directory, atoms, energy)   # put() itself creates vasp.done
         with open(os.path.join(directory, "INCAR"), "w") as f:
             f.write(incar_text)
         with open(os.path.join(directory, "OUTCAR"), "w") as f:
             f.write(outcar_text)
         with open(os.path.join(directory, "vasp.out"), "w") as f:
             f.write(vasp_out)
-        if mark_done:
-            open(os.path.join(directory, "vasp.done"), "w").close()
+        if not mark_done:
+            os.remove(os.path.join(directory, "vasp.done"))
 
     i_main = plain.copy()
     add_adsorbate(i_main, "S", 1.8, "fcc")
@@ -299,6 +306,45 @@ def build(root):
         put(os.path.join(root, "K_set", sid), one,
             -300.0 - (0.5 if with_fe else 0.0))
         put(os.path.join(root, "K_set_surface", sid), doped, -280.0)
+
+    # -- set N: a normal band of energies, plus ONE folder resubmitted with a
+    #    raised NELM whose OSZICAR/OUTCAR are still the OLD (lower-NELM) run's
+    #    -- the state CCpy's queue script leaves right after resubmission
+    #    (vasp.done deleted, everything else untouched). Two things have to
+    #    hold at once for that folder:
+    #    - its OLD run hit ITS OWN NELM (from OUTCAR's echo, not the INCAR's
+    #      raised value), so it must NOT be read as converged
+    #    - it has no vasp.done, so check_finished() has to call it unfinished
+    #      and ensemble_energy_fit has to leave it out, though it stays in the
+    #      per-structure table (deleting the row would hide the resubmission)
+    n_slab = fcc111("Pt", size=(3, 3, 4), vacuum=10.0)
+    for number in range(1, 12):
+        sid = "S%06d" % number
+        one = n_slab.copy()
+        add_adsorbate(one, "S", 1.8, "fcc")
+        put(os.path.join(root, "N_set", sid), one, -300.0 - 0.01 * number)
+        put(os.path.join(root, "N_set_surface", sid), n_slab, -280.0)
+
+    resub_dir = os.path.join(root, "N_set", "S000099")
+    resub = n_slab.copy()
+    add_adsorbate(resub, "S", 1.8, "fcc")
+    put(resub_dir, resub, -48461.0)                     # the stale, wildly-off energy
+    os.remove(os.path.join(resub_dir, "vasp.done"))     # resubmission deletes this
+    with open(os.path.join(resub_dir, "INCAR"), "w") as f:
+        f.write("NELM = 400\n")                         # the NEXT run's intended limit
+    with open(os.path.join(resub_dir, "OUTCAR"), "w") as f:
+        # the OLD run's echo -- its ACTUAL limit, well before OUTCAR's first
+        # ionic iteration, is what decides -- not the INCAR's raised value
+        f.write("   NELM   =    100;   NELMIN=  2; NELMDL= -5     # of ELM steps\n"
+                "    Iteration    1(   1)\n"
+                "  free  energy   TOTEN  =  -48461.0 eV\n")
+    lines = ["N       E                     dE             d eps       ncg     rms          rms(c)"]
+    for i in range(1, 101):
+        lines.append("DAV: %3d    -0.1E+03  -0.1E-02  -0.1E-03   1   0.1E-02" % i)
+    lines.append("   1 F= -.1E+03 E0= -.1E+03  d E =0.0")
+    with open(os.path.join(resub_dir, "OSZICAR"), "w") as f:
+        f.write("\n".join(lines) + "\n")   # the OLD run: hit its OWN limit of 100
+    put(os.path.join(root, "N_set_surface", "S000099"), n_slab, -280.0)
 
     # -- set D: top layer buckled by more than the default -layer_tol (1.2 A).
     #    Relaxation does this, and it is what tears the top layer in half: the
@@ -399,7 +445,7 @@ try:
     check("adsorbate came from the _surface twin",
           "_surface twin composition" in output)
     check("twins are not analysed as targets",
-          output.count("# ---------- ") == 11 and "_surface ---" not in output,
+          output.count("# ---------- ") == 12 and "_surface ---" not in output,
           output.count("# ---------- "))
     check("bottom-face adsorbate reported as bottom",
           sites[("C_set", "S000001", "Li")]["side"] == "bottom",
@@ -564,7 +610,10 @@ try:
           "far from the rest of the set" in output and "S000003" in output,
           [line for line in output.splitlines() if "far from the rest" in line])
     check("an ordinary spread of energies is not reported as an outlier",
-          sum(1 for line in output.splitlines() if "far from the rest" in line) == 1,
+          # Exactly H_set's S000003 and N_set's S000099 -- the two deliberate
+          # anomalies -- and nothing else out of every other set's normal
+          # spread.
+          sum(1 for line in output.splitlines() if "far from the rest" in line) == 2,
           [line for line in output.splitlines() if "far from the rest" in line])
     check("no vasp.out anywhere -> the convergence columns are dropped, "
           "with one note",
@@ -623,6 +672,27 @@ try:
               not header.startswith(("+", "=", "-", "@")), header)
     check("the fit reports how well it explains the set",
           "R2=" in output, [l for l in output.splitlines() if "R2" in l])
+
+    # N_set: a folder resubmitted with a raised NELM, whose OSZICAR/OUTCAR are
+    # still the OLD (lower-NELM) run's and have no vasp.done -- exactly what
+    # CCpy's queue script leaves behind right after resubmission.
+    n_rows = read_csv(os.path.join(work, "04_N_set_AlloyAnal.csv"))
+    n_row = next((r for r in n_rows if r["Structure"] == "S000099"), None)
+    check("the resubmitted folder still gets a row (only the fit drops it)",
+          n_row is not None, [r["Structure"] for r in n_rows])
+    if n_row is not None:
+        check("its OWN old NELM (from OUTCAR's echo, not the INCAR's raised "
+              "value) is what decides -- 100 steps against a limit of 100, "
+              "not 400, so it is not converged",
+              n_row.get("Converged") == "False", n_row.get("Converged"))
+        check("no vasp.done -> Finished = False, named in 'unfinished'",
+              n_row.get("Finished") == "False" and "main" in (n_row.get("unfinished") or ""),
+              (n_row.get("Finished"), n_row.get("unfinished")))
+    check("the unfinished folder is named in a warning, and left out of the "
+          "fit though it stays in the table",
+          "no vasp.done" in output and "S000099" in output
+          and "left out of the fit" in output,
+          [l for l in output.splitlines() if "vasp.done" in l])
 
     # The buckled slab: the warning has to appear, and -layer_tol has to fix it.
     default_run = run(work).stdout

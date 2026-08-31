@@ -1393,12 +1393,12 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
             "in a different state, not that the chemistry changed"
             % (column, len(odd), ", ".join(odd[:10])
                + (" ..." if len(odd) > 10 else "")))
-    # Two columns of "Unknown" say nothing. 'Finished' is left alone: a set
-    # still being worked through has every convergence verdict Unknown, and
-    # that is exactly when 'Finished' is the column worth reading. That happens when these folders
+    # Two columns of "Unknown" say nothing. That happens when these folders
     # have neither OSZICAR nor vasp.out, or when custodian is not installed and
     # OSZICAR did not settle it -- either way the check could not be made, and
-    # saying so once beats repeating it per row.
+    # saying so once beats repeating it per row. 'Finished' is left alone here:
+    # a set still being worked through has every convergence verdict Unknown,
+    # and that is exactly when 'Finished' is the column worth reading.
     verdicts = {r.get("Converged") for r in rows if "Converged" in r}
     if verdicts and verdicts == {"Unknown"}:
         for r in rows:
