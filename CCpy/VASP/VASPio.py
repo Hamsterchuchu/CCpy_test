@@ -1556,8 +1556,10 @@ class VASPOutput():
 
             tot_status.append(stat)
             tot_converged.append(converged)
-            tot_i_converged.append(electronic_converged)
-            tot_e_converged.append(ionic_converged)
+            # tot_e_ / tot_i_ feed the 'Elec-converged' / 'Ion-converged'
+            # columns below; they used to be filled the other way round.
+            tot_e_converged.append(electronic_converged)
+            tot_i_converged.append(ionic_converged)
             tot_finished.append(done)
             tot_zipped.append(zipped)
             tot_err_msg.append(err_msg)
