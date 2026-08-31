@@ -1137,6 +1137,99 @@ def energy_from_oszicar(path="./"):
     return last_E
 
 
+# -----------------------------------------------------------------------------
+# Electronic (SCF) convergence
+# -----------------------------------------------------------------------------
+# Neither half of the check in vasp_status() can see an SCF that ran out of
+# steps. custodian's error list has no entry for it -- that case belongs to its
+# separate UnconvergedErrorHandler, which reads vasprun.xml -- and the
+# 'max_ionic' pattern CCpy adds is built as '<NSW> F=', which for a single-point
+# run (NSW=0) becomes '0 F=' and can never match: VASP writes '1 F=' even with
+# NSW=0. So an SP folder was reported as converged however its SCF ended.
+#
+# OSZICAR answers it directly. Each electronic step is one numbered line and the
+# ionic step closes with '<n> F=', so the step count of the last closed block
+# against NELM is the verdict -- the rule pymatgen's
+# Vasprun.converged_electronic uses, from a file that is small, always written,
+# and still readable after a job was killed.
+
+NELM_DEFAULT = 60           # VASP's own default when INCAR does not set it
+_OSZICAR_SCF = re.compile(r"^\s*[A-Za-z]{2,6}\s*:\s*(\d+)\s")
+_OSZICAR_IONIC = re.compile(r"^\s*\d+\s+(?:T=|F=)")
+_INCAR_NELM = re.compile(r"^\s*NELM\s*=\s*([-+]?\d+)", re.IGNORECASE)
+
+
+def _open_text(path, name):
+    """
+    Open 'name', or 'name.gz' when the folder has been zipped, as text.
+    None when neither is there.
+    """
+    fname = os.path.join(path, name)
+    if os.path.isfile(fname):
+        return open(fname, "r", errors="ignore")
+    if os.path.isfile(fname + ".gz"):
+        import gzip
+        return gzip.open(fname + ".gz", "rt", errors="ignore")
+    return None
+
+
+def nelm_from_incar(path="./"):
+    """
+    NELM of a folder's INCAR. The key is matched exactly, so NELMIN / NELMDL
+    never answer for it, and a folder with no NELM line (or no INCAR) gets
+    VASP's own default -- which is the number VASP actually used.
+    """
+    handle = _open_text(path, "INCAR")
+    if handle is None:
+        return NELM_DEFAULT
+    try:
+        for line in handle:
+            line = line.split("!")[0].split("#")[0]
+            for field in line.split(";"):
+                match = _INCAR_NELM.match(field)
+                if match:
+                    value = int(match.group(1))
+                    return value if value > 0 else NELM_DEFAULT
+    except Exception:
+        return NELM_DEFAULT
+    finally:
+        handle.close()
+    return NELM_DEFAULT
+
+
+def scf_converged_from_oszicar(path="./"):
+    """
+    Did the last SCF loop of this folder converge, or did it hit NELM?
+
+    The last closed ionic block of OSZICAR is the one whose energy OUTCAR
+    reports, so its electronic step count is what decides.
+
+    Returns "True" / "False" / "Unknown" -- "Unknown" when there is no OSZICAR,
+    when it holds no closed ionic step (killed inside the first SCF), or when
+    nothing in it could be parsed.
+    """
+    handle = _open_text(path, "OSZICAR")
+    if handle is None:
+        return "Unknown"
+    steps, last_block = 0, None
+    try:
+        for line in handle:
+            match = _OSZICAR_SCF.match(line)
+            if match:
+                # The printed step number, not a line count: it survives a line
+                # the regex misses, and both are the same otherwise.
+                steps = max(steps, int(match.group(1)))
+            elif _OSZICAR_IONIC.match(line):
+                last_block, steps = steps, 0
+    except Exception:
+        return "Unknown"
+    finally:
+        handle.close()
+    if not last_block:
+        return "Unknown"
+    return "False" if last_block >= nelm_from_incar(path) else "True"
+
+
 def natoms_from_poscar(path="./"):
     """
     Return the number of atoms from POSCAR. None if it cannot be read.
@@ -1397,6 +1490,19 @@ class VASPOutput():
                     err_msg = list(veh.errors)[0]
                     if err_msg == "max_ionic":
                         electronic_converged = "True"
+
+            # -- check electronic convergence (SCF hit NELM), which neither half
+            #    of the check above can see -- see scf_converged_from_oszicar().
+            #    Reported like max_ionic: one more reason a folder is not
+            #    converged, named in the 'Err msg' column as 'max_electronic'.
+            #    A custodian error message is more specific, so it is kept.
+            scf = scf_converged_from_oszicar("./")
+            if scf in ("True", "False"):
+                electronic_converged = scf
+            if scf == "False":
+                converged = "False"
+                if not err_msg.strip():
+                    err_msg = "max_electronic"
 
             '''
             # using vasprun.xml

@@ -393,102 +393,27 @@ def count_atoms(directory):
 # -----------------------------------------------------------------------------
 # Did the SCF loop converge?
 # -----------------------------------------------------------------------------
-# Nothing else in the chain asks this. VASPOutput.vasp_status() judges a folder
-# with custodian's VaspErrorHandler over vasp.out plus a 'max_ionic' pattern it
-# builds as '<NSW> F=', and custodian's error list has no entry for an SCF that
-# simply ran out of steps -- that case belongs to its separate
-# UnconvergedErrorHandler, which vasp_status() does not use.
-#
-# A single-point folder (-sp, so NSW=0) falls through even wider: the pattern
-# becomes '0 F=', and VASP never prints it -- even with NSW=0 the ionic line of
-# OSZICAR is '1 F='. So an SP folder was reported as converged however its SCF
-# ended, and an energy that had not settled went straight into 'Energy (eV)',
-# into every dE built on it, and into the ensemble fit.
-#
-# OSZICAR answers it directly: each electronic step is one numbered line and
-# the ionic step closes with '<n> F=', so the step count of the last closed
-# block against NELM is the verdict.
-
-NELM_DEFAULT = 60           # VASP's own default when INCAR does not set it
-_OSZICAR_SCF = re.compile(r"^\s*[A-Za-z]{2,6}\s*:\s*(\d+)\s")
-_OSZICAR_IONIC = re.compile(r"^\s*\d+\s+(?:T=|F=)")
-_INCAR_NELM = re.compile(r"^\s*NELM\s*=\s*([-+]?\d+)", re.IGNORECASE)
-
-
-def _open_text(directory, name):
-    """
-    Open 'name', or 'name.gz' when the folder has been zipped, as text.
-    None when neither is there.
-    """
-    path = os.path.join(directory, name)
-    if os.path.isfile(path):
-        return open(path, "r", errors="ignore")
-    if os.path.isfile(path + ".gz"):
-        import gzip
-        return gzip.open(path + ".gz", "rt", errors="ignore")
-    return None
-
-
-def read_nelm(directory):
-    """
-    NELM of a folder's INCAR. The key is matched exactly, so NELMIN / NELMDL
-    never answer for it, and a folder with no NELM line (or no INCAR) gets
-    VASP's own default -- which is the number VASP actually used.
-    """
-    handle = _open_text(directory, "INCAR")
-    if handle is None:
-        return NELM_DEFAULT
-    try:
-        for line in handle:
-            line = line.split("!")[0].split("#")[0]
-            for field in line.split(";"):
-                match = _INCAR_NELM.match(field)
-                if match:
-                    value = int(match.group(1))
-                    return value if value > 0 else NELM_DEFAULT
-    except Exception:
-        return NELM_DEFAULT
-    finally:
-        handle.close()
-    return NELM_DEFAULT
+# The check itself is VASPio.scf_converged_from_oszicar(), so this command and
+# CCpyVASPAnal's 'Converged' column can never disagree about it. Why it is
+# needed at all -- what the custodian pass of vasp_status() cannot see, and why
+# a single-point folder falls through that pass entirely -- is written out
+# there, next to the check.
 
 
 def check_electronic_converged(directory, _cache={}):
     """
     Did the last SCF loop of this folder converge, or did it hit NELM?
 
-    The last closed ionic block of OSZICAR is the one whose energy OUTCAR
-    reports, so its electronic step count is what decides: converged when it
-    stayed under NELM. That is the rule pymatgen's Vasprun.converged_electronic
-    uses, read from a file that is small, always written, and still readable
-    after a job was killed.
-
-    Returns "True" / "False" / "Unknown" -- "Unknown" when there is no OSZICAR,
-    when it holds no closed ionic step (killed inside the first SCF), or when
-    nothing in it could be parsed. Cached per folder like check_converged().
+    Returns "True" / "False" / "Unknown" ("Unknown" when there is no OSZICAR,
+    when it holds no closed ionic step, or when nothing could be parsed).
+    Cached per folder: a twin is asked about once per structure it takes part
+    in. VASPio is imported on first use, like the energy helpers above.
     """
     directory = os.path.abspath(directory)
     if directory in _cache:
         return _cache[directory]
-    verdict = "Unknown"
-    handle = _open_text(directory, "OSZICAR")
-    if handle is not None:
-        steps, last_block = 0, None
-        try:
-            for line in handle:
-                match = _OSZICAR_SCF.match(line)
-                if match:
-                    # The printed step number, not a line count: it survives a
-                    # line the regex misses, and both are the same otherwise.
-                    steps = max(steps, int(match.group(1)))
-                elif _OSZICAR_IONIC.match(line):
-                    last_block, steps = steps, 0
-        except Exception:
-            last_block = None
-        finally:
-            handle.close()
-        if last_block:
-            verdict = "False" if last_block >= read_nelm(directory) else "True"
+    from CCpy.VASP.VASPio import scf_converged_from_oszicar
+    verdict = scf_converged_from_oszicar(directory)
     _cache[directory] = verdict
     return verdict
 
