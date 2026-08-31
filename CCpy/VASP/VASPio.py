@@ -1320,10 +1320,12 @@ class VASPOutput():
         f.close()
         print("Energy list files have been saved: " + csv_filename + ", " + txt_filename)
 
+        # Only the counts are printed. With several hundred directories the full name list
+        # buried the energy table. Directories left blank are still visible in the csv/txt.
         if skipped:
-            print("* No OUTCAR/OSZICAR, excluded (%d): %s" % (len(skipped), ", ".join(skipped)))
+            print("* No OUTCAR/OSZICAR, excluded (%d)" % len(skipped))
         if no_energy:
-            print("* Energy not found yet, listed as blank (%d): %s" % (len(no_energy), ", ".join(no_energy)))
+            print("* Energy not found yet, listed as blank (%d)" % len(no_energy))
 
         if not show_plot:
             return df
