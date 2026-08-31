@@ -418,6 +418,46 @@ def check_electronic_converged(directory, _cache={}):
     return verdict
 
 
+def check_finished(directory, _cache={}):
+    """
+    Has the run in this folder ended, and is what is lying in it the CURRENT
+    run's output? "True" / "False" / "Unknown".
+
+    The marker is vasp.done. CCpy's queue script touches it right after each
+    folder's VASP call and deletes it again when that folder is resubmitted
+    (CCpyJobControl), so its absence means one of two things, and both make the
+    folder's numbers the wrong answer to the question being asked: the job has
+    not run yet, or what is there is the leftovers of an earlier attempt.
+
+    Nothing else in this file notices either case. CONTCAR decides whether a
+    structure gets a row at all and survives a resubmission untouched; OUTCAR
+    and OSZICAR survive with it, so a folder whose earlier attempt ended at
+    -48461 eV reads exactly like a finished one. And vasp_status() only fills
+    in its convergence verdict inside the branch that requires vasp.done, so
+    without it the verdict is blank -- "Unknown", never "False".
+
+    "Unknown" when the folder holds no VASP output at all, so a structure that
+    has simply not been set up yet is not called unfinished. Cached per folder.
+    """
+    directory = os.path.abspath(directory)
+    if directory in _cache:
+        return _cache[directory]
+    try:
+        names = os.listdir(directory)
+    except Exception:
+        names = []
+    if "vasp.done" in names:
+        verdict = "True"
+    elif any(name in names for name in ("OUTCAR", "OUTCAR.gz", "OSZICAR",
+                                        "OSZICAR.gz", "vasprun.xml",
+                                        "vasprun.xml.gz")):
+        verdict = "False"
+    else:
+        verdict = "Unknown"
+    _cache[directory] = verdict
+    return verdict
+
+
 def check_converged(directory, _cache={}):
     """
     Did VASP finish this folder cleanly? Two independent checks, and either one
@@ -1175,11 +1215,14 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
         # only as good as the worse of its two folders, so the twin's verdict
         # belongs on the row that uses it -- an unconverged _surface silently
         # poisons dE_surface and every _rN - _surface with it.
-        failed = []
+        failed, unfinished = [], []
         if check_errors and (do_energy or do_redox_surface):
             row["Converged"] = check_converged(main_dir)
+            row["Finished"] = check_finished(main_dir)
             if row["Converged"] == "False":
                 failed.append("main")
+            if row["Finished"] == "False":
+                unfinished.append("main")
             twin_dirs = []
             if surface_dir:
                 twin_dirs.append(("_surface", surface_dir if single
@@ -1188,9 +1231,14 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
                 twin_dirs.append(("_" + label, path if single
                                   else os.path.join(path, structure_id)))
             for label, path in twin_dirs:
-                if _is_dir(path) and check_converged(path) == "False":
+                if not _is_dir(path):
+                    continue
+                if check_converged(path) == "False":
                     failed.append(label)
+                if check_finished(path) == "False":
+                    unfinished.append(label)
             row["unconverged"] = ",".join(failed)
+            row["unfinished"] = ",".join(unfinished)
         if do_energy:
             row["N atoms"] = natoms
             row["Energy (eV)"] = energy
@@ -1345,7 +1393,9 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
             "in a different state, not that the chemistry changed"
             % (column, len(odd), ", ".join(odd[:10])
                + (" ..." if len(odd) > 10 else "")))
-    # Two columns of "Unknown" say nothing. That happens when these folders
+    # Two columns of "Unknown" say nothing. 'Finished' is left alone: a set
+    # still being worked through has every convergence verdict Unknown, and
+    # that is exactly when 'Finished' is the column worth reading. That happens when these folders
     # have neither OSZICAR nor vasp.out, or when custodian is not installed and
     # OSZICAR did not settle it -- either way the check could not be made, and
     # saying so once beats repeating it per row.
@@ -1367,6 +1417,16 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
             "differences are not trustworthy: %s"
             % (len(unconverged_rows), ", ".join(unconverged_rows[:10])
                + (" ..." if len(unconverged_rows) > 10 else "")))
+    unfinished_rows = [r["Structure"] for r in rows if r.get("unfinished")]
+    info["unfinished_rows"] = unfinished_rows
+    if unfinished_rows:
+        info["warnings"].append(
+            "%d structure(s) have a folder with no vasp.done -- not run yet, or "
+            "holding the output of an earlier attempt that was resubmitted -- "
+            "so their energies are kept in the table but left out of the fit: "
+            "%s (if these jobs simply do not write vasp.done, use -nocheck)"
+            % (len(unfinished_rows), ", ".join(unfinished_rows[:10])
+               + (" ..." if len(unfinished_rows) > 10 else "")))
     if skipped_ids:
         info["warnings"].append(
             "%d structure(s) have no CONTCAR yet and were left out: %s"
@@ -1472,8 +1532,10 @@ def ensemble_energy_fit(site_rows, rows, folder="main", min_atoms=5):
     number on something the data cannot say. The centring is a linear contrast,
     so its standard error is exact, not approximated.
 
-    Structures whose energy could not be trusted -- an unconverged folder, or a
-    value far outside the set -- are left out of the fit.
+    Structures whose energy could not be trusted -- an unconverged folder, one
+    that has not finished (no vasp.done, so its output is from an earlier
+    attempt or from nothing yet), or a value far outside the set -- are left
+    out of the fit.
 
     Returns (contributions, stats): {key: (value, stderr)} keyed by
     "element site ensemble", and a dict with r2 / rms / n_structures / column.
@@ -1488,7 +1550,7 @@ def ensemble_energy_fit(site_rows, rows, folder="main", min_atoms=5):
     energies = {}
     suspect = set()
     for position, (_i, row) in enumerate(frame.iterrows()):
-        if row.get("unconverged"):
+        if row.get("unconverged") or row.get("unfinished"):
             suspect.add(row["Structure"])
         value = values.iloc[position]
         if pd.notna(value):

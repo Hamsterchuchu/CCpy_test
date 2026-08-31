@@ -116,6 +116,13 @@ S000001 of the twin).
                  (NSW=0), where its max-ionic pattern can never fire and an
                  unsettled energy used to be reported as converged. A folder
                  with no vasp.out is 'Unknown' rather than a failure.
+                 Two more columns come with it: 'Finished' says whether the
+                 main folder holds vasp.done, and 'unfinished' names any folder
+                 of that row without it. A folder without vasp.done has either
+                 not run yet or is holding the output of an earlier attempt
+                 that was resubmitted (CCpy deletes vasp.done on resubmission
+                 but leaves CONTCAR/OUTCAR/OSZICAR in place), so its energy is
+                 kept in the table but left out of the ensemble fit.
 -no_twins      : assign sites only in the main folder, not in the redox twins
 -poscar        : read POSCAR instead of CONTCAR (DEFAULT : CONTCAR, i.e. the
                  relaxed result). Without it, a folder with no CONTCAR is one
