@@ -1503,12 +1503,45 @@ class VASPOutput():
 
 
     def vasp_error_handle(self, dirs):
+        """
+        Run custodian over the folders listed in 01_unconverged_jobs.csv and
+        write what it did to 02_error_handled.yaml.
+
+        Each handler is asked before it is allowed to act, and is only asked
+        when the file it reads is actually there:
+
+        - VaspErrorHandler.check() opens vasp.out with no guard of its own, so
+          a folder without one ended the whole command with a FileNotFoundError
+          -- and vasp_status() puts exactly those folders in the csv, because a
+          missing vasp.out is what it calls "not converged".
+        - UnconvergedErrorHandler.check() swallows every exception and answers
+          "no error", but its correct() does not: it opens vasprun.xml on its
+          first line, and it used to be called whatever check() had said. So a
+          folder with no vasprun.xml (or a truncated one, which is what a job
+          killed mid-run leaves) ended the command there as well, and a folder
+          that had simply converged was written to the log as "Unconverged".
+
+        A folder that raises anyway is recorded with its message and the loop
+        moves on. One bad folder must not throw away the corrections already
+        made for the others -- which is also why the chdir back is in a finally,
+        so a failure cannot leave the process sitting inside a job folder.
+        """
         from custodian.vasp.handlers import VaspErrorHandler, UnconvergedErrorHandler
         import json
+
+        def log_entry(action):
+            # correct() answers with {"errors": [...], "actions": [...]}; the
+            # skip and failure paths answer with a sentence. Both have to come
+            # out of yaml.dump readable.
+            if isinstance(action, dict):
+                return OrderedDict(action)
+            return OrderedDict([("errors", []), ("actions", None),
+                                ("note", str(action))])
 
         pwd = os.getcwd()
         err_log = {}
         cnt = 0
+        corrected, skipped, failed = [], [], []
         print("\n    Parsing ERROR jobs....")
         for d in dirs:
             msg = "  [  " + str(cnt + 1).rjust(6) + " / " + str(len(dirs)).rjust(6) + "  ]"
@@ -1517,19 +1550,46 @@ class VASPOutput():
             sys.stdout.flush()
             sys.stdout.write("\b" * len(msg))
             os.chdir(d)
-            # -- 1. check error
-            veh = VaspErrorHandler()
-            err = veh.check()
-            err_action = " "
-            if err:
-                err_action = veh.correct()
-            # -- 2. check unconverged
-            else:
-                ueh = UnconvergedErrorHandler()
-                ueh_check = ueh.check()
-                err_action = ueh.correct()
-            err_log[d] = OrderedDict(err_action)
-            os.chdir(pwd)
+            try:
+                names = os.listdir("./")
+                # The plain names only: both handlers hand the name straight to
+                # zopen, which picks its opener from the extension it is given
+                # and never goes looking for a .gz beside it. A zipped folder
+                # is one custodian cannot read, so it is skipped and said so,
+                # not quietly reported as clean.
+                has_log = "vasp.out" in names
+                has_vasprun = "vasprun.xml" in names
+                # -- 1. check error (reads vasp.out)
+                if not has_log:
+                    err_action = "skipped: no unzipped vasp.out to read"
+                    skipped.append(d)
+                else:
+                    veh = VaspErrorHandler()
+                    if veh.check():
+                        err_action = veh.correct()
+                        corrected.append(d)
+                    # -- 2. check unconverged (reads vasprun.xml)
+                    elif not has_vasprun:
+                        err_action = ("skipped: no unzipped vasprun.xml, "
+                                      "convergence not checked")
+                        skipped.append(d)
+                    else:
+                        ueh = UnconvergedErrorHandler()
+                        if ueh.check():
+                            err_action = ueh.correct()
+                            corrected.append(d)
+                        else:
+                            err_action = "no error found, nothing corrected"
+            except Exception as exc:
+                err_action = "failed: %s: %s" % (type(exc).__name__, exc)
+                failed.append(d)
+            finally:
+                os.chdir(pwd)
+            err_log[d] = log_entry(err_action)
+        print("* %d corrected, %d skipped (no unzipped vasp.out / vasprun.xml), "
+              "%d could not be read, %d clean"
+              % (len(corrected), len(skipped), len(failed),
+                 len(dirs) - len(corrected) - len(skipped) - len(failed)))
         err_log = OrderedDict(err_log)
         # -- ordered dict encoding to yaml
         def represent_dictionary_order(self, dict_data):
