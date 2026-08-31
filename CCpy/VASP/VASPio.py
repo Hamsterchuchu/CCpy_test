@@ -1197,12 +1197,54 @@ def nelm_from_incar(path="./"):
     return NELM_DEFAULT
 
 
+def nelm_from_outcar(path="./"):
+    """
+    NELM as the run itself used it, taken from OUTCAR's parameter echo:
+
+        NELM   =    100;   NELMIN=  2; NELMDL= -5     # of ELM steps
+
+    None when there is no OUTCAR, or when the echo is not in the part of it
+    that is read (the echo comes before the first ionic iteration, so the scan
+    stops there instead of walking a file that can be hundreds of MB).
+
+    Worth preferring over the INCAR: raising NELM to try a folder again leaves
+    an INCAR that describes the NEXT run while OSZICAR still holds the previous
+    one, and it is the previous one that produced the energy sitting in OUTCAR.
+    Reading NELM from the INCAR then compares a step count of 100 against a
+    limit of 400 and calls a folder converged that was not.
+    """
+    handle = _open_text(path, "OUTCAR")
+    if handle is None:
+        return None
+    try:
+        for count, line in enumerate(handle):
+            match = _INCAR_NELM.match(line)
+            if match:
+                value = int(match.group(1))
+                return value if value > 0 else None
+            if "Iteration" in line or count > 4000:
+                break
+    except Exception:
+        return None
+    finally:
+        handle.close()
+    return None
+
+
+def nelm_used(path="./"):
+    """NELM the run used: OUTCAR's echo, else the INCAR, else VASP's default."""
+    value = nelm_from_outcar(path)
+    return value if value else nelm_from_incar(path)
+
+
 def scf_converged_from_oszicar(path="./"):
     """
     Did the last SCF loop of this folder converge, or did it hit NELM?
 
     The last closed ionic block of OSZICAR is the one whose energy OUTCAR
-    reports, so its electronic step count is what decides.
+    reports, so its electronic step count is what decides. The limit it is
+    compared against comes from nelm_used(), i.e. OUTCAR's echo before the
+    INCAR -- see there for why that matters.
 
     Returns "True" / "False" / "Unknown" -- "Unknown" when there is no OSZICAR,
     when it holds no closed ionic step (killed inside the first SCF), or when
@@ -1227,7 +1269,7 @@ def scf_converged_from_oszicar(path="./"):
         handle.close()
     if not last_block:
         return "Unknown"
-    return "False" if last_block >= nelm_from_incar(path) else "True"
+    return "False" if last_block >= nelm_used(path) else "True"
 
 
 def natoms_from_poscar(path="./"):
