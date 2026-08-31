@@ -390,12 +390,120 @@ def count_atoms(directory):
     return None
 
 
+# -----------------------------------------------------------------------------
+# Did the SCF loop converge?
+# -----------------------------------------------------------------------------
+# Nothing else in the chain asks this. VASPOutput.vasp_status() judges a folder
+# with custodian's VaspErrorHandler over vasp.out plus a 'max_ionic' pattern it
+# builds as '<NSW> F=', and custodian's error list has no entry for an SCF that
+# simply ran out of steps -- that case belongs to its separate
+# UnconvergedErrorHandler, which vasp_status() does not use.
+#
+# A single-point folder (-sp, so NSW=0) falls through even wider: the pattern
+# becomes '0 F=', and VASP never prints it -- even with NSW=0 the ionic line of
+# OSZICAR is '1 F='. So an SP folder was reported as converged however its SCF
+# ended, and an energy that had not settled went straight into 'Energy (eV)',
+# into every dE built on it, and into the ensemble fit.
+#
+# OSZICAR answers it directly: each electronic step is one numbered line and
+# the ionic step closes with '<n> F=', so the step count of the last closed
+# block against NELM is the verdict.
+
+NELM_DEFAULT = 60           # VASP's own default when INCAR does not set it
+_OSZICAR_SCF = re.compile(r"^\s*[A-Za-z]{2,6}\s*:\s*(\d+)\s")
+_OSZICAR_IONIC = re.compile(r"^\s*\d+\s+(?:T=|F=)")
+_INCAR_NELM = re.compile(r"^\s*NELM\s*=\s*([-+]?\d+)", re.IGNORECASE)
+
+
+def _open_text(directory, name):
+    """
+    Open 'name', or 'name.gz' when the folder has been zipped, as text.
+    None when neither is there.
+    """
+    path = os.path.join(directory, name)
+    if os.path.isfile(path):
+        return open(path, "r", errors="ignore")
+    if os.path.isfile(path + ".gz"):
+        import gzip
+        return gzip.open(path + ".gz", "rt", errors="ignore")
+    return None
+
+
+def read_nelm(directory):
+    """
+    NELM of a folder's INCAR. The key is matched exactly, so NELMIN / NELMDL
+    never answer for it, and a folder with no NELM line (or no INCAR) gets
+    VASP's own default -- which is the number VASP actually used.
+    """
+    handle = _open_text(directory, "INCAR")
+    if handle is None:
+        return NELM_DEFAULT
+    try:
+        for line in handle:
+            line = line.split("!")[0].split("#")[0]
+            for field in line.split(";"):
+                match = _INCAR_NELM.match(field)
+                if match:
+                    value = int(match.group(1))
+                    return value if value > 0 else NELM_DEFAULT
+    except Exception:
+        return NELM_DEFAULT
+    finally:
+        handle.close()
+    return NELM_DEFAULT
+
+
+def check_electronic_converged(directory, _cache={}):
+    """
+    Did the last SCF loop of this folder converge, or did it hit NELM?
+
+    The last closed ionic block of OSZICAR is the one whose energy OUTCAR
+    reports, so its electronic step count is what decides: converged when it
+    stayed under NELM. That is the rule pymatgen's Vasprun.converged_electronic
+    uses, read from a file that is small, always written, and still readable
+    after a job was killed.
+
+    Returns "True" / "False" / "Unknown" -- "Unknown" when there is no OSZICAR,
+    when it holds no closed ionic step (killed inside the first SCF), or when
+    nothing in it could be parsed. Cached per folder like check_converged().
+    """
+    directory = os.path.abspath(directory)
+    if directory in _cache:
+        return _cache[directory]
+    verdict = "Unknown"
+    handle = _open_text(directory, "OSZICAR")
+    if handle is not None:
+        steps, last_block = 0, None
+        try:
+            for line in handle:
+                match = _OSZICAR_SCF.match(line)
+                if match:
+                    # The printed step number, not a line count: it survives a
+                    # line the regex misses, and both are the same otherwise.
+                    steps = max(steps, int(match.group(1)))
+                elif _OSZICAR_IONIC.match(line):
+                    last_block, steps = steps, 0
+        except Exception:
+            last_block = None
+        finally:
+            handle.close()
+        if last_block:
+            verdict = "False" if last_block >= read_nelm(directory) else "True"
+    _cache[directory] = verdict
+    return verdict
+
+
 def check_converged(directory, _cache={}):
     """
-    Did VASP finish this folder cleanly? Same verdict as CCpyVASPAnal option 0
-    and the 'Converged' column of option 2 -- VASPOutput.vasp_status(), which
-    runs custodian's VaspErrorHandler over vasp.out and adds the max-ionic
-    check built from the INCAR's NSW.
+    Did VASP finish this folder cleanly? Two independent checks, and either one
+    alone can fail the folder:
+
+    1) VASPOutput.vasp_status() -- custodian's VaspErrorHandler over vasp.out
+       plus the max-ionic check built from the INCAR's NSW. This is the verdict
+       CCpyVASPAnal option 0 and the 'Converged' column of option 2 show.
+    2) check_electronic_converged() -- did the last SCF loop hit NELM. Check 1
+       cannot see this at all, and it is blindest exactly where it matters
+       here: a single-point folder, whose max-ionic pattern can never fire.
 
     One difference, on purpose: vasp_status() reports "False" when there is no
     vasp.out at all, which for this command would mark every folder of a run
@@ -412,9 +520,9 @@ def check_converged(directory, _cache={}):
     Anything that is not literally "True" or "False" is normalized to
     "Unknown" here for that reason.
 
-    Returns "True" / "False" / "Unknown" (also "Unknown" when custodian is
-    missing). Results are cached per folder: a twin is asked about once per
-    structure it takes part in.
+    Returns "True" / "False" / "Unknown" ("Unknown" when custodian is missing
+    and OSZICAR does not settle it either). Results are cached per folder: a
+    twin is asked about once per structure it takes part in.
     """
     directory = os.path.abspath(directory)
     if directory in _cache:
@@ -437,6 +545,12 @@ def check_converged(directory, _cache={}):
         finally:
             os.chdir(pwd)
         verdict = raw if raw in ("True", "False") else "Unknown"
+    # An SCF that ran out of steps fails the folder whatever check 1 said --
+    # including when check 1 could not be made at all. The reverse does not
+    # hold: a converged SCF says nothing about how the run ended, so it never
+    # turns an "Unknown" (or a "False") into a "True".
+    if check_electronic_converged(directory) == "False":
+        verdict = "False"
     _cache[directory] = verdict
     return verdict
 
@@ -1306,23 +1420,26 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
             "in a different state, not that the chemistry changed"
             % (column, len(odd), ", ".join(odd[:10])
                + (" ..." if len(odd) > 10 else "")))
-    # Two columns of "Unknown" say nothing. That happens when custodian is not
-    # installed, or when these runs do not keep vasp.out -- either way the
-    # check could not be made, and saying so once beats repeating it per row.
+    # Two columns of "Unknown" say nothing. That happens when these folders
+    # have neither OSZICAR nor vasp.out, or when custodian is not installed and
+    # OSZICAR did not settle it -- either way the check could not be made, and
+    # saying so once beats repeating it per row.
     verdicts = {r.get("Converged") for r in rows if "Converged" in r}
     if verdicts and verdicts == {"Unknown"}:
         for r in rows:
             r.pop("Converged", None)
             r.pop("unconverged", None)
         info["warnings"].append(
-            "convergence was not checked: no vasp.out in these folders, or "
-            "custodian is not installed (use -nocheck to stop trying)")
+            "convergence was not checked: these folders have no OSZICAR and "
+            "no vasp.out, or custodian is not installed (use -nocheck to stop "
+            "trying)")
     unconverged_rows = [r["Structure"] for r in rows if r.get("unconverged")]
     info["unconverged_rows"] = unconverged_rows
     if unconverged_rows:
         info["warnings"].append(
-            "%d structure(s) have a folder custodian reports as not converged, "
-            "so their differences are not trustworthy: %s"
+            "%d structure(s) have a folder that did not converge (its SCF hit "
+            "NELM, or custodian reports an error), so their energies and "
+            "differences are not trustworthy: %s"
             % (len(unconverged_rows), ", ".join(unconverged_rows[:10])
                + (" ..." if len(unconverged_rows) > 10 else "")))
     if skipped_ids:

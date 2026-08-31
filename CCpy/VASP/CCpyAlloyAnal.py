@@ -102,16 +102,20 @@ S000001 of the twin).
                  assigned (DEFAULT : everything that is not the adsorbate,
                  so a substituted HEA surface keeps all of its elements)
                  ex) -pool=Pt,Fe,Co,Ni,Cu
--nocheck       : skip the custodian convergence check (it reads vasp.out and
+-nocheck       : skip the convergence check (it reads OSZICAR, vasp.out and
                  the INCAR of every folder). Without it the tables carry a
                  'Converged' column for the main folder and an 'unconverged'
                  column naming any twin of that row that failed -- a difference
                  is only as good as the worse of its two folders, and an
                  unconverged _surface poisons dE_surface and every
-                 _rN - _surface built on it. Same verdict as CCpyVASPAnal
-                 option 0 / the 'Converged' column of option 2, except that a
-                 folder with no vasp.out is reported as 'Unknown' rather than
-                 as a failure.
+                 _rN - _surface built on it. A folder fails on either of two
+                 counts: the CCpyVASPAnal option 0 verdict (custodian over
+                 vasp.out + the max-ionic check from NSW), or an SCF loop that
+                 hit NELM. The second is read from OSZICAR and is what option 0
+                 cannot see at all -- most of all in a single-point folder
+                 (NSW=0), where its max-ionic pattern can never fire and an
+                 unsettled energy used to be reported as converged. A folder
+                 with no vasp.out is 'Unknown' rather than a failure.
 -no_twins      : assign sites only in the main folder, not in the redox twins
 -poscar        : read POSCAR instead of CONTCAR (DEFAULT : CONTCAR, i.e. the
                  relaxed result). Without it, a folder with no CONTCAR is one
