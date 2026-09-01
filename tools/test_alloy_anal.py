@@ -18,7 +18,9 @@ Checks
   2. fcc(100): the four-fold hollow is not mistaken for a bridge
      (the Delaunay diagonal trap), and a real bridge / top still work
   3. the adsorbate is taken from the _surface twin without any heuristic
-  4. dE_surface and dE_r1 / dE_r2 match the fake energies exactly
+  4. dE_surface and dE_r1 match the fake energies exactly, and the _r2 twin --
+     which has only an OSZICAR -- is left blank, because CCpy reads the OUTCAR
+     TOTEN and never substitutes OSZICAR's E0 (a different reference)
   5. twin folders are not offered as analysis targets of their own
   6. an adsorbate on the bottom face is reported as such
   7. a folder with no OUTCAR / OSZICAR yields a blank energy, not a crash
@@ -438,8 +440,11 @@ try:
           first.get("dE_surface (eV)"))
     check("dE_r1 exact", abs(float(first["dE_r1 (eV)"]) - (-301.0 + 291.0)) < 1e-6,
           first.get("dE_r1 (eV)"))
-    check("dE_r2 exact (OSZICAR twin)",
-          abs(float(first["dE_r2 (eV)"]) - (-301.0 + 296.0)) < 1e-6, first.get("dE_r2 (eV)"))
+    # The _r2 twin has only an OSZICAR. CCpy reads the OUTCAR TOTEN and does not
+    # fall back to OSZICAR's E0 (sigma->0, differing by the -TS term), so this
+    # difference has to stay blank rather than mix two energy references.
+    check("dE_r2 blank (OSZICAR-only twin is not read)",
+          first.get("dE_r2 (eV)", "") == "", first.get("dE_r2 (eV)"))
     check("energy source reported as OUTCAR", first["E source"] == "OUTCAR", first["E source"])
 
     check("adsorbate came from the _surface twin",
@@ -599,8 +604,8 @@ try:
         check("option 4: _r1 - _surface exact",
               abs(float(first["_r1 - _surface (eV)"]) - (-291.0 + 280.0)) < 1e-6,
               first.get("_r1 - _surface (eV)"))
-        check("option 4: _r2 - _surface exact (OSZICAR twin)",
-              abs(float(first["_r2 - _surface (eV)"]) - (-296.0 + 280.0)) < 1e-6,
+        check("option 4: _r2 - _surface blank (OSZICAR-only twin is not read)",
+              first.get("_r2 - _surface (eV)", "") == "",
               first.get("_r2 - _surface (eV)"))
         check("option 4: the shared reference energy is reported",
               abs(float(first["E_surface (eV)"]) + 280.0) < 1e-6, first.get("E_surface (eV)"))

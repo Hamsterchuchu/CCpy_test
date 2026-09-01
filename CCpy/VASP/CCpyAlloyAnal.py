@@ -85,8 +85,9 @@ S000001 of the twin).
     a complete adsorption energy.
 
     Energies are read the same way as CCpyVASPAnal.py option 2: 'free  energy
-    TOTEN' of OUTCAR, and the last E0 of OSZICAR only when OUTCAR is missing.
-    The column 'E source' says which file each value came from.
+    TOTEN' of OUTCAR and nothing else. OSZICAR's E0 is a different reference
+    and is not used, so a folder with no readable OUTCAR is left blank.
+    The column 'E source' says where each value came from.
 
 [sub_options]
 -i=[DIR]       : analyse this set directly (comma-separated for several),

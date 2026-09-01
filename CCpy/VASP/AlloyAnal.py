@@ -25,10 +25,10 @@ is a choice the user has to make, and mixing an arbitrary one in silently
 would produce numbers nobody can reproduce.
 
 Energies are read exactly the way CCpyVASPAnal.py option 2 does, by calling
-CCpy.VASP.VASPio.energy_from_outcar() first and falling back to
-energy_from_oszicar() only when OUTCAR is missing (TOTEN and E0 differ by the
--TS term, so the two are never mixed within one column without saying which
-file each value came from).
+CCpy.VASP.VASPio.energy_from_outcar(): the 'free  energy   TOTEN' of OUTCAR and
+nothing else. OSZICAR's E0 is not accepted as a substitute -- it is the sigma->0
+extrapolated value and differs from TOTEN by the -TS term -- so a folder with no
+readable OUTCAR is left blank rather than filled from a different reference.
 
 Site assignment is done by two independent methods and both are reported:
 
@@ -73,8 +73,8 @@ import numpy as np
 import pandas as pd
 from ase.io import read as ase_read
 
-# Energy reading is shared with CCpyVASPAnal.py option 2 -- same functions,
-# same OUTCAR-then-OSZICAR order, so the two commands can never disagree. The
+# Energy reading is shared with CCpyVASPAnal.py option 2 -- same function,
+# same OUTCAR TOTEN source, so the two commands can never disagree. The
 # import is deferred into the two functions that need it because VASPio pulls
 # in pymatgen and matplotlib (~2 s), which a sites-only run never uses.
 
@@ -357,9 +357,8 @@ def select_alloy_sets(directory="./", ask=True, chosen=None):
 
 def _vaspio():
     """The VASPio helpers, imported on first use (see the note at the top)."""
-    from CCpy.VASP.VASPio import (energy_from_outcar, energy_from_oszicar,
-                                  natoms_from_poscar)
-    return energy_from_outcar, energy_from_oszicar, natoms_from_poscar
+    from CCpy.VASP.VASPio import energy_from_outcar, natoms_from_poscar
+    return energy_from_outcar, natoms_from_poscar
 
 
 def count_atoms(directory):
@@ -368,7 +367,7 @@ def count_atoms(directory):
     (the same one CCpyVASPAnal uses); CONTCAR is only looked at when POSCAR is
     missing, so a folder holding just a relaxed result still gets a count.
     """
-    _outcar, _oszicar, natoms_from_poscar = _vaspio()
+    _outcar, natoms_from_poscar = _vaspio()
     natoms = natoms_from_poscar(directory)
     if natoms:
         return natoms
@@ -522,17 +521,16 @@ def check_converged(directory, _cache={}):
 
 def read_energy(directory):
     """
-    Final energy of one VASP folder, the CCpyVASPAnal.py way: OUTCAR TOTEN
-    first, the last E0 of OSZICAR only as a fallback. Returns (energy, source)
-    with source "" when nothing could be read.
+    Final energy of one VASP folder, the CCpyVASPAnal.py way: the OUTCAR TOTEN
+    and nothing else. OSZICAR's E0 is a different reference (sigma->0, differing
+    by the -TS term) and is not used as a fallback, so a folder with no readable
+    OUTCAR stays blank. Returns (energy, source) with source "" when nothing
+    could be read.
     """
-    energy_from_outcar, energy_from_oszicar, _natoms = _vaspio()
+    energy_from_outcar, _natoms = _vaspio()
     energy = energy_from_outcar(directory)
     if energy is not None:
         return energy, "OUTCAR"
-    energy = energy_from_oszicar(directory)
-    if energy is not None:
-        return energy, "OSZICAR"
     return None, ""
 
 

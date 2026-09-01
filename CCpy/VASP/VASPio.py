@@ -1111,32 +1111,6 @@ def energy_from_outcar(path="./"):
         return None
 
 
-def energy_from_oszicar(path="./"):
-    """
-    Return the last E0 value from OSZICAR. None if not found.
-
-    NOTE: E0 is the sigma->0 extrapolated value and TOTEN of OUTCAR is the smearing free energy F.
-    They differ by the -TS term depending on ISMEAR/SIGMA, so the two values are not mixed.
-    Used only as a fallback when OUTCAR is missing.
-    """
-    fname = os.path.join(path, "OSZICAR")
-    if not os.path.exists(fname):
-        return None
-    last_E = None
-    try:
-        with open(fname, "r") as f:
-            for line in f:
-                if "E0=" in line:
-                    rest = line[line.find("E0=") + 3:].strip()
-                    try:
-                        last_E = float(rest.split()[0])
-                    except Exception:
-                        continue
-    except Exception:
-        return None
-    return last_E
-
-
 # -----------------------------------------------------------------------------
 # Electronic (SCF) convergence
 # -----------------------------------------------------------------------------
@@ -1374,8 +1348,11 @@ class VASPOutput():
         - if show_plot=True, save the figure with the same name: 03_<folder>_FinalEnergies.png
           (figname keeps the given name as it is, for backward compatibility)
 
-        The energy reference is 'free  energy   TOTEN' of OUTCAR, and only when OUTCAR is missing
-        the last E0 of OSZICAR is used as fallback (the two values differ by the -TS term).
+        The energy is the 'free  energy   TOTEN' of OUTCAR and nothing else. OSZICAR's E0 is
+        the sigma->0 extrapolated value and differs from TOTEN by the -TS term, so it is never
+        accepted as a substitute: a folder with no readable OUTCAR is left blank instead. One
+        table can therefore never hold two energy references. (CCpy standardised on TOTEN;
+        see also AlloyAnal.read_energy(), which reads energies the same way.)
 
         The figure is saved to a file instead of opening a window with plt.show() as before.
         On a compute server without X, show() left nothing behind.
@@ -1405,10 +1382,8 @@ class VASPOutput():
             sys.stdout.flush()
             sys.stdout.write("\b" * len(msg))
 
-            # -- energy parsing
+            # -- energy parsing (OUTCAR TOTEN only -- see the docstring)
             e = energy_from_outcar(d)
-            if e is None:
-                e = energy_from_oszicar(d)
             if e is None:
                 no_energy.append(d)
 
