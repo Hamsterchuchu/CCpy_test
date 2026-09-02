@@ -1,4 +1,5 @@
 import os, sys, re
+import math
 import copy
 import shutil
 import time
@@ -34,11 +35,13 @@ if version[0] == '3':
 # -- ENCUT auto setting options
 #    ENCUT_SCALE : scale factor multiplied to the ENMAX read from POTCAR.
 #                  ENCUT = max(ENMAX of POTCARs) x ENCUT_SCALE.
-#    ENCUT_ROUND : the scaled value is rounded to the nearest multiple of this
-#                  number, rounding halves up (10 -> 648.744 becomes 650,
-#                  507.725 becomes 510, 503.1 becomes 500). The same rule is
-#                  already used by cms_phonon_opt(). Set it to 1 (or 0) to keep
-#                  the raw value with 3 decimals instead.
+#    ENCUT_ROUND : the scaled value is rounded UP to a multiple of this number
+#                  (10 -> 648.744 becomes 650, 507.725 becomes 510, 503.1
+#                  becomes 510, 520 stays 520). Always up, never down: an ENCUT
+#                  below what the POTCAR asks for is the side that costs
+#                  accuracy, while a few eV above it only costs a little time.
+#                  cms_phonon_opt() uses this same function. Set it to 1 (or 0)
+#                  to keep the raw value with 3 decimals instead.
 ENCUT_SCALE = 1.3
 ENCUT_ROUND = 10
 
@@ -242,7 +245,7 @@ class VASPInput():
     def set_encut(self, incar_dict, potcar, pot_elt):
         """
         Multiply the largest ENMAX of the POTCARs used in this calculation by ENCUT_SCALE (1.3),
-        round it to the nearest multiple of ENCUT_ROUND (10) and set it as ENCUT of INCAR.
+        round it UP to a multiple of ENCUT_ROUND (10) and set it as ENCUT of INCAR.
         ENMAX is read directly from the POTCAR file, so the real value of that POTCAR is
         used regardless of functional (PBE_54 / PBE_52 / LDA ...).
 
@@ -972,7 +975,10 @@ class VASPInput():
         enmaxs = enmax_flag.findall(potcar)
         import numpy as np
         enmaxs = np.array(enmaxs, dtype='float32')
-        encut = int((max(enmaxs) * 1.5 + 5) // 10 * 10)
+        # ENMAX x 1.5, rounded up to 10 eV by the same helper the automatic
+        # ENCUT of the input generator uses (it used to round to the nearest
+        # multiple here, i.e. down for anything under x.5).
+        encut = int(round_encut(max(enmaxs) * 1.5))
         encut = max(encut, 520)
 
         get_sets = "PREC=Accurate,EDIFF=1.0E-08,EDIFFG=-1.0E-06,ADDGRID=.True.,LREAL=.FALSE.,LWAVE=.FALSE.,LCHARG=.FALSE.,ENCUT=%d" % encut
@@ -1737,8 +1743,12 @@ def load_yaml(yaml_file, key=None):
 
 def round_encut(value, unit=None):
     """
-    Round an ENCUT value to the nearest multiple of unit (default ENCUT_ROUND), halves up.
-      648.744 -> 650,  507.725 -> 510,  503.1 -> 500,  520 -> 520
+    Round an ENCUT value UP to a multiple of unit (default ENCUT_ROUND).
+      648.744 -> 650,  507.725 -> 510,  503.1 -> 510,  520 -> 520
+    Rounding up rather than to the nearest multiple: the value being rounded is
+    already the cutoff the POTCAR asks for (x ENCUT_SCALE), so rounding it down
+    hands the calculation less than that, while rounding up costs only a little
+    time. A value that is already a multiple of unit is left alone.
     With unit <= 1 the value is returned as a float rounded to 3 decimals, which is
     what CCpy did before the 10 eV rounding was introduced.
     """
@@ -1748,7 +1758,9 @@ def round_encut(value, unit=None):
     if not unit or unit <= 1:
         return round(value, 3)
 
-    return int((value + unit / 2.0) // unit * unit)
+    # round() on the quotient first: a value that is already a multiple of unit
+    # can arrive as 520.0000001 (float32 ENMAX x scale) and must stay 520.
+    return int(math.ceil(round(value / float(unit), 6)) * unit)
 
 def num_to_str(value):
     """
