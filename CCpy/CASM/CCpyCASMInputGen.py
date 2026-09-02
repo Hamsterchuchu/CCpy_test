@@ -16,6 +16,7 @@ def _help():
     print("""--------------------------------------
 [1] : PRIM 생성          (CASM 텍스트 형식, scale 스크립트 대체)
 [2] : PRIM 대칭 낮추기   (P1 - 전수 열거를 하려면 필요)
+[3] : CSPECS 생성        (최근접 거리 측정, neighbors.pl 대체)
 [9] : prim.json 생성     (신형 CASM 형식)
 --------------------------------------""")
     quit()
@@ -158,6 +159,84 @@ def prim_break_symmetry():
 
 
 # ---------------------------------------------------------------------------
+# [3] CSPECS 생성
+# ---------------------------------------------------------------------------
+
+def cspecs_gen():
+    from CCpy.CASM.CASMcspecs import (neighbor_shells, describe_shells,
+                                      suggest_radius, Cspecs, CspecsError)
+    from CCpy.CASM.CASMprim import Prim, PrimError
+
+    if os.path.isfile("PRIM"):
+        src = _ask("\n* 거리를 잴 구조", "PRIM")
+    else:
+        inputs = selectInputs([".cif", "POSCAR", "CONTCAR", "PRIM"], "./")
+        if not inputs:
+            print("구조 파일을 찾지 못했습니다.")
+            quit()
+        src = inputs[0]
+
+    try:
+        structure = Prim.read(src) if os.path.basename(src).startswith("PRIM") \
+            else src
+    except PrimError as err:
+        print("\n%s" % err)
+        quit()
+
+    species = _ask("\n* 특정 원소끼리의 거리만 볼까요?"
+                   "\n  (Li-C 처럼 한 원소의 배열이 문제일 때 씁니다. 전부 보려면 그냥 Enter)",
+                   "")
+    species = species.replace(",", " ").split() or None
+
+    try:
+        shells = neighbor_shells(structure, species=species)
+    except (CspecsError, PrimError) as err:
+        print("\n%s" % err)
+        quit()
+
+    print("\n%s" % describe_shells(shells))
+
+    nshell = _ask("\n* 몇 번째 껍질까지 한 클러스터로 볼까요?"
+                  "\n  (1 = 최근접만. 늘리면 비등가 배열 수가 급격히 커집니다)", "1")
+    try:
+        nshell = int(nshell)
+        proposed = suggest_radius(shells, nshell=nshell)
+    except (ValueError, CspecsError) as err:
+        print("\n%s" % err)
+        quit()
+
+    radius = _ask("\n* 반경 (Å)"
+                  "\n  %d껍질 %.6f Å 와 %s 사이 값입니다"
+                  % (nshell, shells[nshell - 1][0],
+                     ("%d껍질 %.6f Å" % (nshell + 1, shells[nshell][0]))
+                     if nshell < len(shells) else "그 바깥"),
+                  "%g" % proposed)
+    try:
+        radius = float(radius)
+    except ValueError:
+        print("숫자여야 합니다: %r" % radius)
+        quit()
+
+    sizes = _ask("\n* 클러스터 크기", "2 3 4")
+    try:
+        sizes = [int(s) for s in sizes.replace(",", " ").split()]
+        cs = Cspecs(dict((s, radius) for s in sizes))
+    except (ValueError, CspecsError) as err:
+        print("\n%s" % err)
+        quit()
+
+    if os.path.isfile("CSPECS"):
+        os.rename("CSPECS", "CSPECS_backup")
+        print("\n기존 CSPECS 를 CSPECS_backup 으로 옮겼습니다.")
+    cs.write("CSPECS")
+
+    print("\nCSPECS 생성 완료")
+    print(cs.to_string())
+    inside = sum(n for d, n in shells if d <= radius)
+    print("  반경 %g Å 안의 이웃 : %d개" % (radius, inside))
+
+
+# ---------------------------------------------------------------------------
 # [9] prim.json (신형 CASM)
 # ---------------------------------------------------------------------------
 
@@ -181,6 +260,8 @@ if __name__ == "__main__":
         prim_gen()
     elif option == "2":
         prim_break_symmetry()
+    elif option == "3":
+        cspecs_gen()
     elif option == "9":
         prim_json_gen()
     else:
