@@ -68,10 +68,7 @@ if type == 1:
     for file in files:
         dat_file_name = file.replace('.cif', '.dat')
         pipeline = import_file(file)
-        if '-atom_style=' in file:
-            export_file(pipeline, '%s' % dat_file_name, 'lammps/data', atom_style="charge") ## or atomic
-        else:
-            export_file(pipeline, '%s' % dat_file_name, 'lammps/data') ## or atomic
+        export_file(pipeline, '%s' % dat_file_name, 'lammps/data')
         print('%s generate!' % dat_file_name)
 
 elif type == 2:
