@@ -17,6 +17,7 @@ def _help():
 [1] : PRIM 생성          (CASM 텍스트 형식, scale 스크립트 대체)
 [2] : PRIM 대칭 낮추기   (P1 - 전수 열거를 하려면 필요)
 [3] : CSPECS 생성        (최근접 거리 측정, neighbors.pl 대체)
+[4] : KPOINTS 생성·통일  (셀에 맞는 mesh 를 정해 전 배열에 복사)
 [9] : prim.json 생성     (신형 CASM 형식)
 --------------------------------------""")
     quit()
@@ -237,6 +238,92 @@ def cspecs_gen():
 
 
 # ---------------------------------------------------------------------------
+# [4] KPOINTS 생성·통일
+# ---------------------------------------------------------------------------
+
+def kpoints_gen():
+    from CCpy.CASM.CASMkpoints import (make_kpoints, config_dirs, distribute,
+                                       verify_uniform, describe_uniformity,
+                                       DEFAULT_TARGET, KpointsError)
+    from CCpy.CASM.CASMprim import PrimError
+
+    dirs = config_dirs(".")
+    if dirs:
+        try:
+            ok, groups = verify_uniform(dirs)
+            print("\n* 현재 상태 : " + describe_uniformity(groups))
+            if not ok:
+                print("\n  배열마다 mesh 가 다르면 그 계단이 형성 에너지 차이로 "
+                      "둔갑합니다.")
+                print("  셀 크기가 서로 같은 배열끼리는(Method 1) 하나로 통일해야 "
+                      "합니다.")
+                print("  셀 부피가 다른 배열이 섞여 있으면(Method 2) mainclust 가 "
+                      "SCEL 배율만큼")
+                print("  나눠 k-밀도를 맞춘 것이니 그대로 두는 편이 맞습니다.")
+        except KpointsError as err:
+            print("\n* 현재 상태를 읽지 못했습니다: %s" % err)
+
+    src = _ask("\n* mesh 를 정할 기준 구조", "PRIM")
+    if not os.path.isfile(src):
+        print("%s 가 없습니다." % src)
+        quit()
+
+    target = _ask("\n* 목표 k*L (Å)"
+                  "\n  금속은 35~40, 절연체는 20 안팎입니다", "%g" % DEFAULT_TARGET)
+    try:
+        target = float(target)
+    except ValueError:
+        print("숫자여야 합니다: %r" % target)
+        quit()
+
+    try:
+        kp, info = make_kpoints(src, target=target)
+    except (KpointsError, PrimError) as err:
+        print("\n%s" % err)
+        quit()
+
+    print("")
+    for m in info:
+        print("  " + m)
+
+    mode = _ask("\n* mode", kp.mode)
+    if mode[:1].upper() != kp.mode[:1].upper():
+        from CCpy.CASM.CASMkpoints import Kpoints
+        kp = Kpoints(kp.mesh, mode=mode, comment=kp.comment)
+
+    mesh = _ask("\n* mesh (그대로 쓰려면 Enter)",
+                " ".join(str(v) for v in kp.mesh))
+    try:
+        from CCpy.CASM.CASMkpoints import Kpoints
+        kp = Kpoints([int(v) for v in mesh.replace(",", " ").split()],
+                     mode=kp.mode, comment=kp.comment)
+    except (ValueError, KpointsError) as err:
+        print("\n%s" % err)
+        quit()
+
+    kp.write("KPOINTS")
+    print("\nKPOINTS 생성 완료")
+    print(kp.to_string())
+
+    if not dirs:
+        print("  배열 디렉토리가 아직 없습니다. mainclust 로 con* 를 만든 뒤")
+        print("  이 옵션을 다시 돌려 전 배열에 복사하세요.")
+        return
+
+    go = _ask("* 배열 %d개에 이 KPOINTS 를 복사할까요? (y/n)" % len(dirs), "y")
+    if go.lower() not in ("y", "yes"):
+        print("  복사하지 않았습니다.")
+        return
+
+    n = distribute(kp, dirs)
+    ok, groups = verify_uniform(dirs)
+    print("\n  %d개에 기록했습니다." % n)
+    print("  확인 : " + describe_uniformity(groups))
+    if not ok:
+        print("  복사가 끝났는데도 어긋난 것이 있습니다. 위 목록을 확인해 주세요.")
+
+
+# ---------------------------------------------------------------------------
 # [9] prim.json (신형 CASM)
 # ---------------------------------------------------------------------------
 
@@ -262,6 +349,8 @@ if __name__ == "__main__":
         prim_break_symmetry()
     elif option == "3":
         cspecs_gen()
+    elif option == "4":
+        kpoints_gen()
     elif option == "9":
         prim_json_gen()
     else:
