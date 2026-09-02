@@ -97,15 +97,18 @@ class Prim(object):
     # -- 입출력 ------------------------------------------------------------
 
     def to_string(self):
+        # CONTCAR 와 같은 16자리를 쓴다. 원본 scale 은 awk OFMT 때문에 8자리로
+        # 잘렸는데(격자상수에서 ~1e-9 Å 손실), 그 절삭을 따라할 이유가 없다.
+        # supercell 부피가 2 이상인 배열에서는 이 차이가 POS 좌표에 드러난다.
         lines = [self.title,
                  "%20.14f" % self.scale]
         for v in self.lattice:
-            lines.append("  %14.8f %14.8f %14.8f" % tuple(v))
+            lines.append("  %21.16f %21.16f %21.16f" % tuple(v))
         counts = [n for n, _ in self.groups()]
         lines.append(" " + " ".join(str(n) for n in counts))
         lines.append("Direct")
         for xyz, occ in zip(self.coords, self.occupancies):
-            lines.append("  %14.8f %14.8f %14.8f   %s"
+            lines.append("  %21.16f %21.16f %21.16f  %s"
                          % (xyz[0], xyz[1], xyz[2], " ".join(occ)))
         return "\n".join(lines) + "\n"
 
