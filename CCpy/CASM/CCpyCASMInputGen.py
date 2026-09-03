@@ -18,6 +18,8 @@ def _help():
 [2] : PRIM 대칭 낮추기   (P1 - 전수 열거를 하려면 필요)
 [3] : CSPECS 생성        (최근접 거리 측정, neighbors.pl 대체)
 [4] : KPOINTS 생성·통일  (셀에 맞는 mesh 를 정해 전 배열에 복사)
+[7] : 다음 완화 준비     (CONTCAR -> POSCAR, Pulay stress 걷어내기)
+[8] : 최종 정적 준비     (NSW=0, ISMEAR=-5 로 에너지 확정)
 [9] : prim.json 생성     (신형 CASM 형식)
 --------------------------------------""")
     quit()
@@ -324,6 +326,87 @@ def kpoints_gen():
 
 
 # ---------------------------------------------------------------------------
+# [7] / [8] 다음 단계 준비
+# ---------------------------------------------------------------------------
+
+def _stage_common(stage):
+    from CCpy.CASM import CASMstage as st
+    from CCpy.CASM.CASMkpoints import config_dirs
+
+    dirs = config_dirs(".")
+    if not dirs:
+        print("\n배열 디렉토리(con*)를 찾지 못했습니다.")
+        quit()
+
+    ready = [d for d in dirs if st.is_finished(d)]
+    print("\n* 배열 %d개 중 %d개가 끝났습니다(vasp.done 기준)."
+          % (len(dirs), len(ready)))
+    if len(ready) < len(dirs):
+        print("  아직 안 끝난 %d개는 건너뜁니다." % (len(dirs) - len(ready)))
+
+    bad = st.unconverged_dirs(".")
+    if bad is None:
+        print("\n  01_unconverged_jobs.csv 가 없습니다.")
+        print("  CCpyVASPAnal.py 0 을 먼저 돌리면 미수렴 배열을 자동으로 "
+              "건너뜁니다.")
+        skip = _ask("  그래도 진행할까요? (y/n)", "n")
+        if skip.lower() not in ("y", "yes"):
+            quit()
+    else:
+        print("  미수렴으로 표시된 배열 %d개는 건너뜁니다." % len(bad))
+
+    # 현재 상태를 몇 개만 보여 준다
+    sample = ready[:3]
+    if sample:
+        print("\n  현재 상태(앞 %d개):" % len(sample))
+        for d in sample:
+            try:
+                drift = st.volume_drift(d)
+                ent = st.entropy_per_atom(d)
+                print("    %-10s 부피변화 %+6.2f %%   T*S %.3f meV/atom   NKPTS %s"
+                      % (os.path.basename(d), drift,
+                         ent if ent is not None else float("nan"), st.nkpts(d)))
+            except st.StageError:
+                pass
+
+    ispin = _ask("\n* ISPIN (그대로 두려면 Enter)", "")
+    ispin = int(ispin) if ispin else None
+
+    go = _ask("\n* 진행할까요? 이전 결과는 접미사를 붙여 남깁니다. (y/n)", "y")
+    if go.lower() not in ("y", "yes"):
+        print("  아무것도 하지 않았습니다.")
+        quit()
+
+    done, skipped = st.advance_all(".", stage=stage, ispin=ispin)
+    print("\n" + st.describe(done, skipped))
+    return done
+
+
+def stage_relax():
+    done = _stage_common("relax")
+    if done:
+        print("\n  이제 다시 제출하세요:")
+        print("    CCpyJobSubmit.py 2 I5 -batch -scratch -n=8")
+        print("\n  끝나면 부피가 더 움직이는지 보고, 멎었으면 옵션 8 로 최종 "
+              "정적 계산을 준비하세요.")
+
+
+def stage_static():
+    done = _stage_common("static")
+    if done:
+        ismears = {str(d.get("ismear")) for d in done}
+        print("\n  ISMEAR %s 로 정적 계산 입력을 만들었습니다." % ", ".join(sorted(ismears)))
+        if "1" in ismears:
+            print("  k-점이 4개 미만인 배열은 사면체법(-5)을 쓸 수 없어 "
+                  "ISMEAR=1, SIGMA=0.05 로 두었습니다.")
+        print("\n  이제 다시 제출하세요:")
+        print("    CCpyJobSubmit.py 2 I5 -batch -scratch -n=8")
+        print("\n  이 계산의 OUTCAR 이 최종 에너지입니다. CCpyCASMhull.py 는 "
+              "OUTCAR 을 읽으므로")
+        print("  따로 손댈 것 없이 hull 이 정적 에너지로 그려집니다.")
+
+
+# ---------------------------------------------------------------------------
 # [9] prim.json (신형 CASM)
 # ---------------------------------------------------------------------------
 
@@ -351,6 +434,10 @@ if __name__ == "__main__":
         cspecs_gen()
     elif option == "4":
         kpoints_gen()
+    elif option == "7":
+        stage_relax()
+    elif option == "8":
+        stage_static()
     elif option == "9":
         prim_json_gen()
     else:
