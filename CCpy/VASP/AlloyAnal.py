@@ -753,7 +753,9 @@ def check_converged(directory, _cache={}):
     return verdict
 
 
-CONVERGENCE_COLUMNS = ["Structure", "folder", "Directory", "Status", "Job end",
+# 'Job end' is not among them: only folders that hold vasp.done reach this
+# table, so the column would say "True" in every row (see analyze_convergence).
+CONVERGENCE_COLUMNS = ["Structure", "folder", "Directory", "Status",
                        "Converged", "custodian", "SCF (NELM)", "NELM",
                        "Err msg"]
 
@@ -845,8 +847,21 @@ def analyze_convergence(set_dir, quiet=False, show_progress=True):
     other options carry the verdict only as a flag on the structure's row,
     which names the twin that failed but not what went wrong inside it.
 
-    Returns (table, info). `table` is empty when the set holds no folder at
-    all; `info` carries the counts and the list of failed folders.
+    Only folders that have FINISHED are judged. A folder without vasp.done is
+    left out of the table entirely and counted underneath it instead, because
+    it has no verdict to give: CCpy's batch submission deletes vasp.done from
+    every folder of the batch up front, so while that batch runs the folders
+    it has not reached yet are still holding the OUTCAR and OSZICAR of an
+    earlier attempt. Judging those reports the old run's outcome as if it were
+    this one's -- and an old OSZICAR that hit NELM would come out as a hard
+    "False" for a calculation that is about to be redone.
+
+    Two counts are kept apart because they mean different things: a folder with
+    VASP output but no vasp.done is running, waiting its turn in a batch, or
+    dead; one with no output at all has not started.
+
+    Returns (table, info). `table` is empty when the set holds no finished
+    folder; `info` carries the counts, the failed folders and the skipped ones.
     """
     set_dir = os.path.normpath(set_dir)
     set_name = os.path.basename(os.path.abspath(set_dir))
@@ -873,13 +888,34 @@ def analyze_convergence(set_dir, quiet=False, show_progress=True):
         return pd.DataFrame(), info
 
     progress = Progress(len(folders), enabled=show_progress and not quiet)
-    rows = []
+    rows, running, not_started = [], [], []
     for structure, label, path in folders:
         progress.visit(path)
+        # Asked before folder_status(), not inside it: an unfinished folder is
+        # skipped without ever reading its vasp.out, which is the expensive
+        # part -- so a set checked in the middle of a batch is also the fast
+        # case instead of the slow one.
+        finished = check_finished(path)
+        if finished == "False":
+            running.append(path)
+            continue
+        if finished == "Unknown":
+            not_started.append(path)
+            continue
         row = {"Structure": structure, "folder": label, "Directory": path}
         row.update(folder_status(path))
         rows.append(row)
     progress.close()
+
+    info["running"] = running
+    info["not_started"] = not_started
+    info["n_judged"] = len(rows)
+    if not rows:
+        info["warnings"].append(
+            "no folder of this set has finished yet, so there is nothing to "
+            "judge (%d still running or waiting, %d not started)"
+            % (len(running), len(not_started)))
+        return pd.DataFrame(), info
 
     table = pd.DataFrame(rows)
     table = table[[c for c in CONVERGENCE_COLUMNS if c in table]]
@@ -890,7 +926,6 @@ def analyze_convergence(set_dir, quiet=False, show_progress=True):
     info["failed"] = [(r["Directory"], r["Err msg"] or
                        ("SCF hit NELM" if r["SCF (NELM)"] == "False" else ""))
                       for r in rows if r["Converged"] == "False"]
-    info["unfinished"] = [r["Directory"] for r in rows if r["Job end"] == "False"]
     if info["n_unknown"] == len(rows) and rows:
         info["warnings"].append(
             "no folder could be judged: none of them has an OSZICAR, and "
@@ -1757,6 +1792,15 @@ def analyze_set(set_dir, do_sites=True, do_ads_energy=False,
                     unfinished.append(label)
             row["unconverged"] = ",".join(failed)
             row["unfinished"] = ",".join(unfinished)
+        # A folder without vasp.done is holding an EARLIER attempt's numbers --
+        # it is running, waiting its turn in a batch (CCpy deletes vasp.done
+        # from every folder of a batch up front), or dead. Its energy stays in
+        # the table, because that is how far along the folder is and it is
+        # honest about which folder it came from; a DIFFERENCE built on it is
+        # not, because nothing in the column says half of it is out of date.
+        # So the differences are left blank and 'unfinished' names the folder.
+        # With -nocheck nothing is known about any folder, so nothing is blanked.
+        stale = set(unfinished)
         if do_energy:
             row["N atoms"] = natoms
             row["Energy (eV)"] = energy
@@ -1777,8 +1821,10 @@ def analyze_set(set_dir, do_sites=True, do_ads_energy=False,
             else:
                 note_missing(info, "_surface", structure_id)
             row["E_surface (eV)"] = surface_energy
-            row["dE_surface (eV)"] = (None if (energy is None or surface_energy is None)
-                                      else energy - surface_energy)
+            row["dE_surface (eV)"] = (
+                None if (energy is None or surface_energy is None
+                         or stale & {"main", "_surface"})
+                else energy - surface_energy)
             for label, path in redox_dirs:
                 twin = path if single else os.path.join(path, structure_id)
                 column = "dE_surface_%s (eV)" % label
@@ -1788,8 +1834,10 @@ def analyze_set(set_dir, do_sites=True, do_ads_energy=False,
                     continue
                 progress.visit(twin)
                 twin_energy, _source = read_energy(twin)
-                row[column] = (None if (twin_energy is None or surface_energy is None)
-                               else twin_energy - surface_energy)
+                row[column] = (
+                    None if (twin_energy is None or surface_energy is None
+                             or stale & {"_" + label, "_surface"})
+                    else twin_energy - surface_energy)
 
         if do_redox_energy:
             # Option 3 -- redox reaction energies. Each redox twin against the
@@ -1800,8 +1848,10 @@ def analyze_set(set_dir, do_sites=True, do_ads_energy=False,
                 if _is_dir(twin):
                     progress.visit(twin)
                     twin_energy, _twin_source = read_energy(twin)
-                    row[column] = (None if (energy is None or twin_energy is None)
-                                   else energy - twin_energy)
+                    row[column] = (
+                        None if (energy is None or twin_energy is None
+                                 or stale & {"main", "_" + label})
+                        else energy - twin_energy)
                 else:
                     row[column] = None
                     note_missing(info, "_" + label, structure_id)
@@ -1939,9 +1989,10 @@ def analyze_set(set_dir, do_sites=True, do_ads_energy=False,
     info["unfinished_rows"] = unfinished_rows
     if unfinished_rows:
         info["warnings"].append(
-            "%d structure(s) have a folder with no vasp.done -- not run yet, or "
-            "holding the output of an earlier attempt that was resubmitted -- "
-            "so their energies are kept in the table but left out of the fit: "
+            "%d structure(s) have a folder with no vasp.done -- running, "
+            "waiting its turn in a batch, or dead -- so what is in it belongs "
+            "to an earlier attempt: its energy is kept in the table, but every "
+            "difference built on it is left BLANK and it is out of the fit: "
             "%s (if these jobs simply do not write vasp.done, use -nocheck)"
             % (len(unfinished_rows), ", ".join(unfinished_rows[:10])
                + (" ..." if len(unfinished_rows) > 10 else "")))

@@ -58,8 +58,16 @@ S000001 of the twin).
       NELM         : the limit that check compared against, taken from OUTCAR's
                      echo before the INCAR, so a folder resubmitted with a
                      raised NELM is judged against the raised one.
-    'Job end' is vasp.done: without it the job has not run yet, or what lies
-    in the folder is the output of an earlier attempt that was resubmitted.
+    Only FINISHED folders are judged -- a folder without vasp.done is left out
+    of the table and counted underneath it. CCpy's batch submission deletes
+    vasp.done from every folder of the batch up front, so while that batch runs
+    the folders it has not reached yet are still holding the OUTCAR and OSZICAR
+    of an earlier attempt; judging those would report the old run's outcome as
+    if it were this one's, and an old OSZICAR that hit NELM would come out as a
+    hard failure for a calculation that is about to be redone. The two counts
+    are kept apart: VASP output but no vasp.done (running, waiting its turn, or
+    dead) and no output at all (not started).
+    Every folder that failed is listed under the table, not just the first few.
     Written to 04_[SET]_Convergence.csv / .txt.
 
 1 : Adsorption sites. For every adsorbate atom, which substrate atom it sits
@@ -143,11 +151,17 @@ S000001 of the twin).
                  vasp.out is 'Unknown' rather than a failure.
                  Two more columns come with it: 'Finished' says whether the
                  main folder holds vasp.done, and 'unfinished' names any folder
-                 of that row without it. A folder without vasp.done has either
-                 not run yet or is holding the output of an earlier attempt
-                 that was resubmitted (CCpy deletes vasp.done on resubmission
-                 but leaves CONTCAR/OUTCAR/OSZICAR in place), so its energy is
-                 kept in the table but left out of the ensemble fit.
+                 of that row without it. A folder without vasp.done is running,
+                 waiting its turn in a batch, or dead (CCpy deletes vasp.done
+                 from every folder of a batch up front but leaves
+                 CONTCAR/OUTCAR/OSZICAR in place), so what is in it belongs to
+                 an earlier attempt: its energy is KEPT in the table -- that is
+                 how far along the folder is, and the column says which folder
+                 it came from -- but every DIFFERENCE built on it is left BLANK
+                 and it is out of the ensemble fit. Nothing in a dE column says
+                 half of it is out of date, which is why those are the ones
+                 that go blank. With -nocheck nothing is known about any
+                 folder, so nothing is blanked.
 -no_twins      : assign sites only in the main folder, not in the redox twins
 -noprogress    : do not draw the "[  n /  N  ]" folder counter (for a run whose
                  output is piped into a file)
@@ -272,7 +286,10 @@ if do_convergence:
     for set_dir in sets:
         table, info = analyze_convergence(set_dir, show_progress=show_progress)
         if table is None or not len(table):
-            print("  no folder to check in this set.")
+            for warning in info["warnings"]:
+                print("* %s" % warning)
+            if not info["n_folders"]:
+                print("  no folder to check in this set.")
             continue
         print("")
         if len(table) <= STATUS_PRINT_LIMIT:
@@ -281,20 +298,29 @@ if do_convergence:
             print("%d folder(s) checked -- see 04_%s_Convergence.txt"
                   % (len(table), info["set_name"]))
         print("")
-        print("* converged %d   failed %d   unknown %d   (of %d folder(s))"
+        print("* converged %d   failed %d   unknown %d   (of %d folder(s) "
+              "judged, %d found)"
               % (info["n_converged"], info["n_failed"], info["n_unknown"],
-                 info["n_folders"]))
+                 info["n_judged"], info["n_folders"]))
         if info["failed"]:
+            # Every one of them, not the first few: this list is the reason to
+            # run option 0, and a folder left off it is a folder nobody fixes.
             print("* these folders did not converge:")
-            for path, why in info["failed"][:20]:
-                print("    %-50s %s" % (path, why))
-            if len(info["failed"]) > 20:
-                print("    ... and %d more" % (len(info["failed"]) - 20))
-        if info["unfinished"]:
-            print("* %d folder(s) have no vasp.done -- not run yet, or holding "
-                  "the output of an earlier attempt that was resubmitted: %s"
-                  % (len(info["unfinished"]), ", ".join(info["unfinished"][:5])
-                     + (" ..." if len(info["unfinished"]) > 5 else "")))
+            width = max([len(path) for path, _why in info["failed"]] + [40])
+            for path, why in info["failed"]:
+                print("    %-*s %s" % (width, path, why))
+        if info["running"]:
+            print("* %d folder(s) left out -- VASP output but no vasp.done, so "
+                  "they are running, waiting their turn in a batch, or dead. "
+                  "What is in them belongs to an earlier attempt: %s"
+                  % (len(info["running"]), ", ".join(info["running"][:5])
+                     + (" ..." if len(info["running"]) > 5 else "")))
+        if info["not_started"]:
+            print("* %d folder(s) left out -- no VASP output at all, not "
+                  "started: %s"
+                  % (len(info["not_started"]),
+                     ", ".join(info["not_started"][:5])
+                     + (" ..." if len(info["not_started"]) > 5 else "")))
         for warning in info["warnings"]:
             print("* %s" % warning)
         written = write_tables(table, None, info["set_name"], out_dir="./",

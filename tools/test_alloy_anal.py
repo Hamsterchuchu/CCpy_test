@@ -63,8 +63,14 @@ Checks
      puts the layer back together
  16. option 0 tabulates one row per FOLDER -- main, _surface and every redox
      twin -- with the two checks side by side, so a folder that custodian
-     passes but whose SCF hit NELM is still marked not converged, and a folder
-     with no vasp.done is named
+     passes but whose SCF hit NELM is still marked not converged. A folder
+     WITHOUT vasp.done is left out of the table and counted underneath instead
+     (running, waiting its turn in a batch, or dead: what is in it belongs to
+     an earlier attempt), and every folder that failed is listed, not just the
+     first few
+ 16b. in the energy options the same folder keeps its row and its energy, but
+     every DIFFERENCE built on it comes out blank -- an out-of-date half is
+     invisible inside a dE column
  17. the folder counter appears while the run works ("Parsing VASP jobs....")
      and -noprogress turns it off
 """
@@ -357,6 +363,22 @@ def build(root):
     with open(os.path.join(resub_dir, "OSZICAR"), "w") as f:
         f.write("\n".join(lines) + "\n")   # the OLD run: hit its OWN limit of 100
     put(os.path.join(root, "N_set_surface", "S000099"), n_slab, -280.0)
+
+    # S000098: the OTHER half of the same story -- a folder that DID finish
+    # (vasp.done is there) but whose SCF ran to NELM. Option 0 has to judge it
+    # and call it not converged; unlike S000099 it must not be skipped, and its
+    # energy is inside the band so it is not an outlier either.
+    nelm_dir = os.path.join(root, "N_set", "S000098")
+    hit = n_slab.copy()
+    add_adsorbate(hit, "S", 1.8, "fcc")
+    put(nelm_dir, hit, -300.5)                          # vasp.done stays
+    with open(os.path.join(nelm_dir, "OUTCAR"), "w") as f:
+        f.write("   NELM   =    100;   NELMIN=  2; NELMDL= -5     # of ELM steps\n"
+                "    Iteration    1(   1)\n"
+                "  free  energy   TOTEN  =  -300.5 eV\n")
+    with open(os.path.join(nelm_dir, "OSZICAR"), "w") as f:
+        f.write("\n".join(lines) + "\n")                # 100 steps against 100
+    put(os.path.join(root, "N_set_surface", "S000098"), n_slab, -280.0)
 
     # -- set D: top layer buckled by more than the default -layer_tol (1.2 A).
     #    Relaxation does this, and it is what tears the top layer in half: the
@@ -673,10 +695,13 @@ try:
           and os.path.exists(os.path.join(work, "04_A_set_AlloyAnal.csv")))
     if os.path.exists(conv_path):
         conv = read_csv(conv_path)
-        for column in ("Structure", "folder", "Directory", "Status", "Job end",
+        for column in ("Structure", "folder", "Directory", "Status",
                        "Converged", "custodian", "SCF (NELM)", "NELM", "Err msg"):
             check("option 0 table has the '%s' column" % column,
                   column in conv[0], list(conv[0]))
+        check("option 0 drops 'Job end' -- only finished folders are in the "
+              "table, so it would say True in every row",
+              "Job end" not in conv[0], list(conv[0]))
         check("option 0 has one row per folder, twins included",
               {row["folder"] for row in conv} == {"main", "_surface", "r1", "r2"},
               sorted({row["folder"] for row in conv}))
@@ -691,21 +716,31 @@ try:
               "error is named",
               i_conv["r1"]["Converged"] == "False" and i_conv["r1"]["Err msg"],
               (i_conv["r1"]["Converged"], i_conv["r1"]["Err msg"]))
-        check("option 0: the folder with no vasp.done is Unknown, and its "
-              "'Job end' says why",
-              i_conv["_surface"]["Converged"] == "Unknown"
-              and i_conv["_surface"]["Job end"] == "False",
-              (i_conv["_surface"]["Converged"], i_conv["_surface"]["Job end"]))
+        check("option 0 leaves the folder with no vasp.done OUT of the table "
+              "instead of judging an earlier attempt's output",
+              "_surface" not in i_conv, sorted(i_conv))
+        check("and says so, naming it, under the table",
+              "no vasp.done" in status.stdout
+              and "I_set_surface" in status.stdout,
+              [l for l in status.stdout.splitlines() if "vasp.done" in l])
         check("option 0 reports the failures under the table",
               "did not converge" in status.stdout, status.stdout[-800:])
-    n_conv = {row["folder"]: row
+        check("option 0 lists every failed folder, not just the first few",
+              "and %d more" % 1 not in status.stdout
+              and "..." not in [l.strip() for l in status.stdout.splitlines()],
+              [l for l in status.stdout.splitlines() if "more" in l])
+    n_conv = {(row["Structure"], row["folder"]): row
               for row in read_csv(os.path.join(work, "04_N_set_Convergence.csv"))}
+    hit_nelm = n_conv[("S000098", "main")]
     check("option 0: an SCF that hit NELM is caught even where custodian "
           "passes, and the limit it was judged against is shown",
-          n_conv["main"]["SCF (NELM)"] == "False"
-          and n_conv["main"]["NELM"] == "100"
-          and n_conv["main"]["Converged"] == "False",
-          n_conv["main"])
+          hit_nelm["SCF (NELM)"] == "False" and hit_nelm["NELM"] == "100"
+          and hit_nelm["Converged"] == "False", hit_nelm)
+    check("option 0: the resubmitted folder (no vasp.done) is NOT judged -- "
+          "its OSZICAR belongs to the run that is being redone",
+          ("S000099", "main") not in n_conv
+          and ("S000099", "_surface") in n_conv,
+          sorted(k for k in n_conv if k[0] == "S000099"))
 
     # The folder counter, and the switch that turns it off.
     check("the folder counter is drawn while the run works",
@@ -722,11 +757,18 @@ try:
           "far from the rest of the set" in output and "S000003" in output,
           [line for line in output.splitlines() if "far from the rest" in line])
     check("an ordinary spread of energies is not reported as an outlier",
-          # Exactly H_set's S000003 and N_set's S000099 -- the two deliberate
-          # anomalies -- and nothing else out of every other set's normal
-          # spread.
-          sum(1 for line in output.splitlines() if "far from the rest" in line) == 2,
+          # Exactly H_set's S000003 -- the one deliberate anomaly whose folders
+          # all finished -- and nothing else out of every other set's normal
+          # spread. N_set's S000099 is the other anomaly, and it no longer
+          # reaches this check at all: its folder has no vasp.done, so the
+          # difference that would have carried the stale -48461 eV is blank.
+          sum(1 for line in output.splitlines() if "far from the rest" in line) == 1,
           [line for line in output.splitlines() if "far from the rest" in line])
+    check("a stale energy cannot even become an outlier -- the difference "
+          "built on an unfinished folder is blank before it gets that far",
+          not any("far from the rest" in line and "S000099" in line
+                  for line in output.splitlines()),
+          [line for line in output.splitlines() if "S000099" in line])
     check("no vasp.out anywhere -> the convergence columns are dropped, "
           "with one note",
           "Converged" not in list(read_csv(os.path.join(work, "04_A_set_AlloyAnal.csv"))[0])
@@ -803,8 +845,29 @@ try:
     check("the unfinished folder is named in a warning, and left out of the "
           "fit though it stays in the table",
           "no vasp.done" in output and "S000099" in output
-          and "left out of the fit" in output,
+          and "out of the fit" in output,
           [l for l in output.splitlines() if "vasp.done" in l])
+    if n_row is not None:
+        # The point of keeping the row: the energy says how far the folder got
+        # and which folder it came from. The point of blanking the rest: a dE
+        # column has nothing in it to say that half of it is out of date.
+        check("the unfinished folder keeps its energy in the table",
+              n_row.get("Energy (eV)", "") != "", n_row.get("Energy (eV)"))
+        check("but every difference built on it comes out BLANK",
+              all(n_row.get(key, "") == "" for key in n_row
+                  if key.startswith("dE_")),
+              {k: v for k, v in n_row.items() if k.startswith("dE_")})
+        finished_row = next(r for r in n_rows if r["Structure"] == "S000001")
+        check("a finished structure of the same set still gets its difference",
+              finished_row.get("dE_surface (eV)", "") != "",
+              finished_row.get("dE_surface (eV)"))
+        nelm_row = next(r for r in n_rows if r["Structure"] == "S000098")
+        check("a FINISHED folder that hit NELM keeps its difference (it is "
+              "not converged, which the 'unconverged' column says -- that is "
+              "a different fault from an out-of-date number)",
+              nelm_row.get("dE_surface (eV)", "") != ""
+              and "main" in (nelm_row.get("unconverged") or ""),
+              (nelm_row.get("dE_surface (eV)"), nelm_row.get("unconverged")))
 
     # The buckled slab: the warning has to appear, and -layer_tol has to fix it.
     default_run = run(work).stdout
