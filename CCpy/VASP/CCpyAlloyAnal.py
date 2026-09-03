@@ -3,9 +3,10 @@
 CCpyAlloyAnal.py
 
 CCpy-style front-end for analysing the folder sets that CCpyAlloyGen.py
-produced (CCpy.VASP.AlloyAnal): where each adsorbate atom ended up sitting,
-and how the energy of each structure compares with its adsorbate-free
-(_surface) and redox (_r, _r1, _r2 ...) twins.
+produced (CCpy.VASP.AlloyAnal): whether every folder finished and converged,
+where each adsorbate atom ended up sitting, the adsorption energy of every
+folder against the adsorbate-free (_surface) twin, and the redox reaction
+energy of every redox twin (_r, _r1, _r2 ...) against the main folder.
 """
 
 import warnings
@@ -16,8 +17,9 @@ import sys
 
 import pandas as pd
 
-# Above this many rows the site table is left to the file instead of the screen.
+# Above this many rows a table is left to the file instead of the screen.
 SITE_PRINT_LIMIT = 40
+STATUS_PRINT_LIMIT = 60
 
 version = sys.version
 if version[0] == '3':
@@ -35,6 +37,31 @@ main set automatically, by structure ID (S000001 of one folder against
 S000001 of the twin).
 
 [options]
+0 : Convergence check. One row per FOLDER -- main, _surface and every redox
+    twin of every structure -- because a folder is the level at which a VASP
+    run fails. Options 2-4 carry the same verdict as a flag on the structure's
+    row, which names the twin that failed but not what went wrong in it.
+    ex) CCpyAlloyAnal.py 0
+
+    Two checks, either one alone enough to fail a folder:
+      custodian    : VaspErrorHandler over vasp.out plus the max-ionic pattern
+                     built from NSW -- the CCpyVASPAnal.py option 0 verdict.
+                     'Unknown' when the folder keeps no vasp.out; that is not
+                     a failure.
+      SCF (NELM)   : did the last closed ionic block of OSZICAR stay under
+                     NELM. Custodian's error list has no entry for an SCF that
+                     simply ran out of steps, and in a single-point folder
+                     (-sp, so NSW=0) its max-ionic pattern can never fire
+                     either -- '0 F=' is a line VASP does not print. So this
+                     column is the only thing standing between an SCF that
+                     stopped at NELM and the energy tables of options 2-4.
+      NELM         : the limit that check compared against, taken from OUTCAR's
+                     echo before the INCAR, so a folder resubmitted with a
+                     raised NELM is judged against the raised one.
+    'Job end' is vasp.done: without it the job has not run yet, or what lies
+    in the folder is the output of an earlier attempt that was resubmitted.
+    Written to 04_[SET]_Convergence.csv / .txt.
+
 1 : Adsorption sites. For every adsorbate atom, which substrate atom it sits
     on top of, which two it bridges, or which three/four form the hollow
     (a 3-fold hollow is also reported as fcc or hcp).
@@ -59,30 +86,31 @@ S000001 of the twin).
     from the removed atoms, so it is exact; without both POSCARs the column is
     left blank rather than guessed. Turn it all off with -no_twins.
 
-2 : Energy differences against the twins, per structure:
-        dE_surface = E(set) - E(set_surface)
-        dE_r1      = E(set) - E(set_r1),  dE_r2 = ...
+2 : Adsorption energy, per structure. Every folder that still carries
+    adsorbate is measured against the SAME reference, the clean surface:
+        dE_surface     = E(set)    - E(set_surface)
+        dE_surface_r1  = E(set_r1) - E(set_surface),  dE_surface_r2 = ...
     ex) CCpyAlloyAnal.py 2
 
-3 : Both of the above in one table.
-    ex) CCpyAlloyAnal.py 3
-
-4 : Every twin against the SURFACE twin, per structure:
-        main - _surface = E(set)     - E(set_surface)
-        _r1  - _surface = E(set_r1)  - E(set_surface),  _r2 - _surface = ...
-    ex) CCpyAlloyAnal.py 4
-
-    Option 2 differences each redox twin against the main folder, which
-    answers "what did this redox step cost". Option 4 puts every twin on ONE
-    reference, the clean surface, so the column of a redox twin is what is
-    still adsorbed after that step -- the same quantity as dE_surface, one
-    redox state further along. Read down a row and it is a ladder.
-    Written to 04_[SET]_RedoxVsSurface.csv / .txt, so it does not overwrite
-    the table of option 1-3.
+    One shared reference is what makes the row a ladder: read across it and
+    each column is what is still adsorbed after that redox step.
 
     NOTE  dE_surface is only the difference between the two folders. The
     reference energy of the adsorbate itself is NOT subtracted, so it is not
     a complete adsorption energy.
+
+3 : Redox reaction energy, per structure. Each redox twin against the MAIN
+    folder -- what that redox step itself cost:
+        dE_r1 = E(set) - E(set_r1),  dE_r2 = E(set) - E(set_r2), ...
+    ex) CCpyAlloyAnal.py 3
+
+    Option 2 and option 3 answer different questions about the same folders:
+    2 puts every folder on the clean surface, 3 differences each redox twin
+    against the state it came from.
+
+4 : Options 1, 2 and 3 in one run, one table. Option 3's columns are skipped
+    for a set that has no redox twin next to it.
+    ex) CCpyAlloyAnal.py 4
 
     Energies are read the same way as CCpyVASPAnal.py option 2: 'free  energy
     TOTEN' of OUTCAR and nothing else. OSZICAR's E0 is a different reference
@@ -103,20 +131,16 @@ S000001 of the twin).
                  assigned (DEFAULT : everything that is not the adsorbate,
                  so a substituted HEA surface keeps all of its elements)
                  ex) -pool=Pt,Fe,Co,Ni,Cu
--nocheck       : skip the convergence check (it reads OSZICAR, vasp.out and
-                 the INCAR of every folder). Without it the tables carry a
-                 'Converged' column for the main folder and an 'unconverged'
-                 column naming any twin of that row that failed -- a difference
-                 is only as good as the worse of its two folders, and an
-                 unconverged _surface poisons dE_surface and every
-                 _rN - _surface built on it. A folder fails on either of two
-                 counts: the CCpyVASPAnal option 0 verdict (custodian over
-                 vasp.out + the max-ionic check from NSW), or an SCF loop that
-                 hit NELM. The second is read from OSZICAR and is what option 0
-                 cannot see at all -- most of all in a single-point folder
-                 (NSW=0), where its max-ionic pattern can never fire and an
-                 unsettled energy used to be reported as converged. A folder
-                 with no vasp.out is 'Unknown' rather than a failure.
+-nocheck       : skip the convergence check inside options 2-4 (it reads
+                 OSZICAR, vasp.out and the INCAR of every folder; option 0 is
+                 that check on its own and ignores this flag). Without it the
+                 tables carry a 'Converged' column for the main folder and an
+                 'unconverged' column naming any twin of that row that failed
+                 -- a difference is only as good as the worse of its two
+                 folders, and an unconverged _surface poisons dE_surface and
+                 every dE_surface_rN built on it. The two checks a folder has
+                 to pass are the ones option 0 tabulates. A folder with no
+                 vasp.out is 'Unknown' rather than a failure.
                  Two more columns come with it: 'Finished' says whether the
                  main folder holds vasp.done, and 'unfinished' names any folder
                  of that row without it. A folder without vasp.done has either
@@ -125,6 +149,8 @@ S000001 of the twin).
                  but leaves CONTCAR/OUTCAR/OSZICAR in place), so its energy is
                  kept in the table but left out of the ensemble fit.
 -no_twins      : assign sites only in the main folder, not in the redox twins
+-noprogress    : do not draw the "[  n /  N  ]" folder counter (for a run whose
+                 output is piped into a file)
 -poscar        : read POSCAR instead of CONTCAR (DEFAULT : CONTCAR, i.e. the
                  relaxed result). Without it, a folder with no CONTCAR is one
                  VASP has not run yet: it is left out of the tables and counted
@@ -170,43 +196,48 @@ every other atom is what makes them invisible.
   place by naming the SUBSURFACE elements under the site, which is what makes
   two geometrically identical sites of a substituted surface differ in energy.
 
-  The redox twins get their own fit, against `_rN - _surface` (option 4's
-  column, or the same number derived from option 2's two columns), so a twin's
-  rows carry contributions too -- read down one folder to see whether the
-  preference survives the redox step.
+  The 'dE vs group avg' column of the roll-up needs BOTH the sites and the
+  adsorption energies, so it appears under option 4 and not under option 1 on
+  its own. The redox twins get their own fit, against dE_surface_rN, so a
+  twin's rows carry contributions too -- read down one folder to see whether
+  the preference survives the redox step. The redox reaction energy of option 3
+  is not split this way: it is a difference between two adsorbate-carrying
+  folders, so it is not a sum over either one's sites.
 
 [output files]
-04_[SET]_AlloyAnal.csv / .txt        : one row per structure (option 1-3)
-04_[SET]_AdsorptionSites.csv / .txt  : one row per adsorbate atom (option 1, 3)
-04_[SET]_SiteEnsembles.csv / .txt     : how often each (site, element
+04_[SET]_Convergence.csv / .txt      : one row per folder (option 0)
+04_[SET]_AlloyAnal.csv / .txt        : one row per structure (option 2, 3, 4)
+04_[SET]_AdsorptionSites.csv / .txt  : one row per adsorbate atom (option 1, 4)
+04_[SET]_SiteEnsembles.csv / .txt    : how often each (site, element
                                        composition) is occupied
 04_[SET]_SiteDiff.csv / .txt         : only the atoms the two methods disagree
                                        on, both answers side by side
 
-The per-structure table of option 2 / 3 carries energies only. The sites are
-in their own files above, so the same answer is not printed twice in two
-shapes.
-04_[SET]_RedoxVsSurface.csv / .txt   : one row per structure (option 4)
+The per-structure table carries energies only. The sites are in their own
+files above, so the same answer is not printed twice in two shapes.
 ''')
     quit()
 
-from CCpy.VASP.AlloyAnal import (select_alloy_sets, analyze_set, write_tables,
+from CCpy.VASP.AlloyAnal import (select_alloy_sets, analyze_set,
+                                 analyze_convergence, find_twins, write_tables,
                                  DEFAULT_DIST_TOL, DEFAULT_LAYER_TOL,
                                  DEFAULT_HCP_TOL, DEFAULT_MAIN_METHOD)
 
 option = sys.argv[1]
-if option not in ("1", "2", "3", "4"):
-    print("Unknown option: %s   (use 1, 2, 3, 4, or -h)" % option)
+if option not in ("0", "1", "2", "3", "4"):
+    print("Unknown option: %s   (use 0, 1, 2, 3, 4, or -h)" % option)
     quit()
 
-do_sites = option in ("1", "3")
-do_energy = option in ("2", "3")
-do_redox_surface = option == "4"
+do_convergence = option == "0"
+do_sites = option in ("1", "4")
+do_ads_energy = option in ("2", "4")
+do_redox_energy = option in ("3", "4")
 
 chosen, ads, pool = None, None, None
 prefer_poscar = "-poscar" in sys.argv
 do_twin_sites = "-no_twins" not in sys.argv
 check_errors = "-nocheck" not in sys.argv
+show_progress = "-noprogress" not in sys.argv
 take_all = "-all" in sys.argv
 dist_tol, layer_tol, hcp_tol = DEFAULT_DIST_TOL, DEFAULT_LAYER_TOL, DEFAULT_HCP_TOL
 main = DEFAULT_MAIN_METHOD
@@ -237,13 +268,64 @@ if not sets:
 pd.set_option('display.max_rows', None)
 pd.set_option('expand_frame_repr', False)
 
+if do_convergence:
+    for set_dir in sets:
+        table, info = analyze_convergence(set_dir, show_progress=show_progress)
+        if table is None or not len(table):
+            print("  no folder to check in this set.")
+            continue
+        print("")
+        if len(table) <= STATUS_PRINT_LIMIT:
+            print(table.to_string())
+        else:
+            print("%d folder(s) checked -- see 04_%s_Convergence.txt"
+                  % (len(table), info["set_name"]))
+        print("")
+        print("* converged %d   failed %d   unknown %d   (of %d folder(s))"
+              % (info["n_converged"], info["n_failed"], info["n_unknown"],
+                 info["n_folders"]))
+        if info["failed"]:
+            print("* these folders did not converge:")
+            for path, why in info["failed"][:20]:
+                print("    %-50s %s" % (path, why))
+            if len(info["failed"]) > 20:
+                print("    ... and %d more" % (len(info["failed"]) - 20))
+        if info["unfinished"]:
+            print("* %d folder(s) have no vasp.done -- not run yet, or holding "
+                  "the output of an earlier attempt that was resubmitted: %s"
+                  % (len(info["unfinished"]), ", ".join(info["unfinished"][:5])
+                     + (" ..." if len(info["unfinished"]) > 5 else "")))
+        for warning in info["warnings"]:
+            print("* %s" % warning)
+        written = write_tables(table, None, info["set_name"], out_dir="./",
+                               do_sites=False, kind="Convergence")
+        if written:
+            print("Analysis files have been saved: "
+                  + ", ".join(os.path.basename(f) for f in written))
+    quit()
+
 for set_dir in sets:
+    # Option 4 asks for the redox columns, but a set with no redox twin has
+    # none to fill: asking for them would only add a column of blanks.
+    set_redox = do_redox_energy
+    if set_redox:
+        _surface_dir, _redox_dirs = find_twins(set_dir)
+        if not _redox_dirs:
+            set_redox = False
+            if option == "4":
+                print("\n* %s has no redox twin, so the redox reaction "
+                      "energies are skipped for it." % set_dir)
+            else:
+                print("\n* %s has no redox twin, so there is nothing to "
+                      "measure a redox reaction energy against." % set_dir)
+
     table, site_table, diff_table, info = analyze_set(
-        set_dir, do_sites=do_sites, do_energy=do_energy,
+        set_dir, do_sites=do_sites, do_ads_energy=do_ads_energy,
+        do_redox_energy=set_redox,
         prefer_poscar=prefer_poscar, ads_override=ads, pool_override=pool,
         dist_tol=dist_tol, layer_tol=layer_tol, hcp_tol=hcp_tol, main=main,
-        do_redox_surface=do_redox_surface, do_twin_sites=do_twin_sites,
-        check_errors=check_errors)
+        do_twin_sites=do_twin_sites, check_errors=check_errors,
+        show_progress=show_progress)
 
     if table is None or not len(table):
         print("  nothing to report in this folder.")
@@ -295,16 +377,15 @@ for set_dir in sets:
     for twin, ids in info["missing_twin_ids"].items():
         print("* %s has no folder for %d structure(s): %s"
               % (twin, len(ids), ", ".join(ids[:10]) + (" ..." if len(ids) > 10 else "")))
-    if (do_energy or do_redox_surface) and info["surface_dir"]:
+    if do_ads_energy and info["surface_dir"]:
         print("* the difference is between the two folders only; the adsorbate "
               "reference energy is not included.")
-    if do_redox_surface and not info["surface_dir"]:
+    if do_ads_energy and not info["surface_dir"]:
         print("* no _surface twin next to this set, so there is nothing to "
-              "measure the twins against.")
+              "measure the adsorption energies against.")
 
     written = write_tables(table, site_table, info["set_name"], out_dir="./",
-                           do_sites=do_sites, do_energy=do_energy,
-                           kind="RedoxVsSurface" if do_redox_surface else "AlloyAnal",
+                           do_sites=do_sites, kind="AlloyAnal",
                            diff_table=diff_table,
                            ensemble_table=info.get("ensemble_table"))
     if written:

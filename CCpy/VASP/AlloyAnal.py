@@ -6,13 +6,21 @@ AlloyAnal.py  (CCpy AlloyGen result analysis engine)
 Reads back the folder sets produced by CCpyAlloyGen.py and answers the three
 questions that come up once the VASP jobs are done:
 
+0) Did each folder finish and converge -- custodian over vasp.out plus an SCF
+   check that reads OSZICAR and compares the last ionic block's electronic
+   step count with NELM. One row per folder.
 1) Adsorption site of every adsorbate atom -- is it on top of one substrate
    atom, bridging two, or in a three/four-fold hollow (and, for a three-fold
-   hollow of an fcc(111)-like surface, fcc or hcp).
-2) Energy difference against the adsorbate-free twin:
-       dE_surface = E(set/Sxxxxxx) - E(set_surface/Sxxxxxx)
-3) Energy difference against every redox twin:
+   hollow of an fcc(111)-like surface, fcc or hcp). Done in the redox twins as
+   well as in the main folder.
+2) Adsorption energy of every folder that carries adsorbate, all against the
+   same reference, the adsorbate-free twin:
+       dE_surface    = E(set/Sxxxxxx)    - E(set_surface/Sxxxxxx)
+       dE_surface_r1 = E(set_r1/Sxxxxxx) - E(set_surface/Sxxxxxx),  ...
+3) Redox reaction energy -- each redox twin against the main folder, i.e. what
+   that redox step itself cost:
        dE_r1 = E(set/Sxxxxxx) - E(set_r1/Sxxxxxx),  dE_r2 = ...
+4) 1, 2 and 3 in one run (3 is skipped when the set has no redox twin).
 
 The twins are matched by structure ID, which is safe because AlloyGen keeps
 the atom order of the input file and writes the same ID in every twin folder
@@ -133,6 +141,64 @@ DIFF_COLUMNS = ["Structure", "folder", "atom", "local_no",
 ENSEMBLE_COLUMNS = ["folder", "element", "site", "ensemble", "atoms",
                     "structures", "dE vs group avg (eV)", "stderr (eV)",
                     "mean d_min (A)", "mean height (A)"]
+
+
+# -----------------------------------------------------------------------------
+# Progress on screen
+# -----------------------------------------------------------------------------
+# A set is (structures) x (main + _surface + redox twins) folders and every one
+# of them costs at least one file read, so a run over a few hundred structures
+# spends minutes with nothing on the screen and no way to tell it apart from a
+# hang. The counter below is the one CCpyVASPAnal.py already prints -- same
+# header, same "[  n /  N  ]" written over itself -- so the two commands look
+# the same while they work.
+#
+# The denominator counts FOLDERS, not structures: with three redox twins one
+# structure is four folders, and a bar that moved once every four folders would
+# sit still through most of the run.
+
+
+class Progress(object):
+    """Folder counter in CCpyVASPAnal's format, rewritten over itself."""
+
+    def __init__(self, total, enabled=True, header="    Parsing VASP jobs...."):
+        self.total = max(int(total), 1)
+        self.count = 0
+        self.enabled = bool(enabled) and int(total) > 0
+        self._seen = set()
+        if self.enabled:
+            print("\n" + header)
+
+    def _render(self):
+        return ("  [  " + str(self.count).rjust(6) + " / "
+                + str(self.total).rjust(6) + "  ]")
+
+    def visit(self, path):
+        """Count a folder once, however many times the run touches it."""
+        key = os.path.abspath(path)
+        if key in self._seen:
+            return
+        self._seen.add(key)
+        self.step()
+
+    def step(self, n=1):
+        self.count = min(self.count + n, self.total)
+        if not self.enabled:
+            return
+        msg = self._render()
+        sys.stdout.write(msg)
+        sys.stdout.flush()
+        sys.stdout.write("\b" * len(msg))
+        sys.stdout.flush()
+
+    def close(self):
+        """Leave a finished count on its own line, not a half-erased one."""
+        if not self.enabled:
+            return
+        self.count = self.total
+        sys.stdout.write(self._render() + "\n")
+        sys.stdout.flush()
+        self.enabled = False
 
 
 def _is_dir(path):
@@ -580,6 +646,65 @@ def check_finished(directory, _cache={}):
     return verdict
 
 
+def _status_word(directory):
+    """
+    The one-word job state VASPio.vasp_status() reports, decided here from the
+    same three files so it is available even when custodian cannot be asked
+    (no vasp.out, or the package is not installed).
+    """
+    try:
+        names = os.listdir(directory)
+    except Exception:
+        return "Not Started"
+    if not any(name in names for name in ("OUTCAR", "OUTCAR.gz")):
+        return "Not Started"
+    if "vasp.done" not in names:
+        return "Not finished"
+    return "End"
+
+
+def vasp_status_of(directory, _cache={}):
+    """
+    VASPOutput.vasp_status() for one folder, cached, as a small dict --
+    or None when the question cannot be put to it.
+
+    It can only be asked when the folder holds both vasp.out (what custodian
+    reads) and OUTCAR; without them vasp_status() answers "False" for reasons
+    that are not a verdict on the calculation, which is why the callers below
+    turn a None into "Unknown" rather than into a failure.
+
+    Cached per folder: option 0 tabulates it, check_converged() reduces it to
+    one column, and a twin is asked about once per structure it belongs to.
+    """
+    directory = os.path.abspath(directory)
+    if directory in _cache:
+        return _cache[directory]
+    result = None
+    try:
+        names = os.listdir(directory)
+    except Exception:
+        names = []
+    has_log = any(name in names for name in ("vasp.out", "vasp.out.gz"))
+    has_outcar = any(name in names for name in ("OUTCAR", "OUTCAR.gz"))
+    if has_log and has_outcar:
+        from CCpy.VASP.VASPio import VASPOutput
+        pwd = os.getcwd()
+        try:
+            os.chdir(directory)
+            raw = VASPOutput().vasp_status()
+            # vasp_status() leaves err_msg as a single space when it found
+            # nothing, which is not the same as "no message" to anything that
+            # tests it -- strip it back to empty.
+            result = {"status": str(raw[0]), "converged": str(raw[2]),
+                      "err_msg": (str(raw[6]).strip() if raw[6] else "")}
+        except Exception:
+            result = None
+        finally:
+            os.chdir(pwd)
+    _cache[directory] = result
+    return result
+
+
 def check_converged(directory, _cache={}):
     """
     Did VASP finish this folder cleanly? Two independent checks, and either one
@@ -614,24 +739,10 @@ def check_converged(directory, _cache={}):
     directory = os.path.abspath(directory)
     if directory in _cache:
         return _cache[directory]
+    status = vasp_status_of(directory)
     verdict = "Unknown"
-    try:
-        names = os.listdir(directory)
-    except Exception:
-        names = []
-    has_log = any(name in names for name in ("vasp.out", "vasp.out.gz"))
-    has_outcar = any(name in names for name in ("OUTCAR", "OUTCAR.gz"))
-    if has_log and has_outcar:
-        from CCpy.VASP.VASPio import VASPOutput
-        pwd = os.getcwd()
-        try:
-            os.chdir(directory)
-            raw = str(VASPOutput().vasp_status()[2])
-        except Exception:
-            raw = "Unknown"
-        finally:
-            os.chdir(pwd)
-        verdict = raw if raw in ("True", "False") else "Unknown"
+    if status is not None and status["converged"] in ("True", "False"):
+        verdict = status["converged"]
     # An SCF that ran out of steps fails the folder whatever check 1 said --
     # including when check 1 could not be made at all. The reverse does not
     # hold: a converged SCF says nothing about how the run ended, so it never
@@ -640,6 +751,151 @@ def check_converged(directory, _cache={}):
         verdict = "False"
     _cache[directory] = verdict
     return verdict
+
+
+CONVERGENCE_COLUMNS = ["Structure", "folder", "Directory", "Status", "Job end",
+                       "Converged", "custodian", "SCF (NELM)", "NELM",
+                       "Err msg"]
+
+
+def folder_status(directory):
+    """
+    One folder's verdict, in the columns option 0 tabulates.
+
+    'Converged' is the same answer the other options carry in their own column
+    -- the two checks combined, either one alone enough to fail the folder --
+    and the two columns beside it say which of them spoke:
+
+      custodian   : VaspErrorHandler over vasp.out plus the max-ionic pattern
+                    built from NSW. This is the CCpyVASPAnal option 0 verdict.
+                    "Unknown" when there is no vasp.out to read, which is not
+                    a failure -- some runs simply do not keep one.
+      SCF (NELM)  : did the last closed ionic block of OSZICAR stay under NELM.
+                    Custodian's error list has no entry for this, and in a
+                    single-point folder (NSW=0) its max-ionic pattern can never
+                    fire either, so this column is the only thing standing
+                    between an SCF that stopped at NELM and the energy table.
+      NELM        : the limit that check compared against, read from OUTCAR's
+                    echo before the INCAR -- a folder resubmitted with a raised
+                    NELM has to be judged against the raised one.
+    """
+    status = vasp_status_of(directory)
+    return {
+        "Status": _status_word(directory),
+        "Job end": check_finished(directory),
+        "Converged": check_converged(directory),
+        "custodian": (status["converged"]
+                      if status and status["converged"] in ("True", "False")
+                      else "Unknown"),
+        "SCF (NELM)": check_electronic_converged(directory),
+        "NELM": read_nelm(directory),
+        "Err msg": status["err_msg"] if status else "",
+    }
+
+
+def _short_path(path):
+    """
+    The folder as the user would type it. find_twins() hands back absolute
+    paths, so without this the twin rows of the option 0 table are a column of
+    /home/.../ while the main rows are one word wide.
+    """
+    try:
+        relative = os.path.relpath(path, os.getcwd())
+    except Exception:
+        return os.path.normpath(path)
+    return relative if not relative.startswith("..") else os.path.normpath(path)
+
+
+def set_folders(set_dir):
+    """
+    Every folder of a set, in reading order: for each structure the main
+    folder, then its _surface twin, then its redox twins.
+
+    Returns a list of (structure label, folder label, path). Only folders that
+    exist are listed, so the length is a real count of what a run will open.
+    """
+    set_dir = os.path.normpath(set_dir)
+    set_name = os.path.basename(os.path.abspath(set_dir))
+    surface_dir, redox_dirs = find_twins(set_dir)
+    ids = structure_dirs(set_dir)
+    single = not ids
+    folders = []
+    for structure_id in (["."] if single else ids):
+        label = set_name if single else structure_id
+        main_dir = set_dir if single else os.path.join(set_dir, structure_id)
+        if _is_dir(main_dir):
+            folders.append((label, "main", _short_path(main_dir)))
+        if surface_dir:
+            twin = surface_dir if single else os.path.join(surface_dir, structure_id)
+            if _is_dir(twin):
+                folders.append((label, "_surface", _short_path(twin)))
+        for redox_label, path in redox_dirs:
+            twin = path if single else os.path.join(path, structure_id)
+            if _is_dir(twin):
+                folders.append((label, redox_label, _short_path(twin)))
+    return folders
+
+
+def analyze_convergence(set_dir, quiet=False, show_progress=True):
+    """
+    Option 0: did every folder of this set finish, and did it converge?
+
+    One row per FOLDER -- main, _surface and every redox twin of every
+    structure -- because a folder is the level at which a VASP run fails. The
+    other options carry the verdict only as a flag on the structure's row,
+    which names the twin that failed but not what went wrong inside it.
+
+    Returns (table, info). `table` is empty when the set holds no folder at
+    all; `info` carries the counts and the list of failed folders.
+    """
+    set_dir = os.path.normpath(set_dir)
+    set_name = os.path.basename(os.path.abspath(set_dir))
+    surface_dir, redox_dirs = find_twins(set_dir)
+    folders = set_folders(set_dir)
+    info = {
+        "set": set_dir,
+        "set_name": set_name,
+        "surface_dir": surface_dir,
+        "redox_dirs": redox_dirs,
+        "n_folders": len(folders),
+        "warnings": [],
+    }
+    if not quiet:
+        print("\n# ---------- %s ----------" % set_dir)
+        print("  folders to check : %d" % len(folders))
+        print("  surface twin : %s" % (surface_dir if surface_dir else "not found"))
+        if redox_dirs:
+            print("  redox twin(s) : %s"
+                  % ", ".join(label for label, _path in redox_dirs))
+        else:
+            print("  redox twin : not found")
+    if not folders:
+        return pd.DataFrame(), info
+
+    progress = Progress(len(folders), enabled=show_progress and not quiet)
+    rows = []
+    for structure, label, path in folders:
+        progress.visit(path)
+        row = {"Structure": structure, "folder": label, "Directory": path}
+        row.update(folder_status(path))
+        rows.append(row)
+    progress.close()
+
+    table = pd.DataFrame(rows)
+    table = table[[c for c in CONVERGENCE_COLUMNS if c in table]]
+    verdicts = list(table["Converged"])
+    info["n_converged"] = verdicts.count("True")
+    info["n_failed"] = verdicts.count("False")
+    info["n_unknown"] = verdicts.count("Unknown")
+    info["failed"] = [(r["Directory"], r["Err msg"] or
+                       ("SCF hit NELM" if r["SCF (NELM)"] == "False" else ""))
+                      for r in rows if r["Converged"] == "False"]
+    info["unfinished"] = [r["Directory"] for r in rows if r["Job end"] == "False"]
+    if info["n_unknown"] == len(rows) and rows:
+        info["warnings"].append(
+            "no folder could be judged: none of them has an OSZICAR, and "
+            "custodian has no vasp.out to read either")
+    return table, info
 
 
 # -----------------------------------------------------------------------------
@@ -1340,31 +1596,53 @@ def analyze_sites(atoms, adsorbate_elements, substrate_elements=None,
 # One set: energies, twins, sites
 # -----------------------------------------------------------------------------
 
-def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
+def note_missing(info, twin_label, structure_id):
+    """
+    Record that a structure has no folder in one of the twins.
+
+    Once per (twin, structure): option 4 asks for two energy tables and both
+    walk the same redox twins, so without this the same missing folder would
+    be reported twice.
+    """
+    ids = info["missing_twin_ids"].setdefault(twin_label, [])
+    if structure_id not in ids:
+        ids.append(structure_id)
+
+
+def analyze_set(set_dir, do_sites=True, do_ads_energy=False,
+                do_redox_energy=False, prefer_poscar=False,
                 ads_override=None, pool_override=None, dist_tol=DEFAULT_DIST_TOL,
                 layer_tol=DEFAULT_LAYER_TOL, hcp_tol=DEFAULT_HCP_TOL,
-                main=DEFAULT_MAIN_METHOD, do_redox_surface=False,
-                do_twin_sites=True, check_errors=True, quiet=False):
+                main=DEFAULT_MAIN_METHOD, do_twin_sites=True,
+                check_errors=True, quiet=False, show_progress=True):
     """
-    Analyze one AlloyGen output set and return (table, site_table, info).
+    Analyze one AlloyGen output set and return
+    (table, site_table, diff_table, info).
 
-    `table` has one row per structure ID (energy, dE against every twin, site
-    summary); `site_table` has one row per adsorbate atom.
+    `table` has one row per structure ID; `site_table` one row per adsorbate
+    atom. Which columns `table` gets is decided by the two energy flags, and
+    they are independent so option 4 can ask for both at once:
 
-    With do_redox_surface, every twin is measured against the SURFACE twin
-    instead of against the main folder:
+    do_ads_energy (option 2) -- ADSORPTION energy, every folder that carries
+    adsorbate measured against the SAME reference, the clean surface:
 
-        main - _surface,  _r1 - _surface,  _r2 - _surface, ...
+        dE_surface     = E(main) - E(_surface)
+        dE_surface_r1  = E(_r1)  - E(_surface),  dE_surface_r2 = ...
 
-    All of them share one reference (the clean surface), so the numbers can be
-    read as one ladder -- what is left adsorbed after each redox step -- which
-    differencing against the main folder cannot give.
+    One shared reference is what makes the row a ladder: read across it and
+    each column is what is still adsorbed after that redox step.
+
+    do_redox_energy (option 3) -- REDOX REACTION energy, each redox twin
+    against the main folder, i.e. what that redox step itself cost:
+
+        dE_r1 = E(main) - E(_r1),  dE_r2 = E(main) - E(_r2), ...
 
     With do_twin_sites (the default) the sites are assigned in every redox twin
     as well, not only in the main folder: the atoms that survive a redox step
-    often move to another site, and the 'folder' / 'main_atom' columns of the
-    site table are what let that move be followed.
+    often move to another site, and the 'folder' / 'atom' columns of the site
+    table are what let that move be followed.
     """
+    do_energy = bool(do_ads_energy or do_redox_energy)
     set_dir = os.path.normpath(set_dir)
     set_name = os.path.basename(os.path.abspath(set_dir))
     surface_dir, redox_dirs = find_twins(set_dir)
@@ -1408,6 +1686,27 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
     adsorbate_reported = False
     resolved = None
     skipped_ids = []
+    # How many folders this run will open, so the counter on screen has a real
+    # denominator. The _surface twin is read for the adsorption energy and by
+    # the convergence check; the redox twins by both energy options and by the
+    # site assignment when it is extended to them.
+    want_surface = do_ads_energy
+    want_redox = do_energy or (do_sites and do_twin_sites)
+    n_folders = 0
+    for structure_id in (["."] if single else ids):
+        probe = set_dir if single else os.path.join(set_dir, structure_id)
+        if not prefer_poscar and not single and not has_contcar(probe):
+            continue
+        n_folders += 1
+        if want_surface and surface_dir:
+            twin = surface_dir if single else os.path.join(surface_dir, structure_id)
+            n_folders += 1 if _is_dir(twin) else 0
+        if want_redox:
+            for _label, path in redox_dirs:
+                twin = path if single else os.path.join(path, structure_id)
+                n_folders += 1 if _is_dir(twin) else 0
+    progress = Progress(n_folders, enabled=show_progress and not quiet)
+
     for structure_id in (["."] if single else ids):
         main_dir = set_dir if single else os.path.join(set_dir, structure_id)
         # A folder with no CONTCAR is one VASP has not run yet. It has no
@@ -1417,28 +1716,32 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
         if not prefer_poscar and not single and not has_contcar(main_dir):
             skipped_ids.append(structure_id)
             continue
+        progress.visit(main_dir)
         row = {"Structure": set_name if single else structure_id}
 
         # Option 1 asks for sites only; reading energies there would load
         # VASPio (pymatgen, matplotlib) for numbers nobody asked for.
         energy, source, natoms = None, "", None
-        if do_energy or do_redox_surface:
+        if do_energy:
             energy, source = read_energy(main_dir)
             natoms = count_atoms(main_dir)
         # Which folders of this row did not finish cleanly. A difference is
         # only as good as the worse of its two folders, so the twin's verdict
         # belongs on the row that uses it -- an unconverged _surface silently
-        # poisons dE_surface and every _rN - _surface with it.
+        # poisons dE_surface and every dE_surface_rN with it.
         failed, unfinished = [], []
-        if check_errors and (do_energy or do_redox_surface):
+        if check_errors and do_energy:
             row["Converged"] = check_converged(main_dir)
             row["Finished"] = check_finished(main_dir)
             if row["Converged"] == "False":
                 failed.append("main")
             if row["Finished"] == "False":
                 unfinished.append("main")
+            # Only the twins this run actually differences against. Naming
+            # an unconverged _surface on an option-3 row would be a false
+            # alarm: no column of that row was built from it.
             twin_dirs = []
-            if surface_dir:
+            if surface_dir and do_ads_energy:
                 twin_dirs.append(("_surface", surface_dir if single
                                   else os.path.join(surface_dir, structure_id)))
             for label, path in redox_dirs:
@@ -1447,6 +1750,7 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
             for label, path in twin_dirs:
                 if not _is_dir(path):
                     continue
+                progress.visit(path)
                 if check_converged(path) == "False":
                     failed.append(label)
                 if check_finished(path) == "False":
@@ -1458,51 +1762,49 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
             row["Energy (eV)"] = energy
             row["E source"] = source
 
-        if do_energy and surface_dir:
+        # Without a _surface twin there is no reference to measure against,
+        # and a column of blanks says less than the note the caller prints.
+        if do_ads_energy and surface_dir:
+            # Option 2 -- adsorption energies. One shared reference for the
+            # whole row, the clean surface, so the columns can be read across
+            # as a ladder instead of each against a different zero.
+            surface_energy = None
             twin = surface_dir if single else os.path.join(surface_dir, structure_id)
             if _is_dir(twin):
-                twin_energy, twin_source = read_energy(twin)
-                row["dE_surface (eV)"] = (None if (energy is None or twin_energy is None)
-                                          else energy - twin_energy)
+                progress.visit(twin)
+                surface_energy, twin_source = read_energy(twin)
                 row["surface source"] = twin_source
             else:
-                row["dE_surface (eV)"] = None
-                info["missing_twin_ids"].setdefault("_surface", []).append(structure_id)
+                note_missing(info, "_surface", structure_id)
+            row["E_surface (eV)"] = surface_energy
+            row["dE_surface (eV)"] = (None if (energy is None or surface_energy is None)
+                                      else energy - surface_energy)
+            for label, path in redox_dirs:
+                twin = path if single else os.path.join(path, structure_id)
+                column = "dE_surface_%s (eV)" % label
+                if not _is_dir(twin):
+                    row[column] = None
+                    note_missing(info, "_" + label, structure_id)
+                    continue
+                progress.visit(twin)
+                twin_energy, _source = read_energy(twin)
+                row[column] = (None if (twin_energy is None or surface_energy is None)
+                               else twin_energy - surface_energy)
 
-        if do_energy:
+        if do_redox_energy:
+            # Option 3 -- redox reaction energies. Each redox twin against the
+            # MAIN folder, which is what that one redox step cost.
             for label, path in redox_dirs:
                 twin = path if single else os.path.join(path, structure_id)
                 column = "dE_%s (eV)" % label
                 if _is_dir(twin):
+                    progress.visit(twin)
                     twin_energy, _twin_source = read_energy(twin)
                     row[column] = (None if (energy is None or twin_energy is None)
                                    else energy - twin_energy)
                 else:
                     row[column] = None
-                    info["missing_twin_ids"].setdefault("_" + label, []).append(structure_id)
-
-        if do_redox_surface:
-            # One shared reference for the whole ladder: the clean surface.
-            surface_energy = None
-            if surface_dir:
-                twin = surface_dir if single else os.path.join(surface_dir, structure_id)
-                if _is_dir(twin):
-                    surface_energy, _source = read_energy(twin)
-                else:
-                    info["missing_twin_ids"].setdefault("_surface", []).append(structure_id)
-            row["E_surface (eV)"] = surface_energy
-            row["main - _surface (eV)"] = (None if (energy is None or surface_energy is None)
-                                           else energy - surface_energy)
-            for label, path in redox_dirs:
-                twin = path if single else os.path.join(path, structure_id)
-                column = "_%s - _surface (eV)" % label
-                if not _is_dir(twin):
-                    row[column] = None
-                    info["missing_twin_ids"].setdefault("_" + label, []).append(structure_id)
-                    continue
-                twin_energy, _source = read_energy(twin)
-                row[column] = (None if (twin_energy is None or surface_energy is None)
-                               else twin_energy - surface_energy)
+                    note_missing(info, "_" + label, structure_id)
 
         if do_sites:
             atoms, filename = read_structure(main_dir, prefer_poscar=prefer_poscar)
@@ -1553,6 +1855,7 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
                         twin = path if single else os.path.join(path, structure_id)
                         if not _is_dir(twin):
                             continue
+                        progress.visit(twin)
                         if not prefer_poscar and not has_contcar(twin):
                             continue
                         twin_atoms, _twin_file = read_structure(
@@ -1599,6 +1902,7 @@ def analyze_set(set_dir, do_sites=True, do_energy=True, prefer_poscar=False,
                             entry["atom"] = mapped
                         site_rows.append(entry)
         rows.append(row)
+    progress.close()
 
     for column, odd in energy_outliers(rows).items():
         info["warnings"].append(
@@ -1677,7 +1981,12 @@ def energy_outliers(rows, floor=3.0, mad_factor=6.0):
     frame = pd.DataFrame(rows)
     found = {}
     for column in frame.columns:
-        if "(eV)" not in column or column == "Energy (eV)":
+        # Only the DIFFERENCES are scanned. A raw total energy varies with the
+        # composition of the folder it came from, so its spread across a set is
+        # not evidence of anything; the difference columns are the ones that
+        # should sit in a narrow band. A bad _surface folder still shows up --
+        # in the dE_surface column that was built from it.
+        if "(eV)" not in column or column in ("Energy (eV)", "E_surface (eV)"):
             continue
         values = pd.to_numeric(frame[column], errors="coerce")
         if values.notna().sum() < 5:
@@ -1696,28 +2005,19 @@ def fit_target(frame, folder):
     The energy a folder's sites are responsible for, and its name.
 
     For the main folder that is dE_surface. For a redox twin it is
-    `_rN - _surface` -- the same quantity one redox step further along, and the
-    only one whose value is a sum over THAT folder's sites. When option 4 has
-    not been run the column is not there, but it is still recoverable from the
-    two option-2 columns:
+    dE_surface_rN -- the same quantity one redox step further along, and the
+    only one whose value is a sum over THAT folder's sites. Both are option 2
+    columns, which is why the fit appears under option 4 and not under option 1
+    on its own: the redox reaction energy of option 3 is a difference between
+    two adsorbate-carrying folders, so it is not a sum over either one's sites
+    and cannot be split over them.
 
-        (main - surface) - (main - rN) = rN - surface
-
-    so the twins get their contributions either way.
+    Returns (values, column name), or (None, None) when the column is absent.
     """
-    if folder == "main":
-        for candidate in ("dE_surface (eV)", "main - _surface (eV)"):
-            if candidate in frame:
-                return pd.to_numeric(frame[candidate], errors="coerce"), candidate
-        return None, None
-    direct = "_%s - _surface (eV)" % folder
-    if direct in frame:
-        return pd.to_numeric(frame[direct], errors="coerce"), direct
-    surface, twin = "dE_surface (eV)", "dE_%s (eV)" % folder
-    if surface in frame and twin in frame:
-        derived = (pd.to_numeric(frame[surface], errors="coerce")
-                   - pd.to_numeric(frame[twin], errors="coerce"))
-        return derived, "_%s - _surface (eV)" % folder
+    column = ("dE_surface (eV)" if folder == "main"
+              else "dE_surface_%s (eV)" % folder)
+    if column in frame:
+        return pd.to_numeric(frame[column], errors="coerce"), column
     return None, None
 
 
@@ -1929,13 +2229,13 @@ def split_site_tables(site_rows):
 
 
 def write_tables(table, site_table, set_name, out_dir="./", do_sites=True,
-                 do_energy=True, kind="AlloyAnal", diff_table=None,
-                 ensemble_table=None):
+                 kind="AlloyAnal", diff_table=None, ensemble_table=None):
     """
     Save the results next to the other CCpy analysis files, following the same
     '<number>_<folder>_<what>' naming as 03_..._FinalEnergies of CCpyVASPAnal.
     `kind` keeps a different question in a different file instead of
-    overwriting the previous answer with a table of other columns.
+    overwriting the previous answer with a table of other columns -- option 0
+    writes 04_[SET]_Convergence, options 1-4 write 04_[SET]_AlloyAnal.
     Returns the list of file names written.
     """
     written = []

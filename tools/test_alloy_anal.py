@@ -34,8 +34,12 @@ Checks
      the stacking that was built: an hcp hollow sits on a second-layer ATOM
      ('top'), an fcc hollow on a second-layer hollow, and the four-fold hollow
      of fcc(100) sits on a second-layer atom
- 11. option 4 puts every twin on the _surface reference
-     (main - _surface, _r1 - _surface, _r2 - _surface) and writes its own file
+ 11. the options are split the way the CLI advertises them: option 2 is the
+     ADSORPTION energy of every folder against the one _surface reference
+     (dE_surface, dE_surface_r1, dE_surface_r2), option 3 is the REDOX
+     REACTION energy of each twin against the main folder (dE_r1, dE_r2), and
+     neither writes the other's columns; option 4 writes both, and drops the
+     option-3 columns for a set that has no redox twin
  12. sites are assigned in the redox twins too, and 'atom' maps a twin atom
      back to the number it has in the main folder even when the removed atom
      shifted the numbering (-no_twins turns the whole thing off); when that
@@ -57,6 +61,12 @@ Checks
  15. a surface buckled by more than -layer_tol is REPORTED (that split is the
      one real failure mode of the projection method), and raising -layer_tol
      puts the layer back together
+ 16. option 0 tabulates one row per FOLDER -- main, _surface and every redox
+     twin -- with the two checks side by side, so a folder that custodian
+     passes but whose SCF hit NELM is still marked not converged, and a folder
+     with no vasp.done is named
+ 17. the folder counter appears while the run works ("Parsing VASP jobs....")
+     and -noprogress turns it off
 """
 
 import os
@@ -365,7 +375,7 @@ def build(root):
     return truth
 
 
-def run(work, extra=(), option="3"):
+def run(work, extra=(), option="4"):
     environment = dict(os.environ)
     environment["PYTHONPATH"] = REPO + os.pathsep + environment.get("PYTHONPATH", "")
     return subprocess.run([sys.executable, BIN, option, "-all"] + list(extra),
@@ -373,6 +383,12 @@ def run(work, extra=(), option="3"):
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                           universal_newlines=True)
 
+
+try:
+    import custodian  # noqa: F401
+    have_custodian_early = True
+except Exception:
+    have_custodian_early = False
 
 work = tempfile.mkdtemp(prefix="ccpy_alloyanal_")
 try:
@@ -587,28 +603,119 @@ try:
               for row in read_csv(os.path.join(work, "04_E_set_AdsorptionSites.csv"))))
     run(work)   # restore the full tables for whatever follows
 
-    # Option 4: every twin against the clean surface.
-    #   A_set S000001: main -301, _surface -280, _r1 -291, _r2 -296
+    # Option 2 on its own: the adsorption energies, every folder measured
+    # against the ONE clean-surface reference.
+    #   A_set S000001: main -301, _surface -280, _r1 -291, _r2 (OSZICAR only)
+    process = run(work, option="2")
+    check("option 2 runs without a traceback",
+          "Traceback" not in process.stdout and process.returncode == 0,
+          process.stdout[-800:])
+    first = read_csv(os.path.join(work, "04_A_set_AlloyAnal.csv"))[0]
+    check("option 2: dE_surface exact",
+          abs(float(first["dE_surface (eV)"]) - (-301.0 + 280.0)) < 1e-6,
+          first.get("dE_surface (eV)"))
+    check("option 2: dE_surface_r1 exact (the twin against the SAME reference)",
+          abs(float(first["dE_surface_r1 (eV)"]) - (-291.0 + 280.0)) < 1e-6,
+          first.get("dE_surface_r1 (eV)"))
+    check("option 2: dE_surface_r2 blank (OSZICAR-only twin is not read)",
+          first.get("dE_surface_r2 (eV)", "") == "",
+          first.get("dE_surface_r2 (eV)"))
+    check("option 2: the shared reference energy is reported",
+          abs(float(first["E_surface (eV)"]) + 280.0) < 1e-6, first.get("E_surface (eV)"))
+    check("option 2 does not write the redox reaction columns",
+          "dE_r1 (eV)" not in first, list(first))
+
+    # Option 3 on its own: the redox reaction energies, each twin against the
+    # state it came from (the main folder).
+    process = run(work, option="3")
+    check("option 3 runs without a traceback",
+          "Traceback" not in process.stdout and process.returncode == 0,
+          process.stdout[-800:])
+    first = read_csv(os.path.join(work, "04_A_set_AlloyAnal.csv"))[0]
+    check("option 3: dE_r1 exact",
+          abs(float(first["dE_r1 (eV)"]) - (-301.0 + 291.0)) < 1e-6,
+          first.get("dE_r1 (eV)"))
+    check("option 3 does not write the adsorption-energy columns",
+          "dE_surface (eV)" not in first and "dE_surface_r1 (eV)" not in first,
+          list(first))
+    check("a set with no redox twin says so instead of adding blank columns",
+          "no redox twin" in process.stdout,
+          [l for l in process.stdout.splitlines() if "redox twin" in l][:3])
+
+    # Option 4: both, in one table -- and NOT the option-3 columns for a set
+    # that has no redox twin (D_set has only a _surface twin).
     process = run(work, option="4")
     check("option 4 runs without a traceback",
           "Traceback" not in process.stdout and process.returncode == 0,
           process.stdout[-800:])
-    path = os.path.join(work, "04_A_set_RedoxVsSurface.csv")
-    check("option 4 writes its own file (option 1-3 table not overwritten)",
-          os.path.exists(path) and os.path.exists(os.path.join(work, "04_A_set_AlloyAnal.csv")))
-    if os.path.exists(path):
-        first = read_csv(path)[0]
-        check("option 4: main - _surface exact",
-              abs(float(first["main - _surface (eV)"]) - (-301.0 + 280.0)) < 1e-6,
-              first.get("main - _surface (eV)"))
-        check("option 4: _r1 - _surface exact",
-              abs(float(first["_r1 - _surface (eV)"]) - (-291.0 + 280.0)) < 1e-6,
-              first.get("_r1 - _surface (eV)"))
-        check("option 4: _r2 - _surface blank (OSZICAR-only twin is not read)",
-              first.get("_r2 - _surface (eV)", "") == "",
-              first.get("_r2 - _surface (eV)"))
-        check("option 4: the shared reference energy is reported",
-              abs(float(first["E_surface (eV)"]) + 280.0) < 1e-6, first.get("E_surface (eV)"))
+    first = read_csv(os.path.join(work, "04_A_set_AlloyAnal.csv"))[0]
+    check("option 4 carries option 2's and option 3's columns at once",
+          "dE_surface (eV)" in first and "dE_surface_r1 (eV)" in first
+          and "dE_r1 (eV)" in first, list(first))
+    check("option 4 writes the site file too",
+          os.path.exists(os.path.join(work, "04_A_set_AdsorptionSites.csv")))
+    d_row = read_csv(os.path.join(work, "04_D_set_AlloyAnal.csv"))[0]
+    check("option 4 skips the redox columns for a set with no redox twin",
+          not any(key.startswith("dE_r") for key in d_row)
+          and "dE_surface (eV)" in d_row, list(d_row))
+    check("and says it skipped them", "redox reaction energies are skipped"
+          in process.stdout,
+          [l for l in process.stdout.splitlines() if "skipped" in l][:3])
+
+    # Option 0: one row per folder, the two checks side by side.
+    status = run(work, option="0")
+    check("option 0 runs without a traceback",
+          "Traceback" not in status.stdout and status.returncode == 0,
+          status.stdout[-800:])
+    conv_path = os.path.join(work, "04_A_set_Convergence.csv")
+    check("option 0 writes its own file, and does not overwrite the energy one",
+          os.path.exists(conv_path)
+          and os.path.exists(os.path.join(work, "04_A_set_AlloyAnal.csv")))
+    if os.path.exists(conv_path):
+        conv = read_csv(conv_path)
+        for column in ("Structure", "folder", "Directory", "Status", "Job end",
+                       "Converged", "custodian", "SCF (NELM)", "NELM", "Err msg"):
+            check("option 0 table has the '%s' column" % column,
+                  column in conv[0], list(conv[0]))
+        check("option 0 has one row per folder, twins included",
+              {row["folder"] for row in conv} == {"main", "_surface", "r1", "r2"},
+              sorted({row["folder"] for row in conv}))
+        check("option 0 counts every structure of every twin",
+              len(conv) == 4 * 4, len(conv))
+    if have_custodian_early:
+        i_conv = {row["folder"]: row
+                  for row in read_csv(os.path.join(work, "04_I_set_Convergence.csv"))}
+        check("option 0: the clean main folder is Converged = True",
+              i_conv["main"]["Converged"] == "True", i_conv["main"])
+        check("option 0: the twin with a custodian error is False, and the "
+              "error is named",
+              i_conv["r1"]["Converged"] == "False" and i_conv["r1"]["Err msg"],
+              (i_conv["r1"]["Converged"], i_conv["r1"]["Err msg"]))
+        check("option 0: the folder with no vasp.done is Unknown, and its "
+              "'Job end' says why",
+              i_conv["_surface"]["Converged"] == "Unknown"
+              and i_conv["_surface"]["Job end"] == "False",
+              (i_conv["_surface"]["Converged"], i_conv["_surface"]["Job end"]))
+        check("option 0 reports the failures under the table",
+              "did not converge" in status.stdout, status.stdout[-800:])
+    n_conv = {row["folder"]: row
+              for row in read_csv(os.path.join(work, "04_N_set_Convergence.csv"))}
+    check("option 0: an SCF that hit NELM is caught even where custodian "
+          "passes, and the limit it was judged against is shown",
+          n_conv["main"]["SCF (NELM)"] == "False"
+          and n_conv["main"]["NELM"] == "100"
+          and n_conv["main"]["Converged"] == "False",
+          n_conv["main"])
+
+    # The folder counter, and the switch that turns it off.
+    check("the folder counter is drawn while the run works",
+          "Parsing VASP jobs" in status.stdout and "/" in status.stdout,
+          status.stdout[:300])
+    quiet = run(work, ["-noprogress"], option="0")
+    check("-noprogress turns the counter off",
+          "Parsing VASP jobs" not in quiet.stdout and quiet.returncode == 0,
+          quiet.stdout[:300])
+    run(work)   # restore the option 4 tables for whatever follows
 
     # The energy that does not belong to the band, named by structure.
     check("an energy far outside the set is reported, by structure id",
