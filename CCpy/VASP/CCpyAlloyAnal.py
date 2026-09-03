@@ -94,6 +94,16 @@ S000001 of the twin).
     from the removed atoms, so it is exact; without both POSCARs the column is
     left blank rather than guessed. Turn it all off with -no_twins.
 
+    A folder without vasp.done gets NO site row. Its CONTCAR is an earlier
+    attempt's geometry -- CCpy's batch submission deletes vasp.done from every
+    folder of the batch up front, so a resubmitted batch leaves the folders it
+    has not reached yet holding the previous relaxation -- and nothing in a
+    site row would say so: 'agree' comes out 'same' and d_min / height look
+    ordinary, because that old calculation was itself a finished one. Those
+    folders are named under the table instead, and they are out of the
+    ensemble counts too, which is what the energy fit already did with them.
+    -poscar and -nocheck both switch this off (see below).
+
 2 : Adsorption energy, per structure. Every folder that still carries
     adsorbate is measured against the SAME reference, the clean surface:
         dE_surface     = E(set)    - E(set_surface)
@@ -161,7 +171,9 @@ S000001 of the twin).
                  and it is out of the ensemble fit. Nothing in a dE column says
                  half of it is out of date, which is why those are the ones
                  that go blank. With -nocheck nothing is known about any
-                 folder, so nothing is blanked.
+                 folder, so nothing is blanked -- and nothing is dropped from
+                 the site table either, which is the point of the flag for a
+                 run whose jobs simply do not write vasp.done.
 -no_twins      : assign sites only in the main folder, not in the redox twins
 -noprogress    : do not draw the "[  n /  N  ]" folder counter (for a run whose
                  output is piped into a file)
@@ -170,7 +182,9 @@ S000001 of the twin).
                  VASP has not run yet: it is left out of the tables and counted
                  in a note, rather than filling a row with blanks. With
                  -poscar the unrelaxed input is what was asked for, so nothing
-                 is skipped.
+                 is skipped -- and nothing is dropped for being unfinished
+                 either: POSCAR is the CURRENT run's input, so there is no
+                 earlier attempt's geometry to avoid.
 -tol=#         : nearest-neighbour window for the distance method, as a
                  fraction of the shortest distance   (DEFAULT : 0.15)
 -layer_tol=#   : thickness of one substrate layer in A (DEFAULT : 1.2)

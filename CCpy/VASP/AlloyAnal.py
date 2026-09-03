@@ -1721,6 +1721,7 @@ def analyze_set(set_dir, do_sites=True, do_ads_energy=False,
     adsorbate_reported = False
     resolved = None
     skipped_ids = []
+    stale_site_dirs = []
     # How many folders this run will open, so the counter on screen has a real
     # denominator. The _surface twin is read for the adsorption energy and by
     # the convergence check; the redox twins by both energy options and by the
@@ -1916,6 +1917,29 @@ def analyze_set(set_dir, do_sites=True, do_ads_energy=False,
                             continue
                         folders.append((label, twin, twin_atoms))
 
+                # A folder without vasp.done is holding an EARLIER attempt's
+                # CONTCAR, so the site read off it is that attempt's geometry,
+                # not this run's. Nothing in the site row says so: the safety
+                # columns all pass, because the old calculation was itself a
+                # finished one -- 'agree' says same, d_min and height look
+                # ordinary. So the folder is left out and named instead.
+                #
+                # Two exceptions, both for the same reason -- there is nothing
+                # stale to avoid. With -poscar the unrelaxed INPUT is what was
+                # asked for and that file belongs to the current run; with
+                # -nocheck nothing is known about any folder, and excluding
+                # every one of them would empty the table (a run that simply
+                # does not write vasp.done is exactly why that flag exists).
+                if check_errors and not prefer_poscar:
+                    keep = []
+                    for entry in folders:
+                        if check_finished(entry[1]) == "False":
+                            if entry[1] not in stale_site_dirs:
+                                stale_site_dirs.append(entry[1])
+                            continue
+                        keep.append(entry)
+                    folders = keep
+
                 for folder_label, folder_dir, folder_atoms in folders:
                     site_result, site_info = analyze_sites(
                         folder_atoms, resolved["elements"],
@@ -1996,6 +2020,17 @@ def analyze_set(set_dir, do_sites=True, do_ads_energy=False,
             "%s (if these jobs simply do not write vasp.done, use -nocheck)"
             % (len(unfinished_rows), ", ".join(unfinished_rows[:10])
                + (" ..." if len(unfinished_rows) > 10 else "")))
+    info["stale_site_dirs"] = stale_site_dirs
+    if stale_site_dirs:
+        info["warnings"].append(
+            "%d folder(s) have no vasp.done, so their CONTCAR is an earlier "
+            "attempt's geometry -- no site was assigned in them and they are "
+            "out of the ensemble counts (which is what the energy fit already "
+            "did with them): %s (use -poscar to read the current input "
+            "geometry instead, or -nocheck if these jobs do not write "
+            "vasp.done)"
+            % (len(stale_site_dirs), ", ".join(stale_site_dirs[:5])
+               + (" ..." if len(stale_site_dirs) > 5 else "")))
     if skipped_ids:
         info["warnings"].append(
             "%d structure(s) have no CONTCAR yet and were left out: %s"

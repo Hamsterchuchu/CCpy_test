@@ -71,6 +71,11 @@ Checks
  16b. in the energy options the same folder keeps its row and its energy, but
      every DIFFERENCE built on it comes out blank -- an out-of-date half is
      invisible inside a dE column
+ 16c. and it gets no SITE row at all, because a site read off an earlier
+     attempt's CONTCAR passes every safety column ('agree' same, ordinary
+     d_min / height); the ensemble roll-up then counts the same atoms the
+     energy fit uses, which it did not before. -poscar and -nocheck both put
+     the folder back, for reasons of their own
  17. the folder counter appears while the run works ("Parsing VASP jobs....")
      and -noprogress turns it off
 """
@@ -868,6 +873,46 @@ try:
               nelm_row.get("dE_surface (eV)", "") != ""
               and "main" in (nelm_row.get("unconverged") or ""),
               (nelm_row.get("dE_surface (eV)"), nelm_row.get("unconverged")))
+
+    # An unfinished folder's CONTCAR is an earlier attempt's geometry, and a
+    # site row read off it looks exactly like a good one -- 'agree' says same,
+    # d_min and height are ordinary, because that old run was itself finished.
+    # So no site is assigned in it at all.
+    n_sites = read_csv(os.path.join(work, "04_N_set_AdsorptionSites.csv"))
+    check("no site row is written for a folder with no vasp.done",
+          not any(row["Structure"] == "S000099" for row in n_sites),
+          sorted({row["Structure"] for row in n_sites})[-3:])
+    check("a finished structure of the same set still gets its site row",
+          any(row["Structure"] == "S000001" for row in n_sites))
+    check("and the skipped folder is named, with both ways out",
+          "an earlier attempt's geometry" in output and "S000099" in output
+          and "-poscar" in output,
+          [l for l in output.splitlines() if "earlier attempt's geometry" in l])
+    n_ens = read_csv(os.path.join(work, "04_N_set_SiteEnsembles.csv"))
+    check("the ensemble roll-up counts exactly the atoms that got a row -- "
+          "the same basis the energy fit uses, which used to disagree with it",
+          sum(int(row["atoms"]) for row in n_ens) == len(n_sites),
+          (sum(int(row["atoms"]) for row in n_ens), len(n_sites)))
+
+    # -poscar reads the CURRENT run's input, so there is no earlier attempt's
+    # geometry to avoid and the folder is back.
+    with_poscar = run(work, ["-poscar"])
+    check("-poscar keeps the folder -- POSCAR belongs to this run",
+          any(row["Structure"] == "S000099"
+              for row in read_csv(os.path.join(work,
+                                               "04_N_set_AdsorptionSites.csv")))
+          and "an earlier attempt's geometry" not in with_poscar.stdout,
+          with_poscar.stdout[-500:])
+    # -nocheck: nothing is known about any folder, so nothing may be dropped --
+    # a run whose jobs do not write vasp.done would otherwise lose every row.
+    no_check = run(work, ["-nocheck"])
+    check("-nocheck keeps the folder too",
+          any(row["Structure"] == "S000099"
+              for row in read_csv(os.path.join(work,
+                                               "04_N_set_AdsorptionSites.csv")))
+          and "an earlier attempt's geometry" not in no_check.stdout,
+          no_check.stdout[-500:])
+    run(work)   # restore the default tables
 
     # The buckled slab: the warning has to appear, and -layer_tol has to fix it.
     default_run = run(work).stdout
