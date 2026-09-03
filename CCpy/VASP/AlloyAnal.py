@@ -24,11 +24,14 @@ difference between the two folders. That is on purpose -- the reference state
 is a choice the user has to make, and mixing an arbitrary one in silently
 would produce numbers nobody can reproduce.
 
-Energies are read exactly the way CCpyVASPAnal.py option 2 does, by calling
-CCpy.VASP.VASPio.energy_from_outcar(): the 'free  energy   TOTEN' of OUTCAR and
-nothing else. OSZICAR's E0 is not accepted as a substitute -- it is the sigma->0
-extrapolated value and differs from TOTEN by the -TS term -- so a folder with no
-readable OUTCAR is left blank rather than filled from a different reference.
+Energies follow exactly the rule CCpyVASPAnal.py option 2 uses: the last
+'free  energy   TOTEN' of OUTCAR and nothing else. OSZICAR's E0 is not accepted
+as a substitute -- it is the sigma->0 extrapolated value and differs from TOTEN
+by the -TS term -- so a folder with no readable OUTCAR is left blank rather than
+filled from a different reference. The number is read from the end of OUTCAR
+rather than by loading the whole file (see toten_from_outcar()), because this
+command touches one OUTCAR per folder and a set has one folder per twin per
+structure.
 
 Site assignment is done by two independent methods and both are reported:
 
@@ -356,9 +359,9 @@ def select_alloy_sets(directory="./", ask=True, chosen=None):
 # -----------------------------------------------------------------------------
 
 def _vaspio():
-    """The VASPio helpers, imported on first use (see the note at the top)."""
-    from CCpy.VASP.VASPio import energy_from_outcar, natoms_from_poscar
-    return energy_from_outcar, natoms_from_poscar
+    """The VASPio helper, imported on first use (see the note at the top)."""
+    from CCpy.VASP.VASPio import natoms_from_poscar
+    return natoms_from_poscar
 
 
 def count_atoms(directory):
@@ -367,7 +370,7 @@ def count_atoms(directory):
     (the same one CCpyVASPAnal uses); CONTCAR is only looked at when POSCAR is
     missing, so a folder holding just a relaxed result still gets a count.
     """
-    _outcar, natoms_from_poscar = _vaspio()
+    natoms_from_poscar = _vaspio()
     natoms = natoms_from_poscar(directory)
     if natoms:
         return natoms
@@ -639,19 +642,112 @@ def check_converged(directory, _cache={}):
     return verdict
 
 
-def read_energy(directory):
+# -----------------------------------------------------------------------------
+# Final energy of a folder
+# -----------------------------------------------------------------------------
+# Same rule as CCpyVASPAnal option 2 -- the LAST "free  energy   TOTEN" of
+# OUTCAR -- but read from the end of the file instead of loading all of it.
+#
+# VASPio.energy_from_outcar() does `open(...).read()` and runs the regex over
+# the whole text. That is fine for one folder and expensive here: an AlloyGen
+# set is (structures) x (main + _surface + redox twins) folders, and a slab
+# relax OUTCAR of a few hundred MB costs about a second and its own size in
+# memory each time. Measured on an 11 MB OUTCAR: 0.095 s whole-file vs 0.001 s
+# from the tail.
+#
+# The value it produces is the same one: the TOTEN of the last ionic step sits
+# at the end of the file, so a window taken from the end holds it. The window
+# is only a guess, though, so when it holds no match it is widened and finally
+# gives up and reads the whole file -- a folder is never reported as having no
+# energy because the tail was too short. VASPio is left untouched, like the SCF
+# check above.
+
+_OUTCAR_TOTEN = re.compile(r"free  energy   TOTEN  =\s+(\S+)")
+_TAIL_WINDOW = 1 << 20      # 1 MB: hundreds of ionic steps' worth of tail
+
+
+def _toten_from_text(text):
+    """Last TOTEN of a chunk of OUTCAR text, or None."""
+    found = _OUTCAR_TOTEN.findall(text)
+    if not found:
+        return None
+    try:
+        return float(found[-1])
+    except Exception:
+        return None
+
+
+def toten_from_outcar(directory):
+    """
+    Last 'free  energy   TOTEN' of a folder's OUTCAR (or OUTCAR.gz). None when
+    there is no readable OUTCAR, or when it holds no TOTEN at all (a run killed
+    before its first ionic step finished).
+
+    Plain OUTCAR: read a window from the end, widening it until a TOTEN shows
+    up or the whole file has been read. A window that starts mid-line has its
+    first partial line dropped, so a number cut in half is never parsed.
+    OUTCAR.gz: gzip cannot be seeked into, so it is streamed line by line and
+    the last match is kept -- still one pass, and without holding the
+    decompressed file in memory.
+    """
+    plain = os.path.join(directory, "OUTCAR")
+    gz = os.path.join(directory, "OUTCAR.gz")
+    if os.path.isfile(plain):
+        try:
+            size = os.path.getsize(plain)
+            with open(plain, "rb") as handle:
+                window = _TAIL_WINDOW
+                while True:
+                    start = max(0, size - window)
+                    handle.seek(start)
+                    text = handle.read().decode("utf-8", "ignore")
+                    if start:
+                        text = text.split("\n", 1)[-1]
+                    energy = _toten_from_text(text)
+                    if energy is not None:
+                        return energy
+                    if start == 0:
+                        return None
+                    window *= 8
+        except Exception:
+            return None
+    if os.path.isfile(gz):
+        try:
+            import gzip
+            energy = None
+            with gzip.open(gz, "rt", errors="ignore") as handle:
+                for line in handle:
+                    match = _OUTCAR_TOTEN.search(line)
+                    if match:
+                        try:
+                            energy = float(match.group(1))
+                        except Exception:
+                            pass
+            return energy
+        except Exception:
+            return None
+    return None
+
+
+def read_energy(directory, _cache={}):
     """
     Final energy of one VASP folder, the CCpyVASPAnal.py way: the OUTCAR TOTEN
     and nothing else. OSZICAR's E0 is a different reference (sigma->0, differing
     by the -TS term) and is not used as a fallback, so a folder with no readable
     OUTCAR stays blank. Returns (energy, source) with source "" when nothing
     could be read.
+
+    Cached per folder, like the convergence checks above: with -redox_surface
+    the _surface twin of a row is asked for twice (dE_surface and E_surface),
+    and OUTCAR is the most expensive file in the set to touch.
     """
-    energy_from_outcar, _natoms = _vaspio()
-    energy = energy_from_outcar(directory)
-    if energy is not None:
-        return energy, "OUTCAR"
-    return None, ""
+    directory = os.path.abspath(directory)
+    if directory in _cache:
+        return _cache[directory]
+    energy = toten_from_outcar(directory)
+    result = (energy, "OUTCAR") if energy is not None else (None, "")
+    _cache[directory] = result
+    return result
 
 
 def read_structure(directory, prefer_poscar=False):
