@@ -42,6 +42,10 @@ BINARY_ENV = "CCpy_MAINCLUST"
 #: mainclust 가 이어 붙일 원소별 POTCAR 의 파일명 접두사.
 POTCAR_PREFIX = "POTCAR_"
 
+#: mainclust 가 각 배열 디렉토리로 복사하는 템플릿. 없으면 디렉토리를 아예
+#: 만들지 않으면서도 정상 종료한다(아래 check_templates 참고).
+REQUIRED_TEMPLATES = ("INCAR", "KPOINTS")
+
 #: 질문 키 -> (정규식, 사람이 읽을 설명). mainclust 바이너리에서 추출한 문구다.
 #: 순서는 실제로 나타나는 순서지만, 매칭은 순서와 무관하게 이루어진다.
 PROMPT_SPECS = (
@@ -352,6 +356,42 @@ def _pos_counts(path):
                 return None
         return None
     return None
+
+
+def check_templates(workdir=".", names=REQUIRED_TEMPLATES):
+    """con* 를 만들기 전에 mainclust 가 복사할 템플릿이 있는지 본다.
+
+    이것도 조용한 실패다. INCAR / KPOINTS 가 작업 디렉토리에 없으면 mainclust 는
+    **배열 디렉토리를 하나도 만들지 않으면서 정상 종료한다.** exit 0, checkpoint 6,
+    "CASM code has completed successfully" 까지 그대로 찍는다. 컨테이너에서
+    Cu-Ir 로 확인했다 — 템플릿이 없으면 0개, 있으면 21개.
+
+    Returns
+    -------
+    [(이름, 경로, 바이트)]
+    """
+    ok, missing, empty = [], [], []
+    for name in names:
+        path = os.path.join(workdir, name)
+        if not os.path.isfile(path):
+            missing.append(name)
+        elif os.path.getsize(path) == 0:
+            empty.append(name)
+        else:
+            ok.append((name, path, os.path.getsize(path)))
+
+    if missing or empty:
+        lines = ["mainclust 가 배열 디렉토리로 복사할 템플릿이 없습니다."]
+        if missing:
+            lines.append("  없음   : " + ", ".join(missing))
+        if empty:
+            lines.append("  0바이트: " + ", ".join(empty))
+        lines.append("")
+        lines.append("  이대로 두면 mainclust 는 오류 없이 정상 종료하면서")
+        lines.append("  배열 디렉토리를 하나도 만들지 않습니다.")
+        lines.append("  %s 에 파일을 두고 다시 실행해 주세요." % os.path.abspath(workdir))
+        raise MainclustError("\n".join(lines))
+    return ok
 
 
 def check_generated_potcars(workdir=".", dirs=None, elements=None, prim="PRIM"):
@@ -698,6 +738,7 @@ def generate_vasp_inputs(workdir=".", energy=0, reference=0,
         ``potcar_report`` 속성에 확인 결과 문자열이 붙는다(확인했을 때).
     """
     if check_potcar:
+        check_templates(workdir)
         check_potcar_sources(workdir)
 
     drv = MainclustDriver(workdir=workdir, binary=binary, echo=echo, **kwargs)
@@ -705,6 +746,12 @@ def generate_vasp_inputs(workdir=".", energy=0, reference=0,
 
     if check_potcar and result.ok:
         total, bad = check_generated_potcars(workdir)
+        if total == 0:
+            raise MainclustError(
+                "mainclust 는 정상 종료했지만 배열 디렉토리가 하나도 없습니다.\n"
+                "  make_dirs 의 make 플래그가 전부 0 이거나, INCAR / KPOINTS 가\n"
+                "  없어 mainclust 가 조용히 건너뛴 경우입니다.",
+                result.transcript)
         result.potcar_report = describe_potcars(total, bad)
         if bad:
             raise MainclustError(
