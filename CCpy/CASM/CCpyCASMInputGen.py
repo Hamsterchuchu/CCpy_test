@@ -16,40 +16,48 @@ def _help():
           + " [option] [sub_option1] [sub_option2..]")
     print('''--------------------------------------
 [options]
-1 : CASM 입력 생성   (PRIM · CSPECS · KPOINTS 를 한 번에)
-9 : prim.json 생성   (신형 CASM 형식)
+1 : 열거 전 입력 생성   (PRIM · CSPECS · KPOINTS)
+2 : 열거 후 손질        (make_dirs 플래그 · 셀 파라미터 평균 · KPOINTS 배포)
+9 : prim.json 생성      (신형 CASM 형식)
 
 
 [sub_options]
-ex) CCpyCASMInputGen.py 1 -sc=2,1,1 -occ=Cu,Ir -p1 -kl=35
+ex) CCpyCASMInputGen.py 1 -sc=2,1,1 -occ=Cu,Ir
+    CCpyCASMInputGen.py 2
 
-    < STRUCTURE >
+    < METHOD >   기본은 Method 1 (비대칭 전수 열거)
+    -sym        : Method 2 - 대칭을 유지하고 CSPECS 를 만든다
+                  기본값은 좌표를 흔들어 P1 으로 낮추고 CSPECS 를 만들지 않는다.
+                  대칭 PRIM 에 CSPECS 가 있으면 열거 수가 달라진다 (8자리 셀에서 9 -> 21)
+
+    < STRUCTURE >   [option 1]
     -str=FILE   : 구조 파일                   (DEFAULT : 물어봄)
     -sc=#,#,#   : supercell 배수              (DEFAULT : 1,1,1)
                   FCC 는 2,1,1 / HCP·BCC 는 2,2,1 이 8 자리 셀
     -occ=A,B    : 각 자리에 올 수 있는 원소    (DEFAULT : 물어봄)
                   빈자리는 Vac. 원소별로 다르면 -occ=Li:Li,Vac -occ=C:C
     -title=NAME : PRIM 1행                    (DEFAULT : 원소 이름)
+    -amp=#      : P1 으로 낮출 때 흔들 폭      (DEFAULT : 0.001)
 
-    < SYMMETRY >
-    -p1         : P1 으로 낮춤                 (전수 열거를 하려면 필요)
-    -amp=#      : 흔들 폭 (분수좌표)           (DEFAULT : 0.001)
-
-    < CSPECS >
+    < CSPECS >   [option 1, -sym 일 때]
     -nn=#       : 몇 번째 이웃 껍질까지        (DEFAULT : 1)
     -r=#        : 반경을 직접 지정 (Å)
     -sizes=#,#  : 클러스터 크기                (DEFAULT : 2,3,4)
     -sp=A,B     : 이 원소끼리의 거리만 잼      (Li-C 는 -sp=Li)
 
     < KPOINTS >
-    -kl=#       : 목표 k*L (Å)                (DEFAULT : 35, 금속)
-                  절연체는 20 안팎
+    -kl=#       : 목표 k*L (Å)                (DEFAULT : 35, 금속 / 절연체는 20)
     -kp=#,#,#   : mesh 를 직접 지정
-    -dist       : 만든 KPOINTS 를 con* 전부에 복사
+
+    < CELL PARAM >   [option 2]
+    -a=#,#      : 두 원소의 격자상수를 직접
+    -ref=F,F    : 두 원소의 구조 파일 경로
+                  (DEFAULT : BULK/<원소>/CONTCAR 를 찾고, 없으면 내장 표)
+    -iso        : 세 축을 같은 배율로          (원본 03_cellparam.sh 동작)
 
     < PARTIAL >
-    -only=A,B   : prim / cspecs / kpoints 중 일부만
-                  ex) -only=kpoints  (mesh 만 다시 잡을 때)
+    -only=A,B   : [1] prim / cspecs / kpoints
+                  [2] makedirs / cellparam / kpoints
 --------------------------------------''')
     quit()
 
@@ -85,8 +93,8 @@ def _parse_subopts(argv):
                 opt["occ_all"] = val.replace(",", " ")
         elif arg.startswith("-title="):
             opt["title"] = arg.split("=", 1)[1]
-        elif arg == "-p1":
-            opt["p1"] = True
+        elif arg == "-sym":
+            opt["sym"] = True
         elif arg.startswith("-amp="):
             opt["amp"] = float(arg.split("=", 1)[1])
         elif arg.startswith("-nn="):
@@ -101,11 +109,15 @@ def _parse_subopts(argv):
             opt["kl"] = float(arg.split("=", 1)[1])
         elif arg.startswith("-kp="):
             opt["kp"] = [int(v) for v in arg.split("=", 1)[1].split(",")]
-        elif arg == "-dist":
-            opt["dist"] = True
+        elif arg == "-iso":
+            opt["iso"] = True
+        elif arg.startswith("-a="):
+            opt["a"] = [float(v) for v in arg.split("=", 1)[1].split(",")]
+        elif arg.startswith("-ref="):
+            opt["ref"] = [v.strip() for v in arg.split("=", 1)[1].split(",")]
         elif arg.startswith("-only="):
             opt["only"] = [v.strip().lower() for v in arg.split("=", 1)[1].split(",")]
-        elif arg not in ("1", "9"):
+        elif arg not in ("1", "2", "9"):
             print("\n모르는 옵션입니다: %s" % arg)
             _help()
     return opt
@@ -211,7 +223,7 @@ def input_gen(opt):
             print("       혼합 자리 %d개 -> 배열 수 %d" % (mixed, 2 ** mixed))
         made.append("PRIM")
 
-        if opt.get("p1"):
+        if not opt.get("sym"):
             try:
                 out, msgs = break_symmetry(prim, amplitude=opt.get("amp", 0.001))
             except PrimError as err:
@@ -232,7 +244,7 @@ def input_gen(opt):
             else src
 
     # -- CSPECS -------------------------------------------------------------
-    if _wanted(opt, "cspecs"):
+    if _wanted(opt, "cspecs") and opt.get("sym"):
         try:
             cs, shells = make_cspecs(src_for_rest, nshell=opt.get("nn", 1),
                                      sizes=opt.get("sizes", (2, 3, 4)),
@@ -294,6 +306,95 @@ def input_gen(opt):
 
 
 # ---------------------------------------------------------------------------
+# [2] 열거 후 손질
+# ---------------------------------------------------------------------------
+
+def post_enum(opt):
+    from CCpy.CASM.CASMrun import set_make_flags, MainclustError
+    from CCpy.CASM import CASMcellparam as cp
+    from CCpy.CASM.CASMkpoints import (Kpoints, config_dirs, distribute,
+                                       verify_uniform, describe_uniformity,
+                                       KpointsError)
+
+    if opt["only"]:
+        unknown = set(opt["only"]) - {"makedirs", "cellparam", "kpoints"}
+        if unknown:
+            print("\n-only 에 모르는 값이 있습니다: %s" % ", ".join(sorted(unknown)))
+            print("makedirs / cellparam / kpoints 중에서 골라 주세요.")
+            quit()
+
+    dirs = config_dirs(".")
+
+    # -- make_dirs 플래그 ----------------------------------------------------
+    if _wanted(opt, "makedirs"):
+        try:
+            changed, total = set_make_flags("make_dirs")
+            print("\n[make_dirs] %d / %d 를 1 로 바꿨습니다 (원본은 make_dirs_orig)."
+                  % (changed, total))
+            if not dirs:
+                print("            이제 mainclust 를 다시 돌려 con* 를 만드세요.")
+                print("            answers: eci 1 / supercells 1 / configuration 1 /")
+                print("                     make_dirs 1 / energy 0 / reference 0")
+        except MainclustError as err:
+            print("\n[make_dirs] %s" % err)
+
+    if not dirs:
+        if _wanted(opt, "cellparam") or _wanted(opt, "kpoints"):
+            print("\n배열 디렉토리(con*)가 아직 없어 나머지는 건너뜁니다.")
+        return
+
+    # -- 셀 파라미터 평균 ----------------------------------------------------
+    if _wanted(opt, "cellparam"):
+        lattice, refs = None, None
+        elts = None
+        try:
+            elts = cp.elements_from_prim("PRIM")[:2]
+        except cp.CellparamError as err:
+            print("\n[cellparam] %s" % err)
+            elts = None
+        if elts:
+            if opt.get("a"):
+                if len(opt["a"]) != 2:
+                    print("\n-a 는 두 원소의 격자상수 2개여야 합니다: -a=3.6271,3.8707")
+                    quit()
+                lattice = dict(zip(elts, opt["a"]))
+            if opt.get("ref"):
+                if len(opt["ref"]) != 2:
+                    print("\n-ref 는 두 원소의 구조 파일 2개여야 합니다.")
+                    quit()
+                refs = dict(zip(elts, opt["ref"]))
+            try:
+                rec, notes, skipped = cp.apply(".", lattice=lattice, refs=refs,
+                                               isotropic=opt.get("iso", False),
+                                               dirs=dirs)
+                print("\n[cellparam]")
+                print("  " + cp.describe(rec, notes, skipped).replace("\n", "\n  "))
+            except cp.CellparamError as err:
+                print("\n[cellparam] %s" % err)
+
+    # -- KPOINTS 배포 --------------------------------------------------------
+    if _wanted(opt, "kpoints"):
+        if not os.path.isfile("KPOINTS"):
+            print("\n[KPOINTS] KPOINTS 가 없습니다. 옵션 1 로 먼저 만드세요.")
+        else:
+            try:
+                kp = Kpoints.read("KPOINTS")
+                if opt.get("kp"):
+                    kp = Kpoints(opt["kp"], mode=kp.mode, comment=kp.comment)
+                    kp.write("KPOINTS")
+                distribute(kp, dirs)
+                ok, groups = verify_uniform(dirs)
+                print("\n[KPOINTS] %s %s 를 배열 %d개에 복사했습니다."
+                      % (kp.mode, " ".join(str(v) for v in kp.mesh), len(dirs)))
+                print("  " + describe_uniformity(groups).replace("\n", "\n  "))
+            except KpointsError as err:
+                print("\n[KPOINTS] %s" % err)
+
+    print("\n다음 단계 — 제출:")
+    print("  CCpyJobSubmit.py 2 I5 -batch -scratch -n=8")
+
+
+# ---------------------------------------------------------------------------
 # [9] prim.json (신형 CASM)
 # ---------------------------------------------------------------------------
 
@@ -313,6 +414,8 @@ if __name__ == "__main__":
 
     if option == "1":
         input_gen(_parse_subopts(sys.argv[2:]))
+    elif option == "2":
+        post_enum(_parse_subopts(sys.argv[2:]))
     elif option == "9":
         prim_json_gen()
     else:
