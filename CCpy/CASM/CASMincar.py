@@ -152,7 +152,7 @@ def casm_settings(stage="relax", elements=None, encut=None, nkpts=None):
 
     if stage == "static":
         settings.update(STATIC_SETTINGS)
-        # 사면체법은 k-점이 너무 적으면 쓸 수 없다.
+        # The tetrahedron method can't be used with too few k-points.
         if nkpts is not None and nkpts < 4:
             settings["ISMEAR"] = 1
             settings["SIGMA"] = 0.05
