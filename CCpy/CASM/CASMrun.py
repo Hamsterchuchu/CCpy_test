@@ -18,6 +18,7 @@ mainclust 는 stdout 이 파이프면 블록 버퍼링을 하므로 질문이 �
 import os
 import re
 import select
+import shutil
 import signal
 import subprocess
 import sys
@@ -450,3 +451,54 @@ def generate_vasp_inputs(workdir=".", energy=0, reference=0,
     """make_dirs 를 읽어 con* 디렉토리를 만든다."""
     drv = MainclustDriver(workdir=workdir, binary=binary, echo=echo, **kwargs)
     return drv.run(answers_reuse(energy=energy, reference=reference))
+
+
+# ----------------------------------------------------------------------------
+# make_dirs 플래그
+# ----------------------------------------------------------------------------
+
+def set_make_flags(path="make_dirs", value=1, backup=True):
+    """make_dirs 의 make 컬럼을 일괄로 바꾼다 (02_ModiMake.sh 대체).
+
+    mainclust 는 이 컬럼이 1 인 배열만 VASP 입력 디렉토리로 만든다. 열거
+    직후에는 전부 0 이므로 1 로 바꿔 줘야 한다.
+
+    원본 셸 스크립트는 ``sed -e "s/0     0/1     0/g"`` 처럼 공백 개수에
+    의존해, mainclust 출력 폭이 조금만 달라져도 조용히 아무것도 하지 않았다.
+    여기서는 열로 나눠 다시 쓴다.
+
+    Returns
+    -------
+    (changed, total)
+    """
+    if not os.path.isfile(path):
+        raise MainclustError("%s 가 없습니다. mainclust 로 열거를 먼저 하세요." % path)
+
+    lines = open(path).read().split("\n")
+    header, rows, changed = None, [], 0
+    for line in lines:
+        if not line.strip():
+            continue
+        if header is None and line.lstrip().startswith("#"):
+            header = line
+            continue
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        if parts[1] != str(value):
+            changed += 1
+        rows.append((parts[0], str(value), parts[2]))
+
+    if not rows:
+        raise MainclustError("%s 에서 배열 줄을 찾지 못했습니다." % path)
+
+    if backup:
+        orig = path + "_orig"
+        if not os.path.isfile(orig):
+            shutil.copy(path, orig)
+
+    out = [header] if header else ["#    name      make      concentrations  "]
+    out += ["%s  %s     %s   " % r for r in rows]
+    with open(path, "w") as f:
+        f.write("\n".join(out) + "\n")
+    return changed, len(rows)
