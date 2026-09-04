@@ -12,16 +12,45 @@ if version[0] == '3':
 
 
 def _help():
-    print("\nHow to use : " + os.path.basename(sys.argv[0]) + " [option]")
-    print("""--------------------------------------
-[1] : PRIM 생성          (CASM 텍스트 형식, scale 스크립트 대체)
-[2] : PRIM 대칭 낮추기   (P1 - 전수 열거를 하려면 필요)
-[3] : CSPECS 생성        (최근접 거리 측정, neighbors.pl 대체)
-[4] : KPOINTS 생성·통일  (셀에 맞는 mesh 를 정해 전 배열에 복사)
-[7] : 다음 완화 준비     (CONTCAR -> POSCAR, Pulay stress 걷어내기)
-[8] : 최종 정적 준비     (NSW=0, ISMEAR=-5 로 에너지 확정)
-[9] : prim.json 생성     (신형 CASM 형식)
---------------------------------------""")
+    print("\nHow to use : " + os.path.basename(sys.argv[0])
+          + " [option] [sub_option1] [sub_option2..]")
+    print('''--------------------------------------
+[options]
+1 : CASM 입력 생성   (PRIM · CSPECS · KPOINTS 를 한 번에)
+9 : prim.json 생성   (신형 CASM 형식)
+
+
+[sub_options]
+ex) CCpyCASMInputGen.py 1 -sc=2,1,1 -occ=Cu,Ir -p1 -kl=35
+
+    < STRUCTURE >
+    -str=FILE   : 구조 파일                   (DEFAULT : 물어봄)
+    -sc=#,#,#   : supercell 배수              (DEFAULT : 1,1,1)
+                  FCC 는 2,1,1 / HCP·BCC 는 2,2,1 이 8 자리 셀
+    -occ=A,B    : 각 자리에 올 수 있는 원소    (DEFAULT : 물어봄)
+                  빈자리는 Vac. 원소별로 다르면 -occ=Li:Li,Vac -occ=C:C
+    -title=NAME : PRIM 1행                    (DEFAULT : 원소 이름)
+
+    < SYMMETRY >
+    -p1         : P1 으로 낮춤                 (전수 열거를 하려면 필요)
+    -amp=#      : 흔들 폭 (분수좌표)           (DEFAULT : 0.001)
+
+    < CSPECS >
+    -nn=#       : 몇 번째 이웃 껍질까지        (DEFAULT : 1)
+    -r=#        : 반경을 직접 지정 (Å)
+    -sizes=#,#  : 클러스터 크기                (DEFAULT : 2,3,4)
+    -sp=A,B     : 이 원소끼리의 거리만 잼      (Li-C 는 -sp=Li)
+
+    < KPOINTS >
+    -kl=#       : 목표 k*L (Å)                (DEFAULT : 35, 금속)
+                  절연체는 20 안팎
+    -kp=#,#,#   : mesh 를 직접 지정
+    -dist       : 만든 KPOINTS 를 con* 전부에 복사
+
+    < PARTIAL >
+    -only=A,B   : prim / cspecs / kpoints 중 일부만
+                  ex) -only=kpoints  (mesh 만 다시 잡을 때)
+--------------------------------------''')
     quit()
 
 
@@ -32,378 +61,236 @@ def _ask(prompt, default=None):
     return got if got else default
 
 
-# ---------------------------------------------------------------------------
-# [1] PRIM 생성
-# ---------------------------------------------------------------------------
+def _parse_subopts(argv):
+    """CCpyVASPInputGen 과 같은 방식으로 -key=value / -flag 를 읽는다.
 
-def prim_gen():
-    from CCpy.CASM.CASMprim import make_prim, read_structure, PrimError
+    sub_option 을 하나라도 준 경우에는 대화형으로 되묻지 않고 기본값을 쓴다.
+    스크립트에서 부를 수 있어야 하기 때문이다.
+    """
+    opt = {"only": None, "occ": {}, "occ_all": None,
+           "interactive": not any(a.startswith("-") for a in argv)}
+    for arg in argv:
+        if not arg.startswith("-"):
+            continue
+        if arg.startswith("-str="):
+            opt["str"] = arg.split("=", 1)[1]
+        elif arg.startswith("-sc="):
+            opt["sc"] = arg.split("=", 1)[1]
+        elif arg.startswith("-occ="):
+            val = arg.split("=", 1)[1]
+            if ":" in val:
+                elt, occ = val.split(":", 1)
+                opt["occ"][elt] = occ.replace(",", " ")
+            else:
+                opt["occ_all"] = val.replace(",", " ")
+        elif arg.startswith("-title="):
+            opt["title"] = arg.split("=", 1)[1]
+        elif arg == "-p1":
+            opt["p1"] = True
+        elif arg.startswith("-amp="):
+            opt["amp"] = float(arg.split("=", 1)[1])
+        elif arg.startswith("-nn="):
+            opt["nn"] = int(arg.split("=", 1)[1])
+        elif arg.startswith("-r="):
+            opt["r"] = float(arg.split("=", 1)[1])
+        elif arg.startswith("-sizes="):
+            opt["sizes"] = [int(v) for v in arg.split("=", 1)[1].split(",")]
+        elif arg.startswith("-sp="):
+            opt["sp"] = arg.split("=", 1)[1].split(",")
+        elif arg.startswith("-kl="):
+            opt["kl"] = float(arg.split("=", 1)[1])
+        elif arg.startswith("-kp="):
+            opt["kp"] = [int(v) for v in arg.split("=", 1)[1].split(",")]
+        elif arg == "-dist":
+            opt["dist"] = True
+        elif arg.startswith("-only="):
+            opt["only"] = [v.strip().lower() for v in arg.split("=", 1)[1].split(",")]
+        elif arg not in ("1", "9"):
+            print("\n모르는 옵션입니다: %s" % arg)
+            _help()
+    return opt
 
-    input_marker = [".xsd", ".cif", "POSCAR", "CONTCAR"]
-    inputs = selectInputs(input_marker, "./")
-    if not inputs:
-        print("구조 파일을 찾지 못했습니다 (.cif / POSCAR / CONTCAR).")
-        quit()
-    filename = inputs[0]
-    if len(inputs) > 1:
-        print("\n여러 개를 고르셨습니다. 첫 번째 파일만 씁니다: %s" % filename)
 
-    try:
-        _, _, species = read_structure(filename)
-    except PrimError as err:
-        print("\n%s" % err)
-        quit()
-
-    ordered = []
-    for s in species:
-        if s not in ordered:
-            ordered.append(s)
-    print("\n* %s : 원자 %d개, 원소 %s" % (filename, len(species), ", ".join(ordered)))
-
-    sc = _ask("\n* Supercell 배수 a b c"
-              "\n  (FCC 는 2 1 1, HCP/BCC 는 2 2 1 이 8 자리 셀을 줍니다. "
-              "그대로 쓰려면 1 1 1)", "1 1 1")
-    try:
-        nx, ny, nz = [int(v) for v in sc.replace(",", " ").split()]
-    except ValueError:
-        print("배수는 정수 3개여야 합니다: %r" % sc)
-        quit()
-
-    print("\n* 각 자리에 올 수 있는 원소를 적습니다. 빈자리는 Vac 로 적습니다.")
-    print("  (예: 이원계 합금 'Cu Ir' / Li 자리 'Li Vac' / 고정 자리 'C')")
-    occupancy = {}
-    for s in ordered:
-        occupancy[s] = _ask("  %s 자리" % s, s)
-
-    default_title = "-".join(
-        [e for occ in occupancy.values() for e in occ.split()
-         if e != "Vac"] or ordered)
-    seen, title_elems = set(), []
-    for e in default_title.split("-"):
-        if e not in seen:
-            seen.add(e)
-            title_elems.append(e)
-    title = _ask("\n* PRIM title", "-".join(title_elems))
-
-    try:
-        prim = make_prim(filename, occupancy=occupancy,
-                         supercell=(nx, ny, nz), title=title)
-    except PrimError as err:
-        print("\n%s" % err)
-        quit()
-
-    if os.path.isfile("PRIM"):
-        os.rename("PRIM", "PRIM_backup")
-        print("\n기존 PRIM 을 PRIM_backup 으로 옮겼습니다.")
-    prim.write("PRIM")
-
-    a, b, c = prim.lengths
-    print("\nPRIM 생성 완료")
-    print("  자리 수   : %d" % len(prim))
-    print("  격자      : %.6f  %.6f  %.6f" % (a, b, c))
-    print("  구성      : " + " / ".join(
-        "%d자리 %s" % (n, " ".join(occ)) for n, occ in prim.groups()))
-    mixed = len(prim.mixed_sites)
-    if mixed:
-        print("  혼합 자리 : %d개 -> 배열 수 %d" % (mixed, 2 ** mixed))
-        print("\n  대칭이 살아 있으면 CASM 이 대칭인 배열을 하나로 묶습니다.")
-        print("  전수 열거를 하시려면 옵션 2 로 P1 까지 낮추세요.")
+def _wanted(opt, step):
+    return opt["only"] is None or step in opt["only"]
 
 
 # ---------------------------------------------------------------------------
-# [2] PRIM 대칭 낮추기
+# [1] CASM 입력 생성
 # ---------------------------------------------------------------------------
 
-def prim_break_symmetry():
-    from CCpy.CASM.CASMprim import Prim, break_symmetry, PrimError
+def input_gen(opt):
+    from CCpy.CASM.CASMprim import (Prim, make_prim, read_structure,
+                                    break_symmetry, PrimError)
+    from CCpy.CASM.CASMcspecs import (make_cspecs, describe_shells, Cspecs,
+                                      CspecsError)
+    from CCpy.CASM.CASMkpoints import (make_kpoints, Kpoints, config_dirs,
+                                       distribute, verify_uniform,
+                                       describe_uniformity, KpointsError)
 
-    path = _ask("\n* PRIM 파일", "PRIM")
-    if not os.path.isfile(path):
-        print("%s 가 없습니다." % path)
-        quit()
-    try:
-        prim = Prim.read(path)
-    except PrimError as err:
-        print("\n%s" % err)
-        quit()
-
-    print("\n* %s : 자리 %d개, 혼합 자리 %d개"
-          % (path, len(prim), len(prim.mixed_sites)))
-
-    amp = _ask("\n* 흔들 폭 (분수좌표)"
-               "\n  CASM 이 대칭을 못 찾고, VASP 도 SYMPREC 으로 되살리지 못할 "
-               "만큼 커야 합니다", "0.001")
-    try:
-        amp = float(amp)
-    except ValueError:
-        print("숫자여야 합니다: %r" % amp)
-        quit()
-
-    try:
-        out, msgs = break_symmetry(prim, amplitude=amp)
-    except PrimError as err:
-        print("\n%s" % err)
-        quit()
-
-    backup = path + "_orig"
-    if not os.path.isfile(backup):
-        os.rename(path, backup)
-    out.write(path)
-
-    for m in msgs:
-        print("  " + m)
-    print("\n대칭을 낮췄습니다.")
-    print("  원본       : %s" % backup)
-    print("  흔든 PRIM  : %s" % path)
-    print("\n  주의 - 열거가 끝나 make_dirs 를 만든 뒤에는 원본 PRIM 을 되돌린 다음")
-    print("  디렉토리를 생성해야 합니다. 흔든 좌표를 그대로 두면 만들어지는 구조")
-    print("  전부가 섭동을 안은 채로 출발합니다.")
-    print("    cp %s %s" % (backup, path))
-
-
-# ---------------------------------------------------------------------------
-# [3] CSPECS 생성
-# ---------------------------------------------------------------------------
-
-def cspecs_gen():
-    from CCpy.CASM.CASMcspecs import (neighbor_shells, describe_shells,
-                                      suggest_radius, Cspecs, CspecsError)
-    from CCpy.CASM.CASMprim import Prim, PrimError
-
-    if os.path.isfile("PRIM"):
-        src = _ask("\n* 거리를 잴 구조", "PRIM")
-    else:
-        inputs = selectInputs([".cif", "POSCAR", "CONTCAR", "PRIM"], "./")
-        if not inputs:
-            print("구조 파일을 찾지 못했습니다.")
+    if opt["only"]:
+        unknown = set(opt["only"]) - {"prim", "cspecs", "kpoints"}
+        if unknown:
+            print("\n-only 에 모르는 값이 있습니다: %s" % ", ".join(sorted(unknown)))
+            print("prim / cspecs / kpoints 중에서 골라 주세요.")
             quit()
-        src = inputs[0]
 
-    try:
-        structure = Prim.read(src) if os.path.basename(src).startswith("PRIM") \
-            else src
-    except PrimError as err:
-        print("\n%s" % err)
-        quit()
-
-    species = _ask("\n* 특정 원소끼리의 거리만 볼까요?"
-                   "\n  (Li-C 처럼 한 원소의 배열이 문제일 때 씁니다. 전부 보려면 그냥 Enter)",
-                   "")
-    species = species.replace(",", " ").split() or None
-
-    try:
-        shells = neighbor_shells(structure, species=species)
-    except (CspecsError, PrimError) as err:
-        print("\n%s" % err)
-        quit()
-
-    print("\n%s" % describe_shells(shells))
-
-    nshell = _ask("\n* 몇 번째 껍질까지 한 클러스터로 볼까요?"
-                  "\n  (1 = 최근접만. 늘리면 비등가 배열 수가 급격히 커집니다)", "1")
-    try:
-        nshell = int(nshell)
-        proposed = suggest_radius(shells, nshell=nshell)
-    except (ValueError, CspecsError) as err:
-        print("\n%s" % err)
-        quit()
-
-    radius = _ask("\n* 반경 (Å)"
-                  "\n  %d껍질 %.6f Å 와 %s 사이 값입니다"
-                  % (nshell, shells[nshell - 1][0],
-                     ("%d껍질 %.6f Å" % (nshell + 1, shells[nshell][0]))
-                     if nshell < len(shells) else "그 바깥"),
-                  "%g" % proposed)
-    try:
-        radius = float(radius)
-    except ValueError:
-        print("숫자여야 합니다: %r" % radius)
-        quit()
-
-    sizes = _ask("\n* 클러스터 크기", "2 3 4")
-    try:
-        sizes = [int(s) for s in sizes.replace(",", " ").split()]
-        cs = Cspecs(dict((s, radius) for s in sizes))
-    except (ValueError, CspecsError) as err:
-        print("\n%s" % err)
-        quit()
-
-    if os.path.isfile("CSPECS"):
-        os.rename("CSPECS", "CSPECS_backup")
-        print("\n기존 CSPECS 를 CSPECS_backup 으로 옮겼습니다.")
-    cs.write("CSPECS")
-
-    print("\nCSPECS 생성 완료")
-    print(cs.to_string())
-    inside = sum(n for d, n in shells if d <= radius)
-    print("  반경 %g Å 안의 이웃 : %d개" % (radius, inside))
-
-
-# ---------------------------------------------------------------------------
-# [4] KPOINTS 생성·통일
-# ---------------------------------------------------------------------------
-
-def kpoints_gen():
-    from CCpy.CASM.CASMkpoints import (make_kpoints, config_dirs, distribute,
-                                       verify_uniform, describe_uniformity,
-                                       DEFAULT_TARGET, KpointsError)
-    from CCpy.CASM.CASMprim import PrimError
-
-    dirs = config_dirs(".")
-    if dirs:
-        try:
-            ok, groups = verify_uniform(dirs)
-            print("\n* 현재 상태 : " + describe_uniformity(groups))
-            if not ok:
-                print("\n  배열마다 mesh 가 다르면 그 계단이 형성 에너지 차이로 "
-                      "둔갑합니다.")
-                print("  셀 크기가 서로 같은 배열끼리는(Method 1) 하나로 통일해야 "
-                      "합니다.")
-                print("  셀 부피가 다른 배열이 섞여 있으면(Method 2) mainclust 가 "
-                      "SCEL 배율만큼")
-                print("  나눠 k-밀도를 맞춘 것이니 그대로 두는 편이 맞습니다.")
-        except KpointsError as err:
-            print("\n* 현재 상태를 읽지 못했습니다: %s" % err)
-
-    src = _ask("\n* mesh 를 정할 기준 구조", "PRIM")
+    # -- 기준 구조 -----------------------------------------------------------
+    src = opt.get("str")
+    if src is None:
+        if _wanted(opt, "prim") or not os.path.isfile("PRIM"):
+            inputs = selectInputs([".xsd", ".cif", "POSCAR", "CONTCAR"], "./")
+            if not inputs:
+                print("구조 파일을 찾지 못했습니다 (.cif / POSCAR / CONTCAR).")
+                quit()
+            src = inputs[0]
+        else:
+            src = "PRIM"
     if not os.path.isfile(src):
         print("%s 가 없습니다." % src)
         quit()
 
-    target = _ask("\n* 목표 k*L (Å)"
-                  "\n  금속은 35~40, 절연체는 20 안팎입니다", "%g" % DEFAULT_TARGET)
-    try:
-        target = float(target)
-    except ValueError:
-        print("숫자여야 합니다: %r" % target)
-        quit()
+    made = []
 
-    try:
-        kp, info = make_kpoints(src, target=target)
-    except (KpointsError, PrimError) as err:
-        print("\n%s" % err)
-        quit()
-
-    print("")
-    for m in info:
-        print("  " + m)
-
-    mode = _ask("\n* mode", kp.mode)
-    if mode[:1].upper() != kp.mode[:1].upper():
-        from CCpy.CASM.CASMkpoints import Kpoints
-        kp = Kpoints(kp.mesh, mode=mode, comment=kp.comment)
-
-    mesh = _ask("\n* mesh (그대로 쓰려면 Enter)",
-                " ".join(str(v) for v in kp.mesh))
-    try:
-        from CCpy.CASM.CASMkpoints import Kpoints
-        kp = Kpoints([int(v) for v in mesh.replace(",", " ").split()],
-                     mode=kp.mode, comment=kp.comment)
-    except (ValueError, KpointsError) as err:
-        print("\n%s" % err)
-        quit()
-
-    kp.write("KPOINTS")
-    print("\nKPOINTS 생성 완료")
-    print(kp.to_string())
-
-    if not dirs:
-        print("  배열 디렉토리가 아직 없습니다. mainclust 로 con* 를 만든 뒤")
-        print("  이 옵션을 다시 돌려 전 배열에 복사하세요.")
-        return
-
-    go = _ask("* 배열 %d개에 이 KPOINTS 를 복사할까요? (y/n)" % len(dirs), "y")
-    if go.lower() not in ("y", "yes"):
-        print("  복사하지 않았습니다.")
-        return
-
-    n = distribute(kp, dirs)
-    ok, groups = verify_uniform(dirs)
-    print("\n  %d개에 기록했습니다." % n)
-    print("  확인 : " + describe_uniformity(groups))
-    if not ok:
-        print("  복사가 끝났는데도 어긋난 것이 있습니다. 위 목록을 확인해 주세요.")
-
-
-# ---------------------------------------------------------------------------
-# [7] / [8] 다음 단계 준비
-# ---------------------------------------------------------------------------
-
-def _stage_common(stage):
-    from CCpy.CASM import CASMstage as st
-    from CCpy.CASM.CASMkpoints import config_dirs
-
-    dirs = config_dirs(".")
-    if not dirs:
-        print("\n배열 디렉토리(con*)를 찾지 못했습니다.")
-        quit()
-
-    ready = [d for d in dirs if st.is_finished(d)]
-    print("\n* 배열 %d개 중 %d개가 끝났습니다(vasp.done 기준)."
-          % (len(dirs), len(ready)))
-    if len(ready) < len(dirs):
-        print("  아직 안 끝난 %d개는 건너뜁니다." % (len(dirs) - len(ready)))
-
-    bad = st.unconverged_dirs(".")
-    if bad is None:
-        print("\n  01_unconverged_jobs.csv 가 없습니다.")
-        print("  CCpyVASPAnal.py 0 을 먼저 돌리면 미수렴 배열을 자동으로 "
-              "건너뜁니다.")
-        skip = _ask("  그래도 진행할까요? (y/n)", "n")
-        if skip.lower() not in ("y", "yes"):
+    # -- PRIM ---------------------------------------------------------------
+    if _wanted(opt, "prim"):
+        try:
+            _, _, species = read_structure(src)
+        except PrimError as err:
+            print("\n%s" % err)
             quit()
-    else:
-        print("  미수렴으로 표시된 배열 %d개는 건너뜁니다." % len(bad))
+        ordered = []
+        for s in species:
+            if s not in ordered:
+                ordered.append(s)
+        print("\n* %s : 원자 %d개, 원소 %s" % (src, len(species), ", ".join(ordered)))
 
-    # 현재 상태를 몇 개만 보여 준다
-    sample = ready[:3]
-    if sample:
-        print("\n  현재 상태(앞 %d개):" % len(sample))
-        for d in sample:
+        sc = opt.get("sc")
+        if sc is None:
+            sc = _ask("\n* Supercell 배수 a b c"
+                      "\n  (FCC 는 2 1 1, HCP/BCC 는 2 2 1 이 8 자리 셀을 줍니다)",
+                      "1 1 1") if opt["interactive"] else "1 1 1"
+        try:
+            nx, ny, nz = [int(v) for v in sc.replace(",", " ").split()]
+        except ValueError:
+            print("배수는 정수 3개여야 합니다: %r" % sc)
+            quit()
+
+        if opt["occ"]:
+            occupancy = dict((e, opt["occ"].get(e, e)) for e in ordered)
+            missing = [e for e in ordered if e not in opt["occ"]]
+            if missing:
+                print("  -occ 에 없는 원소는 고정 자리로 둡니다: %s" % ", ".join(missing))
+        elif opt["occ_all"]:
+            occupancy = opt["occ_all"]
+        elif opt["interactive"]:
+            print("\n* 각 자리에 올 수 있는 원소를 적습니다. 빈자리는 Vac 로 적습니다.")
+            print("  (예: 이원계 합금 'Cu Ir' / Li 자리 'Li Vac' / 고정 자리 'C')")
+            occupancy = dict((e, _ask("  %s 자리" % e, e)) for e in ordered)
+        else:
+            print("\n-occ 을 주지 않아 모든 자리를 고정으로 둡니다.")
+            print("이원계 합금이면 -occ=Cu,Ir 처럼 주세요.")
+            occupancy = dict((e, e) for e in ordered)
+
+        try:
+            prim = make_prim(src, occupancy=occupancy, supercell=(nx, ny, nz),
+                             title=opt.get("title"))
+        except PrimError as err:
+            print("\n%s" % err)
+            quit()
+
+        if os.path.isfile("PRIM"):
+            os.rename("PRIM", "PRIM_backup")
+        prim.write("PRIM")
+        a, b, c = prim.lengths
+        print("\n[PRIM] 자리 %d개 / 격자 %.6f %.6f %.6f" % (len(prim), a, b, c))
+        print("       " + " / ".join("%d자리 %s" % (n, " ".join(o))
+                                     for n, o in prim.groups()))
+        mixed = len(prim.mixed_sites)
+        if mixed:
+            print("       혼합 자리 %d개 -> 배열 수 %d" % (mixed, 2 ** mixed))
+        made.append("PRIM")
+
+        if opt.get("p1"):
             try:
-                drift = st.volume_drift(d)
-                ent = st.entropy_per_atom(d)
-                print("    %-10s 부피변화 %+6.2f %%   T*S %.3f meV/atom   NKPTS %s"
-                      % (os.path.basename(d), drift,
-                         ent if ent is not None else float("nan"), st.nkpts(d)))
-            except st.StageError:
-                pass
+                out, msgs = break_symmetry(prim, amplitude=opt.get("amp", 0.001))
+            except PrimError as err:
+                print("\n%s" % err)
+                quit()
+            if not os.path.isfile("PRIM_orig"):
+                os.rename("PRIM", "PRIM_orig")
+            out.write("PRIM")
+            for m in msgs:
+                print("       " + m)
+            print("       P1 으로 낮췄습니다. 원본은 PRIM_orig 입니다.")
+            print("       열거가 끝나 make_dirs 를 만든 뒤 원본을 되돌리고")
+            print("       디렉토리를 생성하세요:  cp PRIM_orig PRIM")
+            made.append("PRIM_orig")
+        src_for_rest = prim              # 흔들기 전 구조로 거리·mesh 를 잰다
+    else:
+        src_for_rest = Prim.read(src) if os.path.basename(src).startswith("PRIM") \
+            else src
 
-    ispin = _ask("\n* ISPIN (그대로 두려면 Enter)", "")
-    ispin = int(ispin) if ispin else None
+    # -- CSPECS -------------------------------------------------------------
+    if _wanted(opt, "cspecs"):
+        try:
+            cs, shells = make_cspecs(src_for_rest, nshell=opt.get("nn", 1),
+                                     sizes=opt.get("sizes", (2, 3, 4)),
+                                     radius=opt.get("r"),
+                                     species=opt.get("sp"))
+        except (CspecsError, PrimError) as err:
+            print("\n%s" % err)
+            quit()
+        if os.path.isfile("CSPECS"):
+            os.rename("CSPECS", "CSPECS_backup")
+        cs.write("CSPECS")
+        radius = cs.radii[sorted(cs.radii)[0]]
+        inside = sum(n for d, n in shells if d <= radius)
+        print("\n[CSPECS] 반경 %g Å, 크기 %s"
+              % (radius, ", ".join(str(s) for s in sorted(cs.radii))))
+        print(describe_shells(shells, limit=4))
+        print("       반경 안의 이웃 %d개" % inside)
+        made.append("CSPECS")
 
-    go = _ask("\n* 진행할까요? 이전 결과는 접미사를 붙여 남깁니다. (y/n)", "y")
-    if go.lower() not in ("y", "yes"):
-        print("  아무것도 하지 않았습니다.")
-        quit()
+    # -- KPOINTS ------------------------------------------------------------
+    if _wanted(opt, "kpoints"):
+        try:
+            kp, info = make_kpoints(src_for_rest, target=opt.get("kl", 35.0))
+            if opt.get("kp"):
+                kp = Kpoints(opt["kp"], mode=kp.mode, comment=kp.comment)
+                info = ["mesh 를 직접 지정하셨습니다: %s"
+                        % " ".join(str(v) for v in kp.mesh)]
+        except (KpointsError, PrimError) as err:
+            print("\n%s" % err)
+            quit()
+        if os.path.isfile("KPOINTS"):
+            os.rename("KPOINTS", "KPOINTS_backup")
+        kp.write("KPOINTS")
+        print("\n[KPOINTS] %s %s" % (kp.mode, " ".join(str(v) for v in kp.mesh)))
+        for m in info:
+            print("       " + m)
+        made.append("KPOINTS")
 
-    done, skipped = st.advance_all(".", stage=stage, ispin=ispin)
-    print("\n" + st.describe(done, skipped))
-    return done
+        dirs = config_dirs(".")
+        if dirs:
+            go = opt.get("dist")
+            if go is None:
+                go = _ask("\n* 배열 %d개에 복사할까요? (y/n)" % len(dirs), "y") \
+                    .lower() in ("y", "yes") if opt["interactive"] else False
+                if not opt["interactive"]:
+                    print("       배열 %d개가 있습니다. 복사하려면 -dist 를 주세요."
+                          % len(dirs))
+            if go:
+                distribute(kp, dirs)
+                ok, groups = verify_uniform(dirs)
+                print("       " + describe_uniformity(groups))
 
-
-def stage_relax():
-    done = _stage_common("relax")
-    if done:
-        print("\n  이제 다시 제출하세요:")
-        print("    CCpyJobSubmit.py 2 I5 -batch -scratch -n=8")
-        print("\n  끝나면 부피가 더 움직이는지 보고, 멎었으면 옵션 8 로 최종 "
-              "정적 계산을 준비하세요.")
-
-
-def stage_static():
-    done = _stage_common("static")
-    if done:
-        ismears = {str(d.get("ismear")) for d in done}
-        print("\n  ISMEAR %s 로 정적 계산 입력을 만들었습니다." % ", ".join(sorted(ismears)))
-        if "1" in ismears:
-            print("  k-점이 4개 미만인 배열은 사면체법(-5)을 쓸 수 없어 "
-                  "ISMEAR=1, SIGMA=0.05 로 두었습니다.")
-        print("\n  이제 다시 제출하세요:")
-        print("    CCpyJobSubmit.py 2 I5 -batch -scratch -n=8")
-        print("\n  이 계산의 OUTCAR 이 최종 에너지입니다. CCpyCASMhull.py 는 "
-              "OUTCAR 을 읽으므로")
-        print("  따로 손댈 것 없이 hull 이 정적 에너지로 그려집니다.")
+    # -- 정리 ---------------------------------------------------------------
+    print("\n만든 파일: %s" % ", ".join(made))
+    if "PRIM" in made and not os.path.isdir("con0.0"):
+        print("\n다음 단계 — 열거:")
+        print("  CCpyCASMRun.py            (준비 중)")
+        print("  또는 ./mainclust 를 직접 돌리고 02_ModiMake.sh 를 실행")
 
 
 # ---------------------------------------------------------------------------
@@ -413,11 +300,9 @@ def stage_static():
 def prim_json_gen():
     from CCpy.CASM.CASMio import CASMInput
 
-    input_marker = [".xsd", ".cif", "POSCAR", "CONTCAR"]
-    inputs = selectInputs(input_marker, "./")
+    inputs = selectInputs([".xsd", ".cif", "POSCAR", "CONTCAR"], "./")
     for each_input in inputs:
-        CI = CASMInput(each_input)
-        CI.primGen()
+        CASMInput(each_input).primGen()
 
 
 if __name__ == "__main__":
@@ -427,17 +312,7 @@ if __name__ == "__main__":
         _help()
 
     if option == "1":
-        prim_gen()
-    elif option == "2":
-        prim_break_symmetry()
-    elif option == "3":
-        cspecs_gen()
-    elif option == "4":
-        kpoints_gen()
-    elif option == "7":
-        stage_relax()
-    elif option == "8":
-        stage_static()
+        input_gen(_parse_subopts(sys.argv[2:]))
     elif option == "9":
         prim_json_gen()
     else:
