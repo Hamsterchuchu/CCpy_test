@@ -1,35 +1,42 @@
 # -*- coding: utf-8 -*-
-"""배열마다 셀을 조성 가중평균(Vegard)으로 다시 쓴다.
+"""Rewrite each configuration's cell to the composition-weighted average (Vegard).
 
-두 원소의 격자상수가 크게 다르면(Cu 3.627 Å vs Ir 3.871 Å) 어느 한쪽 값으로
-출발한 완화가 잘 붙지 않는다. 각 배열의 조성비로 두 격자상수를 섞어 출발
-셀을 만들어 주면 수렴이 빨라진다.
+When the two elements' lattice constants differ a lot (Cu 3.627 A vs Ir 3.871
+A), a relaxation that starts from one or the other's value does not converge
+well. Mixing the two lattice constants by each configuration's own
+composition to build the starting cell speeds up convergence.
 
-**이 셀은 출발 추정치일 뿐이다.** ISIF=3 으로 각 배열이 자기 부피로 이완해야
-형성 에너지가 옳다. 실측을 보면 완화 후 부피가 1.6 % 까지 움직인다.
+**This cell is only a starting estimate.** ISIF=3 has to let each
+configuration relax to its own volume for the formation energy to be correct.
+Measured runs show the volume moving by up to 1.6% after relaxation.
 
-원본 ``03_cellparam.sh`` 의 세 가지 문제를 여기서 없앤다.
+Three problems of the original ``03_cellparam.sh`` are removed here.
 
-1. **멱등성.** 원본은 ``$list/POSCAR`` 를 읽어 같은 파일에 덮어썼다. 두 번
-   돌리면 배율이 두 번 곱해진다. 여기서는 CASM 이 처음 뱉고 그 뒤로 아무도
-   건드리지 않는 ``POS`` 를 읽어 ``POSCAR`` 로 쓴다. 몇 번을 돌려도 같다.
-2. **인자 순서.** 원본은 ``03_cellparam.sh Ir Cu`` 로 뒤집어 줘도 그대로
-   받아 모든 셀을 반대로 스케일했다. 여기서는 원소 순서를 PRIM 의 occupancy
-   에서 읽는다. 사용자가 순서를 주면 PRIM 과 다른지 검사만 한다.
-3. **등방 스케일.** 원본은 a·b·c 에 같은 배율을 곱했다. 여기서는 축마다
-   대응하는 길이의 비를 쓴다. 입방-입방 쌍에서는 결과가 같고, 육방처럼
-   c/a 가 다른 구조에서만 달라진다.
+1. **Idempotency.** The original read ``$list/POSCAR`` and overwrote the same
+   file, so running it twice multiplied the scale factor twice. Here, ``POS``
+   -- what CASM writes once and nobody touches afterward -- is read and
+   ``POSCAR`` is written, so the result is the same no matter how many times
+   this runs.
+2. **Argument order.** The original accepted ``03_cellparam.sh Ir Cu`` just as
+   readily reversed, and scaled every cell backwards. Here the element order
+   is read from PRIM's occupancy; if the user gives an order, it is only
+   checked against PRIM's.
+3. **Isotropic scaling.** The original multiplied a, b, and c by the same
+   factor. Here the ratio of the corresponding length is used per axis. The
+   result is the same for a cubic-cubic pair, and only differs for a
+   structure like hexagonal where c/a differs.
 
-격자상수는 이 순서로 찾는다.
+Lattice constants are looked for in this order.
 
-1. ``lattice`` 인자로 직접 준 값
-2. ``refs`` 로 준 구조 파일
-3. ``BULK/<원소>/CONTCAR`` 관례 (위로 올라가며 찾는다)
-4. 아래 :data:`LATTICE_TABLE`
+1. A value given directly through the ``lattice`` argument
+2. A structure file given through ``refs``
+3. The ``BULK/<element>/CONTCAR`` convention (searched going up the tree)
+4. The :data:`LATTICE_TABLE` below
 
-표는 문헌값이 아니라 **이 프로젝트에서 실제로 최적화한 BULK 계산 결과**다
-(2026-09, PBE, ENCUT 400, EDIFF 1E-06). 출발 추정치로만 쓰이므로 설정이
-조금 달라도 문제되지 않지만, 자기 BULK 파일이 있으면 그쪽이 항상 먼저다.
+The table is not from the literature -- it is **this project's own optimised
+BULK results** (2026-09, PBE, ENCUT 400, EDIFF 1E-06). It is only used as a
+starting estimate, so a slightly different setup is not a problem, but a
+project's own BULK file always comes first when one exists.
 """
 
 import os
@@ -38,11 +45,11 @@ import numpy as np
 
 
 class CellparamError(ValueError):
-    """셀 파라미터 처리 중 발생한 오류."""
+    """Raised while processing cell parameters."""
 
 
-#: 원소 -> (a, c, 구조, POTCAR). 단위 Å.
-#: 입방 구조는 a == c 로 채워 두었다.
+#: Element -> (a, c, structure, POTCAR). Units are A.
+#: Cubic structures are filled in with a == c.
 LATTICE_TABLE = {
     "Ag": (4.144918, 4.144918, "fcc", "Ag"),
     "Au": (4.161795, 4.161795, "fcc", "Au"),
@@ -73,25 +80,25 @@ LATTICE_TABLE = {
     "Zr": (3.221385, 5.193937, "hcp", "Zr_sv"),
 }
 
-TABLE_NOTE = ("내장 표 (이 프로젝트 BULK 최적화 결과, PBE / ENCUT 400 / "
-              "EDIFF 1E-06)")
+TABLE_NOTE = ("built-in table (this project's own BULK optimisation, PBE / "
+              "ENCUT 400 / EDIFF 1E-06)")
 
 
 # ----------------------------------------------------------------------------
-# 격자상수 찾기
+# Finding lattice constants
 # ----------------------------------------------------------------------------
 
 def _read_lengths(path):
-    """구조 파일에서 격자벡터 길이 3개를 읽는다."""
+    """Read the 3 lattice vector lengths from a structure file."""
     if not os.path.isfile(path):
-        raise CellparamError("구조 파일이 없습니다: %s" % path)
+        raise CellparamError("Structure file is missing: %s" % path)
     lines = open(path).read().split("\n")
     try:
         scale = float(lines[1].split()[0])
         mat = np.array([[float(x) for x in lines[i].split()[:3]] for i in (2, 3, 4)])
     except (IndexError, ValueError):
-        raise CellparamError("%s 에서 격자를 읽지 못했습니다." % path)
-    if scale < 0:                       # 음수 scale = 부피 지정
+        raise CellparamError("Could not read the lattice from %s." % path)
+    if scale < 0:                       # negative scale = volume is given directly
         scale = (abs(scale) / abs(np.linalg.det(mat))) ** (1.0 / 3.0)
     return np.linalg.norm(mat, axis=1) * scale
 
@@ -106,7 +113,7 @@ def _find_bulk(element, roots):
 
 
 def element_lengths(element, lattice=None, refs=None, roots=None):
-    """한 원소의 격자벡터 길이 3개와 그 출처를 돌려준다.
+    """Return one element's 3 lattice vector lengths and where they came from.
 
     Returns
     -------
@@ -116,12 +123,12 @@ def element_lengths(element, lattice=None, refs=None, roots=None):
         v = np.atleast_1d(np.asarray(lattice, dtype=float))
         if v.size == 1:
             v = np.repeat(v, 3)
-        elif v.size == 2:                # (a, c) 로 준 경우
+        elif v.size == 2:                # given as (a, c)
             v = np.array([v[0], v[0], v[1]])
         if v.size != 3:
-            raise CellparamError("격자상수는 1개(a), 2개(a c), 3개(a b c) 중 "
-                                 "하나로 주세요: %r" % (lattice,))
-        return v, "직접 지정"
+            raise CellparamError("Give the lattice constant as 1 value (a), 2 "
+                                 "(a c), or 3 (a b c): %r" % (lattice,))
+        return v, "given directly"
 
     if refs and element in refs:
         return _read_lengths(refs[element]), refs[element]
@@ -137,14 +144,14 @@ def element_lengths(element, lattice=None, refs=None, roots=None):
         return np.array([a, a, c]), TABLE_NOTE
 
     raise CellparamError(
-        "%s 의 격자상수를 찾지 못했습니다.\n"
-        "BULK/%s/CONTCAR 를 두거나, -ref 로 경로를, 또는 -a 로 값을 주세요.\n"
-        "내장 표에 있는 원소: %s"
+        "Could not find a lattice constant for %s.\n"
+        "Place a BULK/%s/CONTCAR, give a path with -ref, or a value with -a.\n"
+        "Elements in the built-in table: %s"
         % (element, element, ", ".join(sorted(LATTICE_TABLE))))
 
 
 def default_bulk_roots(start="."):
-    """BULK 폴더가 있을 만한 곳을 가까운 순서로."""
+    """Places a BULK folder might be, nearest first."""
     out = []
     cur = os.path.abspath(start)
     for _ in range(4):
@@ -158,32 +165,32 @@ def default_bulk_roots(start="."):
 
 
 # ----------------------------------------------------------------------------
-# 적용
+# Applying
 # ----------------------------------------------------------------------------
 
 def elements_from_prim(path="PRIM"):
-    """PRIM 의 occupancy 순서에서 원소 순서를 읽는다."""
+    """Read the element order from PRIM's occupancy order."""
     from CCpy.CASM.CASMprim import Prim, PrimError
     try:
         prim = Prim.read(path)
     except PrimError as err:
-        raise CellparamError("PRIM 을 읽지 못했습니다: %s" % err)
+        raise CellparamError("Could not read the PRIM: %s" % err)
     elts = prim.elements
     if len(elts) < 2:
         raise CellparamError(
-            "PRIM 에 원소가 %d개뿐입니다 (%s). 이원계여야 조성 가중평균이 "
-            "의미가 있습니다." % (len(elts), ", ".join(elts) or "없음"))
+            "PRIM has only %d element(s) (%s). A composition-weighted "
+            "average only makes sense for a binary." % (len(elts), ", ".join(elts) or "none"))
     return elts
 
 
 def read_concentrations(path="make_dirs"):
-    """make_dirs 에서 {배열이름: 조성} 을 읽는다.
+    """Read {configuration name: composition} from make_dirs.
 
-    3열은 첫 원소의 분율이다.
+    Column 3 is the first element's fraction.
     """
     if not os.path.isfile(path):
         raise CellparamError(
-            "%s 가 없습니다. mainclust 로 열거를 먼저 하세요." % path)
+            "%s is missing. Run mainclust's enumeration first." % path)
     out = {}
     for line in open(path):
         parts = line.split()
@@ -194,27 +201,30 @@ def read_concentrations(path="make_dirs"):
         except ValueError:
             continue
     if not out:
-        raise CellparamError("%s 에서 조성을 읽지 못했습니다." % path)
+        raise CellparamError("Could not read a composition from %s." % path)
     return out
 
 
 def apply(root=".", elements=None, lattice=None, refs=None, roots=None,
           isotropic=False, dirs=None):
-    """모든 배열의 POS 를 조성 가중평균 셀로 스케일해 POSCAR 로 쓴다.
+    """Scale every configuration's POS to the composition-weighted average
+    cell and write it as POSCAR.
 
     Parameters
     ----------
     root : str
     elements : (str, str) or None
-        원소 순서. None 이면 PRIM 에서 읽는다. 주면 PRIM 과 같은지 검사한다.
+        Element order. None reads it from PRIM. If given, it is checked
+        against PRIM's.
     lattice : dict or None
-        ``{"Cu": 3.6271, "Ir": [3.87, 3.87, 3.87]}`` 처럼 직접 지정.
+        Given directly, e.g. ``{"Cu": 3.6271, "Ir": [3.87, 3.87, 3.87]}``.
     refs : dict or None
-        ``{"Cu": "../BULK/Cu/CONTCAR"}`` 처럼 파일로 지정.
+        Given as files, e.g. ``{"Cu": "../BULK/Cu/CONTCAR"}``.
     roots : list[str] or None
-        BULK 를 찾을 곳.
+        Where to look for BULK.
     isotropic : bool
-        True 면 a 축 비 하나로 세 축을 모두 스케일한다(원본 동작).
+        True scales all three axes by the single a-axis ratio (the original's
+        behaviour).
     dirs : list[str] or None
 
     Returns
@@ -227,12 +237,13 @@ def apply(root=".", elements=None, lattice=None, refs=None, roots=None,
     else:
         elements = list(elements)
         if len(elements) != 2:
-            raise CellparamError("원소는 2개여야 합니다: %r" % (elements,))
+            raise CellparamError("Give exactly 2 elements: %r" % (elements,))
         if elements != prim_elts[:2]:
             raise CellparamError(
-                "주신 순서 %s 가 PRIM 의 순서 %s 와 다릅니다.\n"
-                "순서를 뒤집으면 조성 가중이 반대로 걸려 모든 셀이 틀린 부피에서 "
-                "출발합니다." % (" ".join(elements), " ".join(prim_elts[:2])))
+                "The order you gave, %s, differs from PRIM's order, %s.\n"
+                "Reversing the order flips the composition weighting, so every "
+                "cell would start from the wrong volume."
+                % (" ".join(elements), " ".join(prim_elts[:2])))
     e1, e2 = elements
 
     lattice = lattice or {}
@@ -245,15 +256,16 @@ def apply(root=".", elements=None, lattice=None, refs=None, roots=None,
 
     notes = ["%s : %s  (%s)" % (e1, " ".join("%.6f" % v for v in l1), src1),
              "%s : %s  (%s)" % (e2, " ".join("%.6f" % v for v in l2), src2),
-             "축별 배율 %s%s" % (" ".join("%.6f" % v for v in ratio),
-                              "  (등방)" if isotropic else "")]
+             "per-axis scale %s%s" % (" ".join("%.6f" % v for v in ratio),
+                              "  (isotropic)" if isotropic else "")]
     if max(ratio) / min(ratio) > 1.02 and not isotropic:
-        notes.append("두 구조의 c/a 가 달라 축마다 배율이 다릅니다. 원본 "
-                     "03_cellparam.sh 처럼 등방으로 하려면 -iso 를 주세요.")
+        notes.append("The two structures' c/a differ, so the scale differs "
+                     "per axis. Give -iso for the original 03_cellparam.sh's "
+                     "isotropic behaviour.")
     spread = abs(ratio[0] - 1.0)
     if spread > 0.10:
-        notes.append("경고: 격자상수 차이가 %.1f %% 입니다. 완화가 잘 붙지 "
-                     "않을 수 있습니다." % (spread * 100))
+        notes.append("Warning: the lattice constants differ by %.1f%%. The "
+                     "relaxation may not converge well." % (spread * 100))
 
     concentrations = read_concentrations(os.path.join(root, "make_dirs"))
 
@@ -261,17 +273,17 @@ def apply(root=".", elements=None, lattice=None, refs=None, roots=None,
         from CCpy.CASM.CASMkpoints import config_dirs
         dirs = config_dirs(root)
     if not dirs:
-        raise CellparamError("배열 디렉토리(con*)를 찾지 못했습니다.")
+        raise CellparamError("Could not find any configuration directories (con*).")
 
     records, skipped = [], []
     for d in dirs:
         name = os.path.basename(d)
         if name not in concentrations:
-            skipped.append((name, "make_dirs 에 없음"))
+            skipped.append((name, "not in make_dirs"))
             continue
         src = os.path.join(d, "POS")
         if not os.path.isfile(src):
-            skipped.append((name, "POS 가 없음 (CASM 원본 구조)"))
+            skipped.append((name, "no POS (CASM's original structure)"))
             continue
         x = concentrations[name]
         factor = x + ratio * (1.0 - x)
@@ -286,15 +298,15 @@ def apply(root=".", elements=None, lattice=None, refs=None, roots=None,
 
 
 def _scale_poscar(src, dst, factor):
-    """POS 의 격자벡터를 축마다 factor 로 곱해 POSCAR 로 쓴다."""
+    """Multiply POS's lattice vectors by factor, per axis, and write as POSCAR."""
     lines = open(src).read().split("\n")
     if len(lines) < 7:
-        raise CellparamError("구조 파일이 너무 짧습니다: %s" % src)
+        raise CellparamError("Structure file is too short: %s" % src)
     out = list(lines)
     for i, f in zip((2, 3, 4), factor):
         parts = lines[i].split()
         if len(parts) < 3:
-            raise CellparamError("%d행이 격자벡터가 아닙니다: %r" % (i + 1, lines[i]))
+            raise CellparamError("Line %d is not a lattice vector: %r" % (i + 1, lines[i]))
         vec = [float(v) * f for v in parts[:3]]
         out[i] = "  %15.7f %15.7f %15.7f " % tuple(vec)
     with open(dst, "w") as fh:
@@ -302,22 +314,23 @@ def _scale_poscar(src, dst, factor):
 
 
 def describe(records, notes, skipped, limit=4):
-    """apply() 결과를 사람이 읽을 문장으로."""
+    """apply()'s result as sentences for a human to read."""
     lines = list(notes)
-    lines.append("배열 %d개의 셀을 다시 썼습니다." % len(records))
+    lines.append("Rewrote the cell of %d configuration(s)." % len(records))
     if records:
         xs = [r["x"] for r in records]
-        lines.append("  조성 범위 %.4g ~ %.4g" % (min(xs), max(xs)))
+        lines.append("  composition range %.4g ~ %.4g" % (min(xs), max(xs)))
         for r in sorted(records, key=lambda r: r["x"])[:2] + \
                 sorted(records, key=lambda r: -r["x"])[:1]:
-            lines.append("    %-10s x=%-6.4g 배율 %s"
+            lines.append("    %-10s x=%-6.4g factor %s"
                          % (r["name"], r["x"],
                             " ".join("%.6f" % v for v in r["factor"])))
     if skipped:
-        lines.append("  건너뛴 것 %d개:" % len(skipped))
+        lines.append("  %d skipped:" % len(skipped))
         for name, why in skipped[:limit]:
             lines.append("    %-10s %s" % (name, why))
         if len(skipped) > limit:
-            lines.append("    ... (%d개 더)" % (len(skipped) - limit))
-    lines.append("  POS 를 읽어 POSCAR 로 쓰므로 여러 번 돌려도 결과가 같습니다.")
+            lines.append("    ... (%d more)" % (len(skipped) - limit))
+    lines.append("  Reads POS and writes POSCAR, so running this more than "
+                 "once gives the same result.")
     return "\n".join(lines)

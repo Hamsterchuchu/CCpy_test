@@ -1,18 +1,21 @@
 # -*- coding: utf-8 -*-
-"""CASM 외부 바이너리(mainclust) 구동 모듈.
+"""Driver module for CASM's external binary (mainclust).
 
-mainclust 는 대화식으로만 동작하도록 만들어져 있고, 어떤 질문이 나오는지는
-작업 디렉토리에 어떤 파일이 이미 있는지에 따라 달라진다. 예를 들어 첫 실행에는
-eci.in 이 없으므로 그 질문 자체가 나오지 않고, supercells 질문에 read(1) 로
-답하면 뒤따르는 max volume / dimension 질문이 통째로 생략된다.
+mainclust only works interactively, and which questions come up depends on
+which files are already in the working directory. For example, on a first
+run there's no eci.in yet, so that question never appears at all, and
+answering the supercells question with read(1) skips the whole max
+volume / dimension question that would otherwise follow.
 
-그래서 "정해진 순서로 답을 밀어넣는" 방식은 위험하다. 파일 상태가 예상과
-조금만 달라도 답이 밀려서 엉뚱한 질문에 엉뚱한 값이 들어가고, mainclust 는
-그것을 조용히 받아들인다. 이 모듈은 대신 **화면에 뜬 질문 문구를 정규식으로
-알아보고 그 질문에 해당하는 답을 넣는다.**
+So "push answers in a fixed order" is dangerous. If the file state differs
+from what was expected by even a little, the answers get shifted, the wrong
+value lands on the wrong question, and mainclust accepts it silently. This
+module instead **recognizes the question text on screen with a regex and
+supplies the answer that matches that question.**
 
-mainclust 는 stdout 이 파이프면 블록 버퍼링을 하므로 질문이 제때 보이지 않는다.
-따라서 의사 터미널(pty)을 붙여 대화식으로 실행할 때와 같은 줄 버퍼링을 얻는다.
+mainclust block-buffers stdout when it's a pipe, so questions don't show up
+in time. A pseudo-terminal (pty) is attached instead, to get the same
+line-buffering as running it interactively.
 """
 
 import os
@@ -32,58 +35,64 @@ except ImportError:                                   # pragma: no cover
     _HAS_PTY = False
 
 
-#: 실행 파일 이름. 관례상 계 폴더마다 복사해 두고 썼지만, resolve_binary() 가
-#: 여러 자리를 순서대로 뒤지므로 이제 한 곳에 두면 된다.
+#: Executable name. By convention it used to be copied into every system's
+#: folder, but now that resolve_binary() searches several locations in
+#: order, one copy in one place is enough.
 DEFAULT_BINARY = "mainclust"
 
-#: 실행 파일 경로를 직접 지정하는 환경변수 (CCpy_SERVER 와 같은 형식).
+#: Environment variable for pointing directly at the executable path (same
+#: style as CCpy_SERVER).
 BINARY_ENV = "CCpy_MAINCLUST"
 
-#: mainclust 가 이어 붙일 원소별 POTCAR 의 파일명 접두사.
+#: Filename prefix for the per-element POTCARs mainclust concatenates.
 POTCAR_PREFIX = "POTCAR_"
 
-#: mainclust 가 각 배열 디렉토리로 복사하는 템플릿. 없으면 디렉토리를 아예
-#: 만들지 않으면서도 정상 종료한다(아래 check_templates 참고).
+#: Templates mainclust copies into each configuration's directory. Without
+#: them it exits normally without creating any directories at all (see
+#: check_templates below).
 REQUIRED_TEMPLATES = ("INCAR", "KPOINTS")
 
-#: 질문 키 -> (정규식, 사람이 읽을 설명). mainclust 바이너리에서 추출한 문구다.
-#: 순서는 실제로 나타나는 순서지만, 매칭은 순서와 무관하게 이루어진다.
+#: Question key -> (regex, human-readable description). Text extracted from
+#: the mainclust binary. The order here is the order they actually appear
+#: in, but matching itself is order-independent.
 PROMPT_SPECS = (
     ("eci",
      r"generate\s*\(0\)\s*or\s*keep\s*\(1\)\s*eci\.in",
-     "eci.in 을 새로 만들지(0) 그대로 둘지(1)"),
+     "whether to regenerate eci.in (0) or keep it (1)"),
     ("supercells",
      r"generate\s*\(0\)\s*or\s*read\s*\(1\)\s*supercells",
-     "supercell 을 새로 만들지(0) 읽을지(1)"),
+     "whether to generate supercells (0) or read them (1)"),
     ("max_volume",
      r"enter the maximum supercell volume",
-     "최대 supercell 부피"),
+     "maximum supercell volume"),
     ("dimension",
      r"generate 3-dimensional or 2-dimensional supercells",
-     "3차원(3)인지 2차원(2)인지"),
+     "whether to generate 3-dimensional (3) or 2-dimensional (2) supercells"),
     ("configuration",
      r"generate\s*\(0\)\s*or\s*read\s*\(1\)\s*configuration and configuration\.corr",
-     "configuration 을 새로 만들지(0) 읽을지(1)"),
+     "whether to generate configuration (0) or read it (1)"),
     ("make_dirs",
      r"generate\s*\(0\)\s*or\s*read\s*\(1\)\s*make_dirs",
-     "make_dirs 를 새로 만들지(0) 읽을지(1)"),
+     "whether to generate make_dirs (0) or read it (1)"),
     ("energy",
      r"generate\s*\(0\)\s*or\s*read\s*\(1\)\s*energy and corr\.in",
-     "energy / corr.in 을 새로 만들지(0) 읽을지(1)"),
+     "whether to generate energy / corr.in (0) or read them (1)"),
     ("reference",
      r"generate\s*\(0\)\s*or\s*keep\s*\(1\)\s*reference",
-     "reference 를 새로 만들지(0) 그대로 둘지(1)"),
+     "whether to regenerate reference (0) or keep it (1)"),
 )
 
 _COMPILED = tuple((key, re.compile(pat), desc) for key, pat, desc in PROMPT_SPECS)
 
-#: 정상 실행이면 마지막에 반드시 나오는 문구.
+#: Text that is always printed at the end of a normal run.
 _DONE_RE = re.compile(r"CASM code has completed successfully")
 
-#: 정상 진행 표시. 몇 번째 checkpoint 까지 갔는지로 어디서 멈췄는지 알 수 있다.
+#: Normal-progress marker. Which checkpoint number was reached tells us
+#: where things stopped.
 _CHECKPOINT_RE = re.compile(r"Checkpoint\s+(\d+)")
 
-#: 실행이 정상이어도 뜨는 안내문. 오류로 오해하지 않도록 모아둔다.
+#: Messages that print even on a normal run. Collected here so they aren't
+#: mistaken for errors.
 BENIGN_MESSAGES = (
     "No SPECIES file in the current directory",
     "No CSPECS file in the current directory",
@@ -95,7 +104,7 @@ BENIGN_MESSAGES = (
 
 
 class MainclustError(RuntimeError):
-    """mainclust 구동 중 발생한 오류."""
+    """An error that occurred while driving mainclust."""
 
     def __init__(self, message, transcript=None):
         super(MainclustError, self).__init__(message)
@@ -103,18 +112,19 @@ class MainclustError(RuntimeError):
 
 
 class MainclustResult(object):
-    """한 번의 mainclust 실행 결과."""
+    """The result of one mainclust run."""
 
     def __init__(self, returncode, transcript, answered, unused, checkpoints, completed):
         self.returncode = returncode
         self.transcript = transcript
-        #: [(질문키, 답)] — 실제로 나타난 질문과 넣은 답을 나타난 순서대로
+        #: [(question key, answer)] -- the questions that actually appeared
+        #: and the answers supplied, in the order they appeared.
         self.answered = answered
-        #: 준비했지만 한 번도 나타나지 않은 질문키
+        #: Question keys that were prepared but never appeared.
         self.unused = unused
-        #: 통과한 checkpoint 번호 목록
+        #: List of checkpoint numbers passed.
         self.checkpoints = checkpoints
-        #: "CASM code has completed successfully" 를 보았는가
+        #: Whether "CASM code has completed successfully" was seen.
         self.completed = completed
 
     @property
@@ -126,20 +136,21 @@ class MainclustResult(object):
         return ("exit=%s completed=%s checkpoint=%s\n  answered: %s"
                 % (self.returncode, self.completed,
                    max(self.checkpoints) if self.checkpoints else "-",
-                   seq or "(없음)"))
+                   seq or "(none)"))
 
     def __repr__(self):                                # pragma: no cover
         return "<MainclustResult %s>" % self.summary().replace("\n", " ")
 
 
 # ----------------------------------------------------------------------------
-# 표준 답안 세트
+# Standard answer sets
 # ----------------------------------------------------------------------------
 
 def answers_enumerate(max_volume=1, dimension=3):
-    """새로 열거한다. PRIM 을 바꾼 뒤 돌리는 경우가 여기에 해당한다.
+    """A fresh enumeration. Use this after changing PRIM and re-running.
 
-    기존 결과가 있으면 전부 새로 만들고(0), 없으면 그 질문은 나타나지 않는다.
+    If a previous result exists it is regenerated entirely (0); if not,
+    that question simply doesn't appear.
     """
     return {
         "eci": 0,
@@ -154,12 +165,13 @@ def answers_enumerate(max_volume=1, dimension=3):
 
 
 def answers_reuse(energy=0, reference=0):
-    """이미 만들어 둔 열거 결과를 그대로 읽어 VASP 입력 디렉토리를 만든다.
+    """Read back an existing enumeration to build VASP input directories.
 
-    make_dirs 의 make 플래그를 1 로 바꾼 뒤 이 답안으로 다시 돌리면
-    con* 디렉토리가 생성된다. 교안의 "1 1 1 1 0 0" 이 이것이다.
+    Flip make_dirs's make flags to 1 and run again with these answers, and
+    the con* directories get created. This is the "1 1 1 1 0 0" from the
+    course notes.
 
-    energy / reference 는 계에 따라 0(새로 생성) 또는 1(읽기)을 쓴다.
+    energy / reference use 0 (regenerate) or 1 (read), depending on the system.
     """
     return {
         "eci": 1,
@@ -172,11 +184,12 @@ def answers_reuse(energy=0, reference=0):
 
 
 # ----------------------------------------------------------------------------
-# 실행 파일 찾기
+# Locating the executable
 # ----------------------------------------------------------------------------
 
 def _config_dir():
-    """설정 폴더 경로 문자열. CCpy 설정 모듈을 못 읽으면 관례 경로로 대신한다."""
+    """Config folder path as a string. Falls back to the conventional path
+    if CCpy's config module can't be imported."""
     try:
         from CCpy.Tools.CCpyConfig import config_home
         return str(config_home())
@@ -185,7 +198,8 @@ def _config_dir():
 
 
 def _executable(path):
-    """실행 가능한 파일이면 절대경로, 없으면 None. 있는데 권한이 없으면 오류."""
+    """Absolute path if it's an executable file, None if it doesn't exist.
+    Raises if it exists but isn't permitted to execute."""
     if not path:
         return None
     full = os.path.abspath(os.path.expanduser(os.path.expandvars(str(path))))
@@ -193,26 +207,29 @@ def _executable(path):
         return None
     if not os.access(full, os.X_OK):
         raise MainclustError(
-            "%s 에 실행 권한이 없습니다. chmod +x 로 붙여 주세요." % full)
+            "%s is not executable. Please chmod +x it." % full)
     return full
 
 
 def resolve_binary(binary=None, workdir="."):
-    """mainclust 실행 파일의 절대 경로를 찾는다.
+    """Find the absolute path to the mainclust executable.
 
-    mainclust 는 출처와 라이선스가 분명치 않은 컴파일된 외부 바이너리라
-    저장소에 넣지 않는다. 그렇다고 계 폴더마다 674 KB 를 복사해 두게 하면
-    폴더가 늘어날수록 어느 것이 최신인지 알 수 없어진다. 그래서 아래 순서로
-    찾는다 — 앞에서 찾으면 뒤는 보지 않는다.
+    mainclust is a compiled external binary of unclear origin and license,
+    so it is not kept in the repository. But copying 674 KB into every
+    system's folder means it becomes unclear, as folders pile up, which copy
+    is current. So it is searched for in the following order -- once found,
+    later locations are not checked.
 
-    1. ``binary`` 에 경로를 준 경우 그 경로 (상대경로면 ``workdir`` 기준)
-    2. 환경변수 ``$CCpy_MAINCLUST``
-    3. 설정 폴더 ``~/.CCpy_test/mainclust`` (``$CCpy_HOME`` 로 옮길 수 있다)
-    4. 작업 디렉토리 안 (기존 관례. 그대로 쓰던 폴더가 깨지지 않도록 남긴다)
+    1. The path given in ``binary`` (relative to ``workdir`` if not absolute)
+    2. The environment variable ``$CCpy_MAINCLUST``
+    3. The config folder ``~/.CCpy_test/mainclust`` (movable via ``$CCpy_HOME``)
+    4. Inside the working directory (the old convention, kept so folders
+       people already used this way don't break)
     5. ``$PATH``
 
-    1번만 예외로, 경로를 직접 준 것이 없으면 즉시 오류를 낸다. 지정한 경로가
-    틀렸는데 조용히 다른 곳의 바이너리로 돌아버리면 안 되기 때문이다.
+    Only case 1 is an exception: if a path was given directly and it's
+    wrong, this fails immediately rather than silently falling back to some
+    other binary.
     """
     name = str(binary) if binary else DEFAULT_BINARY
     tried = []
@@ -226,20 +243,20 @@ def resolve_binary(binary=None, workdir="."):
     if binary and (os.sep in name or name.startswith("~") or name.startswith(".")):
         expanded = os.path.expanduser(os.path.expandvars(name))
         base = expanded if os.path.isabs(expanded) else os.path.join(workdir, expanded)
-        found = _try("지정한 경로", base)
+        found = _try("given path", base)
         if found:
             return found
-        raise MainclustError("mainclust 를 찾지 못했습니다: %s" % tried[-1][1])
+        raise MainclustError("Could not find mainclust at: %s" % tried[-1][1])
 
-    found = _try("환경변수 $%s" % BINARY_ENV, os.environ.get(BINARY_ENV))
+    found = _try("environment variable $%s" % BINARY_ENV, os.environ.get(BINARY_ENV))
     if found:
         return found
 
-    found = _try("설정 폴더", os.path.join(_config_dir(), name))
+    found = _try("config folder", os.path.join(_config_dir(), name))
     if found:
         return found
 
-    found = _try("작업 디렉토리", os.path.join(workdir, name))
+    found = _try("working directory", os.path.join(workdir, name))
     if found:
         return found
 
@@ -249,46 +266,51 @@ def resolve_binary(binary=None, workdir="."):
         return os.path.abspath(hit)
 
     raise MainclustError(
-        "mainclust 를 찾지 못했습니다. 아래를 순서대로 찾아보았습니다.\n"
+        "Could not find mainclust. Looked in the following places, in order:\n"
         + "\n".join("  %-14s %s" % (d, p) for d, p in tried)
-        + "\n\nmainclust 는 저장소에 들어 있지 않은 외부 바이너리입니다. 한 번 받아\n"
+        + "\n\nmainclust is an external binary not included in the repository. "
+          "Fetch it once and place it at\n"
           "  %s\n"
-          "에 두거나 $%s 로 경로를 지정해 두면 계 폴더마다 복사하지 않아도 됩니다."
+          "or set $%s to its path, so it doesn't need to be copied into every "
+          "system's folder."
           % (os.path.join(_config_dir(), DEFAULT_BINARY), BINARY_ENV))
 
 
 # ----------------------------------------------------------------------------
-# POTCAR 확인
+# Checking POTCARs
 # ----------------------------------------------------------------------------
 
 def prim_elements(workdir=".", prim="PRIM"):
-    """PRIM 에 등장하는 원소를 순서대로. 읽을 수 없으면 MainclustError."""
+    """Elements appearing in PRIM, in order. Raises MainclustError if it
+    can't be read."""
     path = prim if os.path.isabs(prim) else os.path.join(workdir, prim)
     if not os.path.isfile(path):
-        raise MainclustError("%s 가 없습니다." % path)
+        raise MainclustError("%s is missing." % path)
     try:
         from CCpy.CASM.CASMprim import Prim
     except ImportError as err:                         # pragma: no cover
-        raise MainclustError("CASMprim 을 불러오지 못했습니다: %s" % err)
+        raise MainclustError("Could not import CASMprim: %s" % err)
     return Prim.read(path).elements
 
 
 def check_potcar_sources(workdir=".", elements=None, prim="PRIM"):
-    """con* 를 만들기 전에 원소별 POTCAR 가 제대로 있는지 본다.
+    """Check that a per-element POTCAR is properly present, before creating con*.
 
-    mainclust 는 ``POTCAR_<원소>`` 를 이어 붙여 각 배열의 POTCAR 를 만드는데,
-    그 파일이 없어도 **오류를 내지 않고 0바이트 POTCAR 를 만든 뒤 그냥 넘어간다.**
-    실습 폴더에서 실제로 그런 배열이 나왔다. 계산을 256개 제출하고 나서야
-    알게 되는 종류의 실패라, 만들기 전에 여기서 막는다.
+    mainclust concatenates ``POTCAR_<element>`` to build each configuration's
+    POTCAR, and if that file is missing it **does not raise an error -- it
+    silently makes a 0-byte POTCAR and moves on.** This actually happened to
+    a configuration in a working folder. It's the kind of failure you only
+    find out about after submitting 256 calculations, so it's caught here
+    before anything is built.
 
     Returns
     -------
-    [(원소, 경로, 바이트)]
+    [(element, path, bytes)]
     """
     if elements is None:
         elements = prim_elements(workdir, prim)
     if not elements:
-        raise MainclustError("PRIM 에서 원소를 찾지 못했습니다.")
+        raise MainclustError("Could not find any elements in PRIM.")
 
     ok, missing, empty = [], [], []
     for elt in elements:
@@ -301,22 +323,24 @@ def check_potcar_sources(workdir=".", elements=None, prim="PRIM"):
             ok.append((elt, path, os.path.getsize(path)))
 
     if missing or empty:
-        lines = ["원소별 POTCAR 가 준비되지 않았습니다."]
+        lines = ["Per-element POTCARs are not ready."]
         if missing:
-            lines.append("  없음   : " + ", ".join(os.path.basename(p) for p in missing))
+            lines.append("  missing : " + ", ".join(os.path.basename(p) for p in missing))
         if empty:
-            lines.append("  0바이트: " + ", ".join(os.path.basename(p) for p in empty))
+            lines.append("  0 bytes : " + ", ".join(os.path.basename(p) for p in empty))
         lines.append("")
-        lines.append("  mainclust 는 이 파일이 없어도 오류 없이 0바이트 POTCAR 를 만듭니다.")
-        lines.append("  %s 에 %s 를 두고 다시 실행해 주세요."
-                     % (os.path.abspath(workdir),
-                        " ".join(POTCAR_PREFIX + e for e in elements)))
+        lines.append("  mainclust makes a 0-byte POTCAR without an error even "
+                     "when this file is missing.")
+        lines.append("  Please place %s in %s and run again."
+                     % (" ".join(POTCAR_PREFIX + e for e in elements),
+                        os.path.abspath(workdir)))
         raise MainclustError("\n".join(lines))
     return ok
 
 
 def _titel_element(line):
-    """POTCAR 의 TITEL 줄에서 원소 기호만. 못 읽으면 None.
+    """Just the element symbol from a POTCAR's TITEL line. None if it can't
+    be read.
 
     ``TITEL  = PAW_PBE Cu_pv 22Jun2005`` -> ``Cu``
     """
@@ -331,10 +355,12 @@ def _titel_element(line):
 
 
 def _pos_counts(path):
-    """POS/POSCAR 의 원소별 개수 줄을 [정수] 로. 확실치 않으면 None.
+    """The per-element count line of a POS/POSCAR, as a list of ints. None
+    if it isn't clear.
 
-    CASM 이 쓰는 POS 는 VASP4 형식이라 원소 이름 줄이 없다. 좌표계 줄
-    (Direct/Cartesian) 바로 앞의 정수 줄이 개수 줄이다.
+    The POS that CASM uses is VASP4 format, so there is no element-name
+    line. The integer line right before the coordinate-system line
+    (Direct/Cartesian) is the count line.
     """
     try:
         with open(path) as f:
@@ -342,7 +368,7 @@ def _pos_counts(path):
     except OSError:                                    # pragma: no cover
         return None
     for i, line in enumerate(lines):
-        if i < 5:                     # 축척 1 + 격자 3 + 개수 1 보다 앞일 수 없다
+        if i < 5:                     # can't come before scale(1) + lattice(3) + counts(1)
             continue
         if line.strip()[:1].upper() not in ("D", "C", "S"):
             continue
@@ -359,16 +385,17 @@ def _pos_counts(path):
 
 
 def check_templates(workdir=".", names=REQUIRED_TEMPLATES):
-    """con* 를 만들기 전에 mainclust 가 복사할 템플릿이 있는지 본다.
+    """Check that the templates mainclust will copy exist, before creating con*.
 
-    이것도 조용한 실패다. INCAR / KPOINTS 가 작업 디렉토리에 없으면 mainclust 는
-    **배열 디렉토리를 하나도 만들지 않으면서 정상 종료한다.** exit 0, checkpoint 6,
-    "CASM code has completed successfully" 까지 그대로 찍는다. 컨테이너에서
-    Cu-Ir 로 확인했다 — 템플릿이 없으면 0개, 있으면 21개.
+    This is also a silent failure. If INCAR / KPOINTS are missing from the
+    working directory, mainclust **exits normally without creating a single
+    configuration directory.** It still prints exit 0, checkpoint 6, and
+    "CASM code has completed successfully". Confirmed in a container with
+    Cu-Ir -- 0 directories without the templates, 21 with them.
 
     Returns
     -------
-    [(이름, 경로, 바이트)]
+    [(name, path, bytes)]
     """
     ok, missing, empty = [], [], []
     for name in names:
@@ -381,32 +408,34 @@ def check_templates(workdir=".", names=REQUIRED_TEMPLATES):
             ok.append((name, path, os.path.getsize(path)))
 
     if missing or empty:
-        lines = ["mainclust 가 배열 디렉토리로 복사할 템플릿이 없습니다."]
+        lines = ["Templates for mainclust to copy into configuration directories are missing."]
         if missing:
-            lines.append("  없음   : " + ", ".join(missing))
+            lines.append("  missing : " + ", ".join(missing))
         if empty:
-            lines.append("  0바이트: " + ", ".join(empty))
+            lines.append("  0 bytes : " + ", ".join(empty))
         lines.append("")
-        lines.append("  이대로 두면 mainclust 는 오류 없이 정상 종료하면서")
-        lines.append("  배열 디렉토리를 하나도 만들지 않습니다.")
-        lines.append("  %s 에 파일을 두고 다시 실행해 주세요." % os.path.abspath(workdir))
+        lines.append("  Left as is, mainclust will exit normally without an error")
+        lines.append("  and without creating a single configuration directory.")
+        lines.append("  Please place the file(s) in %s and run again." % os.path.abspath(workdir))
         raise MainclustError("\n".join(lines))
     return ok
 
 
 def check_generated_potcars(workdir=".", dirs=None, elements=None, prim="PRIM"):
-    """만들어진 con*/POTCAR 가 온전한지 본다.
+    """Check that the con*/POTCAR files that got created are intact.
 
-    POTCAR 의 TITEL 개수는 **그 배열에 실제로 들어 있는 원소 수**와 같아야 한다.
-    순수 끝점(전부 Cu, 전부 Ir)은 원소가 하나뿐이라 TITEL 도 하나다. 그래서
-    PRIM 의 원소 수와 비교하면 안 되고, POS 의 개수 줄과 맞춰 본다.
+    The number of TITELs in a POTCAR must equal **the number of elements
+    actually present in that configuration**. A pure endpoint (all Cu, all
+    Ir) has only one element and so only one TITEL. So this cannot be
+    compared against PRIM's element count -- it's checked against POS's
+    count line instead.
 
-    TITEL 에 적힌 원소가 PRIM 에 없는 것이면 엉뚱한 POTCAR_ 를 둔 것이므로
-    함께 걸러낸다.
+    An element named in a TITEL that isn't in PRIM means a wrong POTCAR_ was
+    placed there, so that is also flagged.
 
     Returns
     -------
-    (검사한 개수, [(디렉토리, 문제 설명)])
+    (number checked, [(directory, description of the problem)])
     """
     from CCpy.CASM.CASMkpoints import config_dirs
     if dirs is None:
@@ -421,68 +450,70 @@ def check_generated_potcars(workdir=".", dirs=None, elements=None, prim="PRIM"):
     for d in dirs:
         path = os.path.join(d, "POTCAR")
         if not os.path.isfile(path):
-            bad.append((d, "POTCAR 없음"))
+            bad.append((d, "POTCAR missing"))
             continue
         if os.path.getsize(path) == 0:
-            bad.append((d, "0바이트"))
+            bad.append((d, "0 bytes"))
             continue
         try:
             with open(path) as f:
                 titels = [_titel_element(ln) for ln in f
                           if "TITEL" in ln and "=" in ln]
         except OSError as err:                         # pragma: no cover
-            bad.append((d, "읽지 못함: %s" % err))
+            bad.append((d, "could not read: %s" % err))
             continue
         titels = [t for t in titels if t]
         if not titels:
-            bad.append((d, "TITEL 이 없음 (POTCAR 형식이 아님)"))
+            bad.append((d, "no TITEL lines (not POTCAR format)"))
             continue
 
         counts = _pos_counts(os.path.join(d, "POS"))
         if counts is not None and len(titels) != len(counts):
-            bad.append((d, "TITEL %d개 (POS 원소 %d종)" % (len(titels), len(counts))))
+            bad.append((d, "%d TITEL(s) (POS has %d element(s))" % (len(titels), len(counts))))
             continue
         if elements:
             odd = [t for t in titels if t not in elements]
             if odd:
-                bad.append((d, "PRIM 에 없는 원소: %s" % ", ".join(odd)))
+                bad.append((d, "element(s) not in PRIM: %s" % ", ".join(odd)))
 
     return len(dirs), bad
 
 
 def describe_potcars(total, bad, limit=6):
-    """check_generated_potcars 결과를 사람이 읽을 한 덩어리로."""
+    """check_generated_potcars's result as a single human-readable block."""
     if not bad:
-        return "  POTCAR %d개 확인 — 모두 정상." % total
-    out = ["  POTCAR %d개 중 %d개가 이상합니다:" % (total, len(bad))]
+        return "  Checked %d POTCAR(s) -- all fine." % total
+    out = ["  %d of %d POTCAR(s) have a problem:" % (len(bad), total)]
     for d, why in bad[:limit]:
         out.append("    %-12s %s" % (os.path.basename(d), why))
     if len(bad) > limit:
-        out.append("    ... 그 밖 %d개" % (len(bad) - limit))
+        out.append("    ... (%d more)" % (len(bad) - limit))
     return "\n".join(out)
 
 
 # ----------------------------------------------------------------------------
-# 드라이버
+# Driver
 # ----------------------------------------------------------------------------
 
 class MainclustDriver(object):
-    """mainclust 를 사람 없이 구동한다.
+    """Drives mainclust without a human present.
 
     Parameters
     ----------
     workdir : str
-        mainclust 를 돌릴 디렉토리. PRIM 등 입력이 여기 있어야 한다.
+        Directory to run mainclust in. Inputs like PRIM must already be here.
     binary : str or None
-        실행 파일 경로. None 이면 :func:`resolve_binary` 가 환경변수 →
-        설정 폴더 → 작업 디렉토리 → PATH 순서로 찾는다.
+        Path to the executable. If None, :func:`resolve_binary` searches
+        environment variable -> config folder -> working directory -> PATH,
+        in that order.
     idle_timeout : float
-        아무 출력도 없이 이만큼(초) 지나면 멈춘 것으로 본다.
-        Checkpoint 1(대칭 분석)은 큰 셀에서 수 분이 걸릴 수 있으므로 넉넉히 둔다.
+        If no output at all appears for this many seconds, it's treated as
+        stuck. Checkpoint 1 (symmetry analysis) can take several minutes on
+        a large cell, so allow plenty of room.
     total_timeout : float or None
-        전체 실행 시간 상한. None 이면 제한하지 않는다.
+        Overall time limit for the run. None means unlimited.
     echo : bool
-        True 면 mainclust 출력을 그대로 화면에 흘린다.
+        If True, mainclust's output is streamed to the screen as-is.
     """
 
     def __init__(self, workdir=".", binary=None,
@@ -493,24 +524,27 @@ class MainclustDriver(object):
         self.total_timeout = total_timeout
         self.echo = echo
 
-    # -- 경로 ---------------------------------------------------------------
+    # -- paths ----------------------------------------------------------------
 
     def resolve_binary(self):
-        """실행 파일의 절대 경로를 돌려준다. 없으면 MainclustError."""
+        """Return the absolute path to the executable. Raises MainclustError
+        if it can't be found."""
         return resolve_binary(self.binary, self.workdir)
 
-    # -- 실행 ---------------------------------------------------------------
+    # -- run --------------------------------------------------------------------
 
     def run(self, answers, strict=True):
-        """mainclust 를 한 번 돌린다.
+        """Run mainclust once.
 
         Parameters
         ----------
         answers : dict
-            질문키 -> 답. :func:`answers_enumerate` / :func:`answers_reuse` 참고.
+            question key -> answer. See :func:`answers_enumerate` /
+            :func:`answers_reuse`.
         strict : bool
-            True 면 답을 준비하지 않은 질문이 나타났을 때 즉시 중단한다.
-            False 면 그 질문에 빈 줄을 넣고 계속한다(권장하지 않는다).
+            If True, stop immediately when a question with no prepared
+            answer appears. If False, feed that question a blank line and
+            keep going (not recommended).
 
         Returns
         -------
@@ -519,14 +553,14 @@ class MainclustDriver(object):
         unknown = set(answers) - set(k for k, _, _ in _COMPILED)
         if unknown:
             raise MainclustError(
-                "모르는 질문키입니다: %s\n사용 가능: %s"
+                "Unknown question key(s): %s\navailable: %s"
                 % (", ".join(sorted(unknown)),
                    ", ".join(k for k, _, _ in _COMPILED)))
 
         if not _HAS_PTY:                               # pragma: no cover
             raise MainclustError(
-                "이 플랫폼에서는 pty 를 쓸 수 없어 mainclust 를 구동할 수 없습니다. "
-                "리눅스에서 실행해 주세요.")
+                "pty is not available on this platform, so mainclust cannot "
+                "be driven. Please run this on Linux.")
 
         binary = self.resolve_binary()
         return self._run_pty(binary, answers, strict)
@@ -547,7 +581,7 @@ class MainclustDriver(object):
         os.close(slave)
 
         chunks = []
-        pending = ""          # 아직 질문을 찾지 못한 꼬리
+        pending = ""          # tail not yet matched to a question
         answered = []
         checkpoints = []
         completed = False
@@ -560,7 +594,7 @@ class MainclustDriver(object):
                         time.time() - started > self.total_timeout:
                     self._kill(proc)
                     raise MainclustError(
-                        "전체 실행 시간 %.0f 초를 넘겨 중단했습니다."
+                        "Stopped: exceeded the overall time limit of %.0f seconds."
                         % self.total_timeout, "".join(chunks))
 
                 rlist, _, _ = select.select([master], [], [], 1.0)
@@ -591,7 +625,7 @@ class MainclustDriver(object):
                                             master, proc, strict, chunks)
                 else:
                     if proc.poll() is not None:
-                        # 종료 후 남은 출력을 마저 읽는다.
+                        # Drain whatever output is left after exit.
                         tail = self._drain(master)
                         if tail:
                             chunks.append(tail)
@@ -607,9 +641,9 @@ class MainclustDriver(object):
                     if time.time() - last_output > self.idle_timeout:
                         self._kill(proc)
                         raise MainclustError(
-                            "%.0f 초 동안 출력이 없어 중단했습니다. mainclust 가 "
-                            "답을 준비하지 못한 질문에서 멈춰 있을 수 있습니다.\n"
-                            "마지막 출력:\n%s"
+                            "Stopped: no output for %.0f seconds. mainclust may "
+                            "be stuck on a question it has no answer for.\n"
+                            "last output:\n%s"
                             % (self.idle_timeout, _tail("".join(chunks))),
                             "".join(chunks))
         finally:
@@ -628,10 +662,11 @@ class MainclustDriver(object):
         return MainclustResult(returncode, transcript, answered, unused,
                                checkpoints, completed)
 
-    # -- 내부 ---------------------------------------------------------------
+    # -- internals -----------------------------------------------------------
 
     def _consume(self, pending, answers, answered, master, proc, strict, chunks):
-        """pending 에서 찾을 수 있는 질문을 모두 처리하고 남은 꼬리를 돌려준다."""
+        """Handle every question findable in pending, and return the
+        remaining tail."""
         while True:
             best = None
             for key, rx, desc in _COMPILED:
@@ -639,7 +674,8 @@ class MainclustDriver(object):
                 if m and (best is None or m.start() < best[1].start()):
                     best = (key, m, desc)
             if best is None:
-                # 질문 문구가 두 청크에 걸쳐 잘렸을 수 있으므로 꼬리를 남긴다.
+                # Keep a tail since a question's text may be split across
+                # two chunks.
                 return pending[-400:] if len(pending) > 400 else pending
 
             key, m, desc = best
@@ -648,8 +684,8 @@ class MainclustDriver(object):
             elif strict:
                 self._kill(proc)
                 raise MainclustError(
-                    "답을 준비하지 않은 질문이 나왔습니다: '%s' (%s)\n"
-                    "answers 에 '%s' 를 넣어 주세요."
+                    "A question with no prepared answer appeared: '%s' (%s)\n"
+                    "Please add '%s' to answers."
                     % (m.group(0).strip(), desc, key),
                     "".join(chunks))
             else:
@@ -661,7 +697,8 @@ class MainclustDriver(object):
 
     @staticmethod
     def _disable_echo(fd):
-        """pty 에코를 끈다. 우리가 쓴 답이 출력에 섞여 다시 매칭되지 않도록."""
+        """Turn off pty echo, so the answers we write don't get matched
+        again when they come back in the output."""
         try:
             attrs = termios.tcgetattr(fd)
             attrs[3] = attrs[3] & ~termios.ECHO
@@ -714,28 +751,29 @@ def _tail(text, lines=15):
 
 
 # ----------------------------------------------------------------------------
-# 편의 함수
+# Convenience functions
 # ----------------------------------------------------------------------------
 
 def enumerate_configurations(workdir=".", max_volume=1, dimension=3,
                              binary=None, echo=False, **kwargs):
-    """열거만 수행한다(디렉토리는 만들지 않는다). make_dirs 가 생성된다."""
+    """Enumeration only (no directories are created). Produces make_dirs."""
     drv = MainclustDriver(workdir=workdir, binary=binary, echo=echo, **kwargs)
     return drv.run(answers_enumerate(max_volume=max_volume, dimension=dimension))
 
 
 def generate_vasp_inputs(workdir=".", energy=0, reference=0,
                          binary=None, echo=False, check_potcar=True, **kwargs):
-    """make_dirs 를 읽어 con* 디렉토리를 만든다.
+    """Read make_dirs and create the con* directories.
 
-    ``check_potcar`` 가 True 면 만들기 전에 ``POTCAR_<원소>`` 가 있는지 보고,
-    만든 뒤에는 각 배열의 POTCAR 가 비지 않았는지 확인한다. mainclust 는 둘 다
-    조용히 넘어가므로 여기서 막지 않으면 0바이트 POTCAR 로 계산이 제출된다.
+    If ``check_potcar`` is True, checks that ``POTCAR_<element>`` exists
+    before building, and that each configuration's POTCAR is non-empty
+    afterward. mainclust silently lets both slip through, so without this
+    check a 0-byte POTCAR gets submitted for calculation.
 
     Returns
     -------
     MainclustResult
-        ``potcar_report`` 속성에 확인 결과 문자열이 붙는다(확인했을 때).
+        Carries a ``potcar_report`` attribute with the check results (when checked).
     """
     if check_potcar:
         check_templates(workdir)
@@ -748,40 +786,44 @@ def generate_vasp_inputs(workdir=".", energy=0, reference=0,
         total, bad = check_generated_potcars(workdir)
         if total == 0:
             raise MainclustError(
-                "mainclust 는 정상 종료했지만 배열 디렉토리가 하나도 없습니다.\n"
-                "  make_dirs 의 make 플래그가 전부 0 이거나, INCAR / KPOINTS 가\n"
-                "  없어 mainclust 가 조용히 건너뛴 경우입니다.",
+                "mainclust exited normally but created no configuration "
+                "directories at all.\n"
+                "  Either make_dirs's make flags are all 0, or INCAR / KPOINTS\n"
+                "  were missing and mainclust silently skipped everything.",
                 result.transcript)
         result.potcar_report = describe_potcars(total, bad)
         if bad:
             raise MainclustError(
-                "con* 는 만들어졌지만 POTCAR 가 온전하지 않습니다.\n"
+                "con* were created, but the POTCARs are not intact.\n"
                 + result.potcar_report
-                + "\n\n  이대로 제출하면 VASP 가 엉뚱한 계산을 하거나 바로 죽습니다.",
+                + "\n\n  Submitting like this will make VASP compute the wrong "
+                  "thing or die immediately.",
                 result.transcript)
     return result
 
 
 # ----------------------------------------------------------------------------
-# make_dirs 플래그
+# make_dirs flags
 # ----------------------------------------------------------------------------
 
 def set_make_flags(path="make_dirs", value=1, backup=True):
-    """make_dirs 의 make 컬럼을 일괄로 바꾼다 (02_ModiMake.sh 대체).
+    """Bulk-change make_dirs's make column (replaces 02_ModiMake.sh).
 
-    mainclust 는 이 컬럼이 1 인 배열만 VASP 입력 디렉토리로 만든다. 열거
-    직후에는 전부 0 이므로 1 로 바꿔 줘야 한다.
+    mainclust only builds a VASP input directory for configurations where
+    this column is 1. Right after enumeration it's all 0, so it needs to be
+    flipped to 1.
 
-    원본 셸 스크립트는 ``sed -e "s/0     0/1     0/g"`` 처럼 공백 개수에
-    의존해, mainclust 출력 폭이 조금만 달라져도 조용히 아무것도 하지 않았다.
-    여기서는 열로 나눠 다시 쓴다.
+    The original shell script relied on whitespace count, like
+    ``sed -e "s/0     0/1     0/g"``, and silently did nothing the moment
+    mainclust's output width shifted even slightly. Here the line is split
+    into columns and rewritten instead.
 
     Returns
     -------
     (changed, total)
     """
     if not os.path.isfile(path):
-        raise MainclustError("%s 가 없습니다. mainclust 로 열거를 먼저 하세요." % path)
+        raise MainclustError("%s is missing. Run mainclust's enumeration first." % path)
 
     lines = open(path).read().split("\n")
     header, rows, changed = None, [], 0
@@ -799,7 +841,7 @@ def set_make_flags(path="make_dirs", value=1, backup=True):
         rows.append((parts[0], str(value), parts[2]))
 
     if not rows:
-        raise MainclustError("%s 에서 배열 줄을 찾지 못했습니다." % path)
+        raise MainclustError("Could not find any configuration rows in %s." % path)
 
     if backup:
         orig = path + "_orig"

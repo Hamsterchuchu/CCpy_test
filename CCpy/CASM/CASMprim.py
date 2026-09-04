@@ -1,24 +1,29 @@
 # -*- coding: utf-8 -*-
-"""CASM PRIM 파일 생성·편집 모듈.
+"""CASM PRIM file generation/editing module.
 
-PRIM 은 CASM 이 읽는 기본 셀 정의다. POSCAR 와 거의 같은 형식인데 두 가지가
-다르다.
+PRIM is the primitive cell definition CASM reads. Its format is almost the
+same as POSCAR's, with two differences.
 
-1. 원소 목록 줄(POSCAR 6행)이 없다. 원자 개수 줄만 남는다.
-2. 좌표 뒤에 그 자리에 올 수 있는 원소를 모두 적는다(occupancy).
+1. There is no element-list line (POSCAR line 6). Only the atom-count line
+   remains.
+2. Every element that can occupy a site is listed after its coordinates
+   (occupancy).
 
-   0.00000000  0.00000000  0.00000000  Cu Ir     <- Cu 또는 Ir
-   0.00000000  0.00000000  0.00000000  Li Vac    <- Li 또는 빈자리
-   0.00000000  0.16681600  0.12500000  C         <- C 고정
+   0.00000000  0.00000000  0.00000000  Cu Ir     <- Cu or Ir
+   0.00000000  0.00000000  0.00000000  Li Vac    <- Li or a vacancy
+   0.00000000  0.16681600  0.12500000  C         <- C, fixed
 
-원래 이 파일은 VTST 의 ``scale`` (csh + awk) 로 supercell 을 만든 뒤 손으로
-6행을 지우고 원소 이름을 붙여 만들었다. ``scale`` 은 POTCAR 를 요구하지만
-거기서 읽는 값(TITEL, RWIGS)은 마지막에 삭제되는 임시 파일에만 쓰이므로
-실제로는 필요 없다. 이 모듈은 POTCAR 도 csh 도 없이 같은 일을 한다.
+This file used to be made by building a supercell with VTST's ``scale``
+(csh + awk), then deleting line 6 by hand and attaching the element names.
+``scale`` requires a POTCAR, but the values it reads from one (TITEL, RWIGS)
+only go into a temporary file that gets deleted at the end, so it is not
+actually needed. This module does the same job without POTCAR or csh.
 
-자리 복제 순서는 ``scale`` 과 같게 맞췄다(원자마다 z→x→y 순으로 이미지 생성).
-이원계처럼 전 자리 occupancy 가 같으면 순서는 결과에 영향이 없지만, Li-C 처럼
-자리마다 occupancy 가 다르면 순서가 곧 의미이므로 원본과 어긋나지 않게 둔다.
+The site-replication order is matched to ``scale``'s (each atom's images are
+made in z -> x -> y order). For a binary, where every site's occupancy is the
+same, the order does not affect the result, but for something like Li-C where
+occupancy differs per site, the order itself carries meaning, so it is kept
+matched to the original.
 """
 
 import os
@@ -31,22 +36,23 @@ VACANCY = "Vac"
 
 
 class PrimError(ValueError):
-    """PRIM 을 만들거나 읽는 중 발생한 오류."""
+    """Raised while building or reading a PRIM."""
 
 
 class Prim(object):
-    """PRIM 파일 한 벌.
+    """One PRIM file.
 
     Attributes
     ----------
     title : str
     scale : float
     lattice : (3,3) ndarray
-        행이 격자벡터 a, b, c.
+        Rows are the lattice vectors a, b, c.
     coords : (N,3) ndarray
-        분수좌표.
+        Fractional coordinates.
     occupancies : list[list[str]]
-        자리마다 올 수 있는 원소 목록. ``["Cu","Ir"]``, ``["Li","Vac"]``, ``["C"]``.
+        The elements each site can hold. ``["Cu","Ir"]``, ``["Li","Vac"]``,
+        ``["C"]``.
     """
 
     def __init__(self, title, scale, lattice, coords, occupancies):
@@ -56,22 +62,22 @@ class Prim(object):
         self.coords = np.asarray(coords, dtype=float).reshape(-1, 3)
         self.occupancies = [list(o) for o in occupancies]
         if len(self.coords) != len(self.occupancies):
-            raise PrimError("좌표 수(%d)와 occupancy 수(%d)가 다릅니다."
+            raise PrimError("Coordinate count (%d) and occupancy count (%d) differ."
                             % (len(self.coords), len(self.occupancies)))
 
-    # -- 성질 --------------------------------------------------------------
+    # -- properties ----------------------------------------------------------
 
     def __len__(self):
         return len(self.coords)
 
     @property
     def lengths(self):
-        """격자벡터 길이 a, b, c (Å). scale 을 곱한 값이다."""
+        """Lattice vector lengths a, b, c (A). scale already multiplied in."""
         return np.linalg.norm(self.lattice, axis=1) * self.scale
 
     @property
     def elements(self):
-        """등장하는 모든 원소(Vac 제외)를 처음 나온 순서대로."""
+        """Every element that appears (excluding Vac), in first-seen order."""
         seen = []
         for occ in self.occupancies:
             for e in occ:
@@ -81,11 +87,12 @@ class Prim(object):
 
     @property
     def mixed_sites(self):
-        """occupancy 가 둘 이상인 자리의 인덱스."""
+        """Indices of sites whose occupancy has more than one element."""
         return [i for i, o in enumerate(self.occupancies) if len(o) > 1]
 
     def groups(self):
-        """occupancy 가 같은 자리를 연속 구간으로 묶어 [(개수, occupancy)] 로."""
+        """Group consecutive sites of the same occupancy into
+        [(count, occupancy)]."""
         out = []
         for occ in self.occupancies:
             if out and out[-1][1] == occ:
@@ -94,12 +101,14 @@ class Prim(object):
                 out.append([1, list(occ)])
         return [(n, o) for n, o in out]
 
-    # -- 입출력 ------------------------------------------------------------
+    # -- I/O -------------------------------------------------------------
 
     def to_string(self):
-        # CONTCAR 와 같은 16자리를 쓴다. 원본 scale 은 awk OFMT 때문에 8자리로
-        # 잘렸는데(격자상수에서 ~1e-9 Å 손실), 그 절삭을 따라할 이유가 없다.
-        # supercell 부피가 2 이상인 배열에서는 이 차이가 POS 좌표에 드러난다.
+        # Uses the same 16 digits as CONTCAR. The original scale was
+        # truncated to 8 digits because of awk's OFMT (losing ~1e-9 A in the
+        # lattice constant), and there is no reason to imitate that
+        # truncation. In a configuration whose supercell volume is 2 or more,
+        # this difference shows up in the POS coordinates.
         lines = [self.title,
                  "%20.14f" % self.scale]
         for v in self.lattice:
@@ -121,50 +130,50 @@ class Prim(object):
     def from_string(cls, text):
         raw = text.rstrip("\n").split("\n")
         if len(raw) < 8:
-            raise PrimError("PRIM 이 너무 짧습니다(%d줄). 최소 8줄이 필요합니다." % len(raw))
+            raise PrimError("PRIM is too short (%d line(s)). At least 8 lines are needed." % len(raw))
 
         title = raw[0].rstrip()
         try:
             scale = float(raw[1].split()[0])
         except (IndexError, ValueError):
-            raise PrimError("2행에서 scale 값을 읽지 못했습니다: %r" % raw[1])
+            raise PrimError("Could not read the scale value on line 2: %r" % raw[1])
 
         lattice = []
         for i in (2, 3, 4):
             parts = raw[i].split()
             if len(parts) < 3:
-                raise PrimError("%d행이 격자벡터가 아닙니다: %r" % (i + 1, raw[i]))
+                raise PrimError("Line %d is not a lattice vector: %r" % (i + 1, raw[i]))
             lattice.append([float(x) for x in parts[:3]])
 
         counts_line = raw[5].split()
         if not counts_line or not all(p.isdigit() for p in counts_line):
             raise PrimError(
-                "6행이 원자 개수 줄이 아닙니다: %r\n"
-                "PRIM 에는 원소 이름 줄이 없어야 합니다 — POSCAR 를 그대로 쓰셨는지 "
-                "확인해 주세요." % raw[5])
+                "Line 6 is not an atom-count line: %r\n"
+                "PRIM must not have an element-name line -- please check "
+                "whether a POSCAR was used as-is." % raw[5])
         total = sum(int(p) for p in counts_line)
 
         mode = raw[6].strip()
         if not mode[:1].lower() in ("d", "c", "k"):
-            raise PrimError("7행이 좌표계 표시(Direct/Cartesian)가 아닙니다: %r" % raw[6])
+            raise PrimError("Line 7 is not a coordinate-mode line (Direct/Cartesian): %r" % raw[6])
         if mode[:1].lower() != "d":
-            raise PrimError("Direct(분수) 좌표만 지원합니다. 현재: %r" % mode)
+            raise PrimError("Only Direct (fractional) coordinates are supported. Got: %r" % mode)
 
         coords, occs = [], []
         for i in range(total):
             idx = 7 + i
             if idx >= len(raw):
-                raise PrimError("좌표가 %d개여야 하는데 %d개뿐입니다." % (total, len(coords)))
+                raise PrimError("Expected %d coordinate(s) but got only %d." % (total, len(coords)))
             parts = raw[idx].split()
             if len(parts) < 3:
-                raise PrimError("%d행에서 좌표를 읽지 못했습니다: %r" % (idx + 1, raw[idx]))
+                raise PrimError("Could not read the coordinates on line %d: %r" % (idx + 1, raw[idx]))
             coords.append([float(x) for x in parts[:3]])
             occ = [p for p in parts[3:] if re.match(r"^[A-Za-z]", p)]
             if not occ:
                 raise PrimError(
-                    "%d행에 occupancy 가 없습니다: %r\n"
-                    "각 좌표 뒤에 그 자리에 올 수 있는 원소를 적어야 합니다 "
-                    "(예: 'Cu Ir', 'Li Vac', 'C')." % (idx + 1, raw[idx]))
+                    "Line %d has no occupancy: %r\n"
+                    "Each coordinate must be followed by the elements that "
+                    "can occupy that site (e.g. 'Cu Ir', 'Li Vac', 'C')." % (idx + 1, raw[idx]))
             occs.append(occ)
 
         return cls(title, scale, lattice, coords, occs)
@@ -185,29 +194,30 @@ class Prim(object):
 
 
 # ----------------------------------------------------------------------------
-# 구조 읽기
+# Reading a structure
 # ----------------------------------------------------------------------------
 
 def read_structure(path):
-    """POSCAR / CONTCAR / cif 등에서 (lattice, coords, species) 를 읽는다.
+    """Read (lattice, coords, species) from a POSCAR / CONTCAR / cif / etc.
 
-    CASM 이 뱉는 POS 는 원소 이름 줄이 없는 VASP4 형식이라 pymatgen 이 같은
-    폴더의 POTCAR 를 참조한다. POTCAR 마저 없으면 원소를 알 수 없으므로
-    무엇이 없어서 실패했는지 알려 준다.
+    CASM's POS output is VASP4 format with no element-name line, so pymatgen
+    looks for a POTCAR in the same folder. When even that is missing, the
+    elements cannot be determined, so this says exactly what was missing.
     """
     from pymatgen.core import Structure
 
     if not os.path.isfile(path):
-        raise PrimError("구조 파일이 없습니다: %s" % path)
+        raise PrimError("Structure file is missing: %s" % path)
     try:
         st = Structure.from_file(path)
     except Exception as err:
         base = os.path.basename(path)
         hint = ""
         if base.startswith(("POSCAR", "CONTCAR", "POS")):
-            hint = ("\n원소 이름 줄이 없는 VASP4 형식이면 같은 폴더에 POTCAR 가 "
-                    "있어야 원소를 알아낼 수 있습니다.")
-        raise PrimError("%s 를 읽지 못했습니다: %s%s" % (path, err, hint))
+            hint = ("\nIf this is VASP4 format with no element-name line, a "
+                    "POTCAR must be in the same folder for the elements to "
+                    "be determined.")
+        raise PrimError("Could not read %s: %s%s" % (path, err, hint))
 
     lattice = np.array(st.lattice.matrix, dtype=float)
     coords = np.array(st.frac_coords, dtype=float)
@@ -220,14 +230,14 @@ def read_structure(path):
 # ----------------------------------------------------------------------------
 
 def _replicate(lattice, coords, species, nx, ny, nz):
-    """scale 과 같은 순서로 셀을 복제한다.
+    """Replicate the cell in the same order as ``scale``.
 
-    원자 하나마다 z -> x -> y 순으로 이미지를 만든다. 격자벡터 a, b, c 는
-    각각 nx, ny, nz 배가 된다.
+    Each atom's images are made in z -> x -> y order. The lattice vectors a,
+    b, c are multiplied by nx, ny, nz respectively.
     """
     nx, ny, nz = int(nx), int(ny), int(nz)
     if min(nx, ny, nz) < 1:
-        raise PrimError("supercell 배수는 1 이상이어야 합니다: (%d, %d, %d)" % (nx, ny, nz))
+        raise PrimError("Supercell multiples must be 1 or more: (%d, %d, %d)" % (nx, ny, nz))
 
     new_lat = np.array(lattice, dtype=float).copy()
     new_lat[0] *= nx
@@ -250,17 +260,17 @@ def _normalize_occupancy(occupancy):
     else:
         occ = [str(e) for e in occupancy]
     if not occ:
-        raise PrimError("occupancy 가 비어 있습니다.")
+        raise PrimError("Occupancy is empty.")
     return occ
 
 
 def _resolve_occupancies(occupancy, species):
-    """occupancy 지정을 자리별 목록으로 푼다.
+    """Resolve an occupancy specification into a per-site list.
 
-    받아들이는 형태
-      "Cu Ir" / ["Cu","Ir"]        : 모든 자리에 같은 occupancy
-      {"Li": "Li Vac", "C": "C"}   : 원본 원소별로 지정
-      {0: "Li Vac", 3: "C"}        : supercell 이후 자리 번호별로 지정
+    Accepted forms
+      "Cu Ir" / ["Cu","Ir"]        : the same occupancy on every site
+      {"Li": "Li Vac", "C": "C"}   : given per original element
+      {0: "Li Vac", 3: "C"}        : given per site index, after the supercell
     """
     n = len(species)
 
@@ -269,20 +279,20 @@ def _resolve_occupancies(occupancy, species):
         return [list(occ) for _ in range(n)]
 
     if not isinstance(occupancy, dict):
-        raise PrimError("occupancy 는 문자열, 리스트, 사전 중 하나여야 합니다. "
-                        "받은 형: %s" % type(occupancy).__name__)
+        raise PrimError("occupancy must be a string, a list, or a dict. "
+                        "Got: %s" % type(occupancy).__name__)
 
     by_index = all(isinstance(k, int) for k in occupancy)
     by_symbol = all(isinstance(k, str) for k in occupancy)
     if not (by_index or by_symbol):
-        raise PrimError("occupancy 사전의 키는 자리 번호(int) 아니면 "
-                        "원소 기호(str) 로 통일해야 합니다.")
+        raise PrimError("The keys of the occupancy dict must be all site "
+                        "indices (int) or all element symbols (str).")
 
     out = []
     if by_index:
         unknown = [k for k in occupancy if not (0 <= k < n)]
         if unknown:
-            raise PrimError("자리 번호가 범위를 벗어났습니다: %s (자리 수 %d)"
+            raise PrimError("Site index is out of range: %s (%d site(s))"
                             % (sorted(unknown), n))
         for i, sp in enumerate(species):
             out.append(_normalize_occupancy(occupancy[i]) if i in occupancy else [sp])
@@ -290,27 +300,27 @@ def _resolve_occupancies(occupancy, species):
         missing = sorted(set(species) - set(occupancy))
         if missing:
             raise PrimError(
-                "occupancy 에 없는 원소가 구조에 있습니다: %s\n"
-                "고정 자리도 명시해 주세요 (예: {'C': 'C'})." % ", ".join(missing))
+                "The structure has element(s) not in occupancy: %s\n"
+                "Give the fixed sites too (e.g. {'C': 'C'})." % ", ".join(missing))
         for sp in species:
             out.append(_normalize_occupancy(occupancy[sp]))
     return out
 
 
 def make_prim(structure, occupancy, supercell=(1, 1, 1), title=None):
-    """구조 파일에서 PRIM 을 만든다.
+    """Build a PRIM from a structure file.
 
     Parameters
     ----------
     structure : str or tuple
-        구조 파일 경로, 또는 ``(lattice, coords, species)`` 튜플.
+        A structure file path, or a ``(lattice, coords, species)`` tuple.
     occupancy : str or list or dict
-        자리에 올 수 있는 원소. :func:`_resolve_occupancies` 참고.
+        The elements that can occupy a site. See :func:`_resolve_occupancies`.
     supercell : (int, int, int)
-        a, b, c 방향 배수. FCC 는 ``(2,1,1)``, HCP/BCC 는 ``(2,2,1)`` 이
-        8 자리 셀을 준다(교안 5.2 절).
+        Multiples along a, b, c. FCC uses ``(2,1,1)``, HCP/BCC use
+        ``(2,2,1)`` to give an 8-site cell (course notes section 5.2).
     title : str
-        PRIM 1행. 생략하면 원소들을 이어 붙여 만든다.
+        PRIM line 1. If omitted, it is built by joining the element names.
 
     Returns
     -------
@@ -340,53 +350,59 @@ def make_prim(structure, occupancy, supercell=(1, 1, 1), title=None):
 
 
 # ----------------------------------------------------------------------------
-# P1 으로 낮추기
+# Lowering to P1
 # ----------------------------------------------------------------------------
 
 def break_symmetry(prim, amplitude=0.001, sites=None, min_displacement=0.005,
                    strict=True):
-    """좌표를 미세하게 흔들어 셀의 대칭을 없앤다.
+    """Perturb the coordinates slightly to remove the cell's symmetry.
 
-    대칭이 살아 있으면 CASM 이 서로 대칭인 배열을 하나로 묶어 버린다.
-    8 자리 셀에서 256 개가 9 개로 줄어드는 것이 그 때문이다(교안 5.3 절).
-    전수 열거를 하려면 P1 으로 낮춰야 한다.
+    While symmetry is still present, CASM merges symmetry-equivalent
+    configurations into one. That is why an 8-site cell's 256 configurations
+    come down to 9 (course notes section 5.3). Enumerating them all requires
+    lowering to P1 first.
 
-    흔드는 폭은 두 기준을 동시에 넘어야 한다(교안 5.4 절).
-      1) CASM 이 대칭을 못 찾을 만큼 커야 하고
-      2) VASP 가 SYMPREC(기본 1e-5)로 대칭을 되살리지 못할 만큼 커야 한다.
+    The perturbation amplitude must clear two thresholds at once (course
+    notes section 5.4).
+      1) large enough that CASM cannot find the symmetry, and
+      2) large enough that VASP cannot restore it with SYMPREC (default 1e-5).
 
-    분수좌표 기준으로 흔들기 때문에 셀이 작으면 실제 변위가 너무 작아질 수
-    있다. 그래서 Å 단위 변위를 직접 계산해 ``min_displacement`` 보다 작으면
-    알려 준다 — 원본 셸 스크립트에는 없던 확인이다.
+    Because the perturbation is applied in fractional coordinates, a small
+    cell can end up with a real displacement that is too small. So the
+    displacement in A is computed directly and reported if it is below
+    ``min_displacement`` -- a check the original shell script did not have.
 
     Parameters
     ----------
     prim : Prim
     amplitude : float
-        기준 폭(분수좌표). i 번째 자리는 x 로 ``(i+1)*amplitude`` 만큼 밀린다.
+        Base amplitude (fractional coordinates). Site i is shifted in x by
+        ``(i+1)*amplitude``.
     sites : list[int] or None
-        흔들 자리. 기본은 occupancy 가 둘 이상인 자리 전부.
+        Sites to perturb. Defaults to every site with more than one
+        occupancy.
     min_displacement : float
-        허용 최소 변위(Å).
+        Minimum acceptable displacement (A).
     strict : bool
-        True 면 변위가 모자랄 때 예외를 낸다. False 면 경고만 하고 진행한다.
+        True raises when the displacement is too small. False only warns and
+        continues.
 
     Returns
     -------
     (Prim, list[str])
-        흔든 새 Prim 과 사람이 읽을 확인 메시지.
+        The perturbed new Prim, and messages for a human to read.
     """
     out = prim.copy()
     if sites is None:
         sites = out.mixed_sites or list(range(len(out)))
     if not sites:
-        raise PrimError("흔들 자리가 없습니다.")
+        raise PrimError("No sites to perturb.")
 
     for n, i in enumerate(sites):
         if not (0 <= i < len(out)):
-            raise PrimError("자리 번호가 범위를 벗어났습니다: %d" % i)
+            raise PrimError("Site index is out of range: %d" % i)
         out.coords[i][0] += (n + 1) * amplitude
-        if n < 2:                       # 앞의 두 자리는 y 로도 밀어 축 대칭을 깬다
+        if n < 2:                       # also shift the first two sites in y, to break axis symmetry
             out.coords[i][1] += (n + 1) * 10 * amplitude
 
     delta = (out.coords - prim.coords)
@@ -396,12 +412,13 @@ def break_symmetry(prim, amplitude=0.001, sites=None, min_displacement=0.005,
     smallest = float(moved.min()) if len(moved) else 0.0
     largest = float(disp.max())
 
-    msgs = ["흔든 자리 %d개, 실제 변위 %.4f ~ %.4f Å" % (len(sites), smallest, largest)]
+    msgs = ["Perturbed %d site(s), actual displacement %.4f ~ %.4f A" % (len(sites), smallest, largest)]
     if smallest < min_displacement:
-        msg = ("변위 %.4f Å 는 %.4f Å 보다 작습니다. VASP 가 SYMPREC 으로 대칭을 "
-               "되살릴 수 있으니 amplitude 를 키우거나 INCAR 에 ISYM=0 을 주세요."
+        msg = ("A displacement of %.4f A is smaller than %.4f A. VASP could "
+               "restore the symmetry via SYMPREC -- raise amplitude, or set "
+               "ISYM=0 in the INCAR."
                % (smallest, min_displacement))
         if strict:
             raise PrimError(msg)
-        msgs.append("경고: " + msg)
+        msgs.append("Warning: " + msg)
     return out, msgs
