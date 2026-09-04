@@ -17,12 +17,12 @@ def _help():
           + " [option] [sub_option1] [sub_option2..]")
     print('''--------------------------------------
 [options]
-1 : Generate configurations   goes from a single structure file all the way to the con* directories
+1 : Generate configurations   one structure file -> the con* directories
                 (PRIM . CSPECS . KPOINTS . INCAR -> mainclust enumeration
                  -> directory creation -> cell parameter averaging
                  -> KPOINTS distribution)
-2 : Continue / touch up   use when 1 was interrupted partway, or after hand-editing something
-9 : Generate prim.json      (new-style CASM format)
+2 : Continue / touch up   when 1 was interrupted, or after hand-editing
+9 : Generate prim.json    (new-style CASM format)
 
 Calling `CCpyCASMInputGen.py 1` with no arguments walks you through it with
 questions; giving even one sub_option skips the questions (for scripts).
@@ -39,49 +39,52 @@ ex) CCpyCASMInputGen.py 1
 
     < METHOD >   default is Method 1 (asymmetric full enumeration)
     -sym        : Method 2 - keep symmetry and build a CSPECS
-                  the default instead perturbs coordinates down to P1 and skips CSPECS.
-                  a symmetric PRIM with a CSPECS changes the enumeration count (an 8-site cell: 9 -> 21)
+                  the default perturbs coordinates down to P1 and skips
+                  CSPECS. A symmetric PRIM with a CSPECS changes the
+                  enumeration count (an 8-site cell: 9 -> 21)
 
     < STRUCTURE >   [option 1]
-    -str=FILE   : structure file                   (DEFAULT : asked)
-    -sc=#,#,#   : supercell multiples              (DEFAULT : suggests one that makes 8 sites)
-                  the FCC conventional cell (4 atoms) uses 2,1,1 / BCC/HCP (2 atoms) uses 2,2,1
-                  the number of configurations is 2^n per extra site (8 sites: 256 / 16 sites: 65536)
-    -occ=A,B    : elements allowed on each site    (DEFAULT : asked)
-                  an empty site is Vac. per-element differences: -occ=Li:Li,Vac -occ=C:C
-    -title=NAME : PRIM line 1                      (DEFAULT : element names)
-    -amp=#      : perturbation amplitude when lowering to P1   (DEFAULT : 0.001)
+    -str=FILE   : structure file              (DEFAULT : asked)
+    -sc=#,#,#   : supercell multiples         (DEFAULT : aims for 8 sites)
+                  FCC conventional cell (4 atoms) uses 2,1,1 /
+                  BCC/HCP (2 atoms) uses 2,2,1. The configuration count
+                  doubles per extra site (8 sites: 256 / 16 sites: 65536)
+    -occ=A,B    : elements allowed on a site  (DEFAULT : asked)
+                  an empty site is Vac. Per element : -occ=Li:Li,Vac -occ=C:C
+    -title=NAME : PRIM line 1                 (DEFAULT : element names)
+    -amp=#      : perturbation amplitude for P1        (DEFAULT : 0.001)
 
     < CSPECS >   [option 1, with -sym]
-    -nn=#       : up through which neighbour shell        (DEFAULT : 1)
+    -nn=#       : up through which neighbour shell     (DEFAULT : 1)
     -r=#        : specify the radius directly (angstrom)
-    -sizes=#,#  : cluster sizes                     (DEFAULT : 2,3,4)
-    -sp=A,B     : measure distances between just these elements   (Li-C uses -sp=Li)
+    -sizes=#,#  : cluster sizes               (DEFAULT : 2,3,4)
+    -sp=A,B     : measure distances between just these elements (Li-C: -sp=Li)
 
     < INCAR >   [option 1]
-    -preset=F   : yaml to use                       (DEFAULT : default.yaml)
+    -preset=F   : yaml to use                 (DEFAULT : default.yaml)
                   a name inside ~/.CCpy_test/vasp/
-    -encut=#    : specify ENCUT directly (eV)       (DEFAULT : POTCAR ENMAX x 1.3)
-    -ispin=#    : specify ISPIN directly            (DEFAULT : 2 if a magnetic element)
+    -encut=#    : specify ENCUT directly (eV) (DEFAULT : POTCAR ENMAX x 1.3)
+    -ispin=#    : specify ISPIN directly      (DEFAULT : 2 if magnetic)
     -incar      : rewrite INCAR even when one is already there
 
     < KPOINTS >
-    -kl=#       : target k*L (angstrom)              (DEFAULT : 35, 20 for metal/insulator)
+    -kl=#       : target k*L (angstrom)       (DEFAULT : 35, insulator 20)
     -kp=#,#,#   : specify the mesh directly
 
     < CELL PARAM >   [option 2]
     -a=#,#      : the two elements' lattice constants, given directly
     -ref=F,F    : the two elements' structure file paths
-                  (DEFAULT : looks for BULK/<element>/CONTCAR, else the built-in table)
-    -iso        : scale all three axes by the same factor   (matches the original 03_cellparam.sh)
+                  (DEFAULT : BULK/<element>/CONTCAR, else the built-in table)
+    -iso        : scale all three axes by the same factor
+                  (matches the original 03_cellparam.sh)
 
     < RUN >   [option 1]
     -norun      : only create input files, don't run mainclust
-    -vol=#      : maximum supercell volume              (DEFAULT : 1)
+    -vol=#      : maximum supercell volume    (DEFAULT : 1)
     -y          : proceed without confirming the configuration count
 
     < PARTIAL >
-    -only=A,B   : [1] prim / cspecs / kpoints / incar  (given this, mainclust is not run)
+    -only=A,B   : [1] prim / cspecs / kpoints / incar  (mainclust is not run)
                   [2] makedirs / cellparam / kpoints
 --------------------------------------''')
     quit()

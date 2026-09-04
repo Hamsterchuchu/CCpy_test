@@ -36,7 +36,7 @@ automatically.
 ex) CCpyCASMStage.py 1 -ispin=1 -y
 
     -ispin=#  : set ISPIN                  (DEFAULT : keep the existing value)
-                fine to set to 1 if there is no magnetic element (Fe/Co/Ni/Cr/Mn)
+                1 is enough without a magnetic element (Fe/Co/Ni/Cr/Mn)
     -force    : also proceed with unconverged configurations
     -keep     : don't delete large files such as CHG/CHGCAR/WAVECAR
     -y        : proceed without confirming
