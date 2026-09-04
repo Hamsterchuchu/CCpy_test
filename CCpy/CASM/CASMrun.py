@@ -776,8 +776,8 @@ def generate_vasp_inputs(workdir=".", energy=0, reference=0,
         Carries a ``potcar_report`` attribute with the check results (when checked).
     """
     if check_potcar:
-        check_templates(workdir)
         check_potcar_sources(workdir)
+        check_templates(workdir)
 
     drv = MainclustDriver(workdir=workdir, binary=binary, echo=echo, **kwargs)
     result = drv.run(answers_reuse(energy=energy, reference=reference))

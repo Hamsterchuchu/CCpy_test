@@ -56,12 +56,12 @@ LEGACY_ENCUT_LOCK_FILE = ".prev_incar_encut_locked"
 
 
 def incar_key_base(key):
-    """INCAR 키에서 주석 표시와 공백을 떼어낸 비교용 이름. ('# LDAUU' -> 'LDAUU')"""
+    """INCAR key stripped of its comment mark and spaces, for comparison. ('# LDAUU' -> 'LDAUU')"""
     return str(key).replace("#", "").strip().upper()
 
 
 def load_user_edited_keys(path=USER_EDIT_LOCK_FILE):
-    """USER_EDIT_LOCK_FILE 에 저장된, 사용자가 직접 고친 INCAR 키 집합을 읽는다."""
+    """Read the set of INCAR keys the user edited by hand, stored in USER_EDIT_LOCK_FILE."""
     if not os.path.isfile(path):
         return set()
     try:
@@ -77,7 +77,7 @@ def load_user_edited_keys(path=USER_EDIT_LOCK_FILE):
 
 
 def save_user_edited_keys(keys, path=USER_EDIT_LOCK_FILE):
-    """사용자가 직접 고친 INCAR 키 집합을 .prev_incar.yaml 의 짝 파일로 남긴다."""
+    """Record the set of INCAR keys the user edited by hand, beside .prev_incar.yaml."""
     yaml_str = yaml.dump({"user_edited_keys": sorted(keys)},
                          default_flow_style=False, sort_keys=False)
     file_writer(path, yaml_str)
@@ -317,18 +317,18 @@ class VASPInput():
         locked_keys = load_user_edited_keys() if get_pre_incar else set()
 
         def locked(key):
-            """이 키를 사용자가 직접 고쳤는가 (= 옵션 기본값으로 덮어쓰면 안 되는가)"""
+            """Did the user edit this key by hand (= must not be overwritten by an option default)?"""
             return incar_key_base(key) in locked_keys
 
         def apply_opt(incar_dict, update, maintain_block=False):
-            """커맨드 옵션이 만든 값을 INCAR 에 반영하되, 사용자가 고친 키는 건드리지 않는다."""
+            """Apply values coming from command options to INCAR, leaving user-edited keys alone."""
             update = OrderedDict((k, v) for k, v in update.items() if not locked(k))
             if not update:
                 return incar_dict
             return update_incar(incar_dict, update, maintain_block=maintain_block)
 
         def set_opt(incar_dict, key, value):
-            """apply_opt 의 단일 키 버전 (주석 처리 여부를 바꾸지 않는 직접 대입)."""
+            """Single-key form of apply_opt (direct assignment that keeps the comment state)."""
             if not locked(key):
                 incar_dict[key] = value
             return incar_dict

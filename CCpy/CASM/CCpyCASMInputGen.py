@@ -18,17 +18,19 @@ def _help():
     print('''--------------------------------------
 [options]
 1 : Generate configurations   goes from a single structure file all the way to the con* directories
-                (PRIM . CSPECS . KPOINTS -> mainclust enumeration -> directory creation
-                 -> cell parameter averaging -> KPOINTS distribution)
+                (PRIM . CSPECS . KPOINTS . INCAR -> mainclust enumeration
+                 -> directory creation -> cell parameter averaging
+                 -> KPOINTS distribution)
 2 : Continue / touch up   use when 1 was interrupted partway, or after hand-editing something
 9 : Generate prim.json      (new-style CASM format)
 
 Calling `CCpyCASMInputGen.py 1` with no arguments walks you through it with
 questions; giving even one sub_option skips the questions (for scripts).
 
-Requirements -- the working directory needs INCAR and a per-element
-POTCAR_<element>. mainclust is looked for in the order $CCpy_MAINCLUST /
-~/.CCpy_test / working directory / $PATH.
+Requirements -- the working directory needs a per-element POTCAR_<element>.
+INCAR is written when absent (CCpy yaml defaults + the lecture notes, sec. 3);
+an INCAR that is already there is left untouched. mainclust is looked for in
+the order $CCpy_MAINCLUST / ~/.CCpy_test / working directory / $PATH.
 
 
 [sub_options]
@@ -56,6 +58,13 @@ ex) CCpyCASMInputGen.py 1
     -sizes=#,#  : cluster sizes                     (DEFAULT : 2,3,4)
     -sp=A,B     : measure distances between just these elements   (Li-C uses -sp=Li)
 
+    < INCAR >   [option 1]
+    -preset=F   : yaml to use                       (DEFAULT : default.yaml)
+                  a name inside ~/.CCpy_test/vasp/
+    -encut=#    : specify ENCUT directly (eV)       (DEFAULT : POTCAR ENMAX x 1.3)
+    -ispin=#    : specify ISPIN directly            (DEFAULT : 2 if a magnetic element)
+    -incar      : rewrite INCAR even when one is already there
+
     < KPOINTS >
     -kl=#       : target k*L (angstrom)              (DEFAULT : 35, 20 for metal/insulator)
     -kp=#,#,#   : specify the mesh directly
@@ -72,7 +81,7 @@ ex) CCpyCASMInputGen.py 1
     -y          : proceed without confirming the configuration count
 
     < PARTIAL >
-    -only=A,B   : [1] prim / cspecs / kpoints  (given this, mainclust is not run)
+    -only=A,B   : [1] prim / cspecs / kpoints / incar  (given this, mainclust is not run)
                   [2] makedirs / cellparam / kpoints
 --------------------------------------''')
     quit()
@@ -161,6 +170,14 @@ def _parse_subopts(argv):
             opt["kl"] = float(arg.split("=", 1)[1])
         elif arg.startswith("-kp="):
             opt["kp"] = [int(v) for v in arg.split("=", 1)[1].split(",")]
+        elif arg.startswith("-preset="):
+            opt["preset"] = arg.split("=", 1)[1]
+        elif arg.startswith("-encut="):
+            opt["encut"] = int(float(arg.split("=", 1)[1]))
+        elif arg.startswith("-ispin="):
+            opt["ispin"] = int(arg.split("=", 1)[1])
+        elif arg == "-incar":
+            opt["incar"] = True
         elif arg == "-norun":
             opt["norun"] = True
         elif arg == "-y":
@@ -199,10 +216,10 @@ def input_gen(opt):
                                        describe_uniformity, KpointsError)
 
     if opt["only"]:
-        unknown = set(opt["only"]) - {"prim", "cspecs", "kpoints"}
+        unknown = set(opt["only"]) - {"prim", "cspecs", "kpoints", "incar"}
         if unknown:
             print("\n-only has unknown value(s): %s" % ", ".join(sorted(unknown)))
-            print("Please choose from prim / cspecs / kpoints.")
+            print("Please choose from prim / cspecs / kpoints / incar.")
             quit()
 
     # -- reference structure --------------------------------------------------
@@ -363,6 +380,22 @@ def input_gen(opt):
                 ok, groups = verify_uniform(dirs)
                 print("       " + describe_uniformity(groups))
 
+    # -- INCAR --------------------------------------------------------------
+    if _wanted(opt, "incar"):
+        from CCpy.CASM import CASMincar as ic
+        from CCpy.CASM.CASMrun import MainclustError
+        try:
+            written, notes = ic.make_incar(
+                ".", preset=opt.get("preset"), encut=opt.get("encut"),
+                ispin=opt.get("ispin"), overwrite=opt.get("incar", False))
+            print("\n[INCAR]")
+            print(ic.describe(written, notes))
+            if written:
+                made.append("INCAR")
+        except (ic.IncarError, MainclustError) as err:
+            print("\n[INCAR] %s" % err)
+            print("        You can place an INCAR yourself and run again.")
+
     # -- summary --------------------------------------------------------------
     print("\nFiles created: %s" % ", ".join(made))
 
@@ -392,8 +425,8 @@ def _preflight(opt):
 
     try:
         binary = run.resolve_binary(workdir=".")
-        templates = run.check_templates(".")
         potcars = run.check_potcar_sources(".")
+        templates = run.check_templates(".")
     except run.MainclustError as err:
         print("\n%s" % err)
         quit()
