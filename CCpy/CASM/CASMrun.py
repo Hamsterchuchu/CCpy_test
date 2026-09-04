@@ -32,7 +32,15 @@ except ImportError:                                   # pragma: no cover
     _HAS_PTY = False
 
 
+#: 실행 파일 이름. 관례상 계 폴더마다 복사해 두고 썼지만, resolve_binary() 가
+#: 여러 자리를 순서대로 뒤지므로 이제 한 곳에 두면 된다.
 DEFAULT_BINARY = "mainclust"
+
+#: 실행 파일 경로를 직접 지정하는 환경변수 (CCpy_SERVER 와 같은 형식).
+BINARY_ENV = "CCpy_MAINCLUST"
+
+#: mainclust 가 이어 붙일 원소별 POTCAR 의 파일명 접두사.
+POTCAR_PREFIX = "POTCAR_"
 
 #: 질문 키 -> (정규식, 사람이 읽을 설명). mainclust 바이너리에서 추출한 문구다.
 #: 순서는 실제로 나타나는 순서지만, 매칭은 순서와 무관하게 이루어진다.
@@ -160,6 +168,261 @@ def answers_reuse(energy=0, reference=0):
 
 
 # ----------------------------------------------------------------------------
+# 실행 파일 찾기
+# ----------------------------------------------------------------------------
+
+def _config_dir():
+    """설정 폴더 경로 문자열. CCpy 설정 모듈을 못 읽으면 관례 경로로 대신한다."""
+    try:
+        from CCpy.Tools.CCpyConfig import config_home
+        return str(config_home())
+    except Exception:                                  # pragma: no cover
+        return os.path.join(os.path.expanduser("~"), ".CCpy_test")
+
+
+def _executable(path):
+    """실행 가능한 파일이면 절대경로, 없으면 None. 있는데 권한이 없으면 오류."""
+    if not path:
+        return None
+    full = os.path.abspath(os.path.expanduser(os.path.expandvars(str(path))))
+    if not os.path.isfile(full):
+        return None
+    if not os.access(full, os.X_OK):
+        raise MainclustError(
+            "%s 에 실행 권한이 없습니다. chmod +x 로 붙여 주세요." % full)
+    return full
+
+
+def resolve_binary(binary=None, workdir="."):
+    """mainclust 실행 파일의 절대 경로를 찾는다.
+
+    mainclust 는 출처와 라이선스가 분명치 않은 컴파일된 외부 바이너리라
+    저장소에 넣지 않는다. 그렇다고 계 폴더마다 674 KB 를 복사해 두게 하면
+    폴더가 늘어날수록 어느 것이 최신인지 알 수 없어진다. 그래서 아래 순서로
+    찾는다 — 앞에서 찾으면 뒤는 보지 않는다.
+
+    1. ``binary`` 에 경로를 준 경우 그 경로 (상대경로면 ``workdir`` 기준)
+    2. 환경변수 ``$CCpy_MAINCLUST``
+    3. 설정 폴더 ``~/.CCpy_test/mainclust`` (``$CCpy_HOME`` 로 옮길 수 있다)
+    4. 작업 디렉토리 안 (기존 관례. 그대로 쓰던 폴더가 깨지지 않도록 남긴다)
+    5. ``$PATH``
+
+    1번만 예외로, 경로를 직접 준 것이 없으면 즉시 오류를 낸다. 지정한 경로가
+    틀렸는데 조용히 다른 곳의 바이너리로 돌아버리면 안 되기 때문이다.
+    """
+    name = str(binary) if binary else DEFAULT_BINARY
+    tried = []
+
+    def _try(desc, path):
+        if not path:
+            return None
+        tried.append((desc, str(path)))
+        return _executable(path)
+
+    if binary and (os.sep in name or name.startswith("~") or name.startswith(".")):
+        expanded = os.path.expanduser(os.path.expandvars(name))
+        base = expanded if os.path.isabs(expanded) else os.path.join(workdir, expanded)
+        found = _try("지정한 경로", base)
+        if found:
+            return found
+        raise MainclustError("mainclust 를 찾지 못했습니다: %s" % tried[-1][1])
+
+    found = _try("환경변수 $%s" % BINARY_ENV, os.environ.get(BINARY_ENV))
+    if found:
+        return found
+
+    found = _try("설정 폴더", os.path.join(_config_dir(), name))
+    if found:
+        return found
+
+    found = _try("작업 디렉토리", os.path.join(workdir, name))
+    if found:
+        return found
+
+    hit = shutil.which(name)
+    tried.append(("$PATH", "which %s" % name))
+    if hit:
+        return os.path.abspath(hit)
+
+    raise MainclustError(
+        "mainclust 를 찾지 못했습니다. 아래를 순서대로 찾아보았습니다.\n"
+        + "\n".join("  %-14s %s" % (d, p) for d, p in tried)
+        + "\n\nmainclust 는 저장소에 들어 있지 않은 외부 바이너리입니다. 한 번 받아\n"
+          "  %s\n"
+          "에 두거나 $%s 로 경로를 지정해 두면 계 폴더마다 복사하지 않아도 됩니다."
+          % (os.path.join(_config_dir(), DEFAULT_BINARY), BINARY_ENV))
+
+
+# ----------------------------------------------------------------------------
+# POTCAR 확인
+# ----------------------------------------------------------------------------
+
+def prim_elements(workdir=".", prim="PRIM"):
+    """PRIM 에 등장하는 원소를 순서대로. 읽을 수 없으면 MainclustError."""
+    path = prim if os.path.isabs(prim) else os.path.join(workdir, prim)
+    if not os.path.isfile(path):
+        raise MainclustError("%s 가 없습니다." % path)
+    try:
+        from CCpy.CASM.CASMprim import Prim
+    except ImportError as err:                         # pragma: no cover
+        raise MainclustError("CASMprim 을 불러오지 못했습니다: %s" % err)
+    return Prim.read(path).elements
+
+
+def check_potcar_sources(workdir=".", elements=None, prim="PRIM"):
+    """con* 를 만들기 전에 원소별 POTCAR 가 제대로 있는지 본다.
+
+    mainclust 는 ``POTCAR_<원소>`` 를 이어 붙여 각 배열의 POTCAR 를 만드는데,
+    그 파일이 없어도 **오류를 내지 않고 0바이트 POTCAR 를 만든 뒤 그냥 넘어간다.**
+    실습 폴더에서 실제로 그런 배열이 나왔다. 계산을 256개 제출하고 나서야
+    알게 되는 종류의 실패라, 만들기 전에 여기서 막는다.
+
+    Returns
+    -------
+    [(원소, 경로, 바이트)]
+    """
+    if elements is None:
+        elements = prim_elements(workdir, prim)
+    if not elements:
+        raise MainclustError("PRIM 에서 원소를 찾지 못했습니다.")
+
+    ok, missing, empty = [], [], []
+    for elt in elements:
+        path = os.path.join(workdir, POTCAR_PREFIX + elt)
+        if not os.path.isfile(path):
+            missing.append(path)
+        elif os.path.getsize(path) == 0:
+            empty.append(path)
+        else:
+            ok.append((elt, path, os.path.getsize(path)))
+
+    if missing or empty:
+        lines = ["원소별 POTCAR 가 준비되지 않았습니다."]
+        if missing:
+            lines.append("  없음   : " + ", ".join(os.path.basename(p) for p in missing))
+        if empty:
+            lines.append("  0바이트: " + ", ".join(os.path.basename(p) for p in empty))
+        lines.append("")
+        lines.append("  mainclust 는 이 파일이 없어도 오류 없이 0바이트 POTCAR 를 만듭니다.")
+        lines.append("  %s 에 %s 를 두고 다시 실행해 주세요."
+                     % (os.path.abspath(workdir),
+                        " ".join(POTCAR_PREFIX + e for e in elements)))
+        raise MainclustError("\n".join(lines))
+    return ok
+
+
+def _titel_element(line):
+    """POTCAR 의 TITEL 줄에서 원소 기호만. 못 읽으면 None.
+
+    ``TITEL  = PAW_PBE Cu_pv 22Jun2005`` -> ``Cu``
+    """
+    try:
+        parts = line.split("=", 1)[1].split()
+    except IndexError:                                 # pragma: no cover
+        return None
+    if not parts:
+        return None
+    name = parts[1] if len(parts) > 1 else parts[0]
+    return name.split("_", 1)[0]
+
+
+def _pos_counts(path):
+    """POS/POSCAR 의 원소별 개수 줄을 [정수] 로. 확실치 않으면 None.
+
+    CASM 이 쓰는 POS 는 VASP4 형식이라 원소 이름 줄이 없다. 좌표계 줄
+    (Direct/Cartesian) 바로 앞의 정수 줄이 개수 줄이다.
+    """
+    try:
+        with open(path) as f:
+            lines = f.read().split("\n")
+    except OSError:                                    # pragma: no cover
+        return None
+    for i, line in enumerate(lines):
+        if i < 5:                     # 축척 1 + 격자 3 + 개수 1 보다 앞일 수 없다
+            continue
+        if line.strip()[:1].upper() not in ("D", "C", "S"):
+            continue
+        for j in range(i - 1, -1, -1):
+            parts = lines[j].split()
+            if not parts:
+                continue
+            try:
+                return [int(v) for v in parts]
+            except ValueError:
+                return None
+        return None
+    return None
+
+
+def check_generated_potcars(workdir=".", dirs=None, elements=None, prim="PRIM"):
+    """만들어진 con*/POTCAR 가 온전한지 본다.
+
+    POTCAR 의 TITEL 개수는 **그 배열에 실제로 들어 있는 원소 수**와 같아야 한다.
+    순수 끝점(전부 Cu, 전부 Ir)은 원소가 하나뿐이라 TITEL 도 하나다. 그래서
+    PRIM 의 원소 수와 비교하면 안 되고, POS 의 개수 줄과 맞춰 본다.
+
+    TITEL 에 적힌 원소가 PRIM 에 없는 것이면 엉뚱한 POTCAR_ 를 둔 것이므로
+    함께 걸러낸다.
+
+    Returns
+    -------
+    (검사한 개수, [(디렉토리, 문제 설명)])
+    """
+    from CCpy.CASM.CASMkpoints import config_dirs
+    if dirs is None:
+        dirs = config_dirs(workdir)
+    if elements is None:
+        try:
+            elements = prim_elements(workdir, prim)
+        except MainclustError:
+            elements = None
+
+    bad = []
+    for d in dirs:
+        path = os.path.join(d, "POTCAR")
+        if not os.path.isfile(path):
+            bad.append((d, "POTCAR 없음"))
+            continue
+        if os.path.getsize(path) == 0:
+            bad.append((d, "0바이트"))
+            continue
+        try:
+            with open(path) as f:
+                titels = [_titel_element(ln) for ln in f
+                          if "TITEL" in ln and "=" in ln]
+        except OSError as err:                         # pragma: no cover
+            bad.append((d, "읽지 못함: %s" % err))
+            continue
+        titels = [t for t in titels if t]
+        if not titels:
+            bad.append((d, "TITEL 이 없음 (POTCAR 형식이 아님)"))
+            continue
+
+        counts = _pos_counts(os.path.join(d, "POS"))
+        if counts is not None and len(titels) != len(counts):
+            bad.append((d, "TITEL %d개 (POS 원소 %d종)" % (len(titels), len(counts))))
+            continue
+        if elements:
+            odd = [t for t in titels if t not in elements]
+            if odd:
+                bad.append((d, "PRIM 에 없는 원소: %s" % ", ".join(odd)))
+
+    return len(dirs), bad
+
+
+def describe_potcars(total, bad, limit=6):
+    """check_generated_potcars 결과를 사람이 읽을 한 덩어리로."""
+    if not bad:
+        return "  POTCAR %d개 확인 — 모두 정상." % total
+    out = ["  POTCAR %d개 중 %d개가 이상합니다:" % (total, len(bad))]
+    for d, why in bad[:limit]:
+        out.append("    %-12s %s" % (os.path.basename(d), why))
+    if len(bad) > limit:
+        out.append("    ... 그 밖 %d개" % (len(bad) - limit))
+    return "\n".join(out)
+
+
+# ----------------------------------------------------------------------------
 # 드라이버
 # ----------------------------------------------------------------------------
 
@@ -170,9 +433,9 @@ class MainclustDriver(object):
     ----------
     workdir : str
         mainclust 를 돌릴 디렉토리. PRIM 등 입력이 여기 있어야 한다.
-    binary : str
-        실행 파일 경로. 상대 경로면 workdir 기준으로 먼저 찾고,
-        없으면 PATH 에서 찾는다. 기본값은 관례대로 workdir 안의 ``mainclust``.
+    binary : str or None
+        실행 파일 경로. None 이면 :func:`resolve_binary` 가 환경변수 →
+        설정 폴더 → 작업 디렉토리 → PATH 순서로 찾는다.
     idle_timeout : float
         아무 출력도 없이 이만큼(초) 지나면 멈춘 것으로 본다.
         Checkpoint 1(대칭 분석)은 큰 셀에서 수 분이 걸릴 수 있으므로 넉넉히 둔다.
@@ -182,7 +445,7 @@ class MainclustDriver(object):
         True 면 mainclust 출력을 그대로 화면에 흘린다.
     """
 
-    def __init__(self, workdir=".", binary=DEFAULT_BINARY,
+    def __init__(self, workdir=".", binary=None,
                  idle_timeout=600.0, total_timeout=None, echo=False):
         self.workdir = os.path.abspath(workdir)
         self.binary = binary
@@ -194,32 +457,7 @@ class MainclustDriver(object):
 
     def resolve_binary(self):
         """실행 파일의 절대 경로를 돌려준다. 없으면 MainclustError."""
-        cand = self.binary
-        if os.path.sep in cand or cand.startswith("."):
-            path = os.path.abspath(os.path.join(self.workdir, cand)) \
-                if not os.path.isabs(cand) else cand
-            if os.path.isfile(path):
-                if not os.access(path, os.X_OK):
-                    raise MainclustError(
-                        "%s 에 실행 권한이 없습니다. chmod +x 로 붙여 주세요." % path)
-                return path
-            raise MainclustError("mainclust 를 찾지 못했습니다: %s" % path)
-
-        local = os.path.join(self.workdir, cand)
-        if os.path.isfile(local):
-            if not os.access(local, os.X_OK):
-                raise MainclustError(
-                    "%s 에 실행 권한이 없습니다. chmod +x 로 붙여 주세요." % local)
-            return local
-
-        from shutil import which
-        found = which(cand)
-        if found:
-            return found
-        raise MainclustError(
-            "mainclust 를 찾지 못했습니다. '%s' 가 작업 디렉토리에도 PATH 에도 "
-            "없습니다. --binary 로 경로를 지정하거나 CASM_ref 에서 복사해 주세요."
-            % cand)
+        return resolve_binary(self.binary, self.workdir)
 
     # -- 실행 ---------------------------------------------------------------
 
@@ -440,17 +678,41 @@ def _tail(text, lines=15):
 # ----------------------------------------------------------------------------
 
 def enumerate_configurations(workdir=".", max_volume=1, dimension=3,
-                             binary=DEFAULT_BINARY, echo=False, **kwargs):
+                             binary=None, echo=False, **kwargs):
     """열거만 수행한다(디렉토리는 만들지 않는다). make_dirs 가 생성된다."""
     drv = MainclustDriver(workdir=workdir, binary=binary, echo=echo, **kwargs)
     return drv.run(answers_enumerate(max_volume=max_volume, dimension=dimension))
 
 
 def generate_vasp_inputs(workdir=".", energy=0, reference=0,
-                         binary=DEFAULT_BINARY, echo=False, **kwargs):
-    """make_dirs 를 읽어 con* 디렉토리를 만든다."""
+                         binary=None, echo=False, check_potcar=True, **kwargs):
+    """make_dirs 를 읽어 con* 디렉토리를 만든다.
+
+    ``check_potcar`` 가 True 면 만들기 전에 ``POTCAR_<원소>`` 가 있는지 보고,
+    만든 뒤에는 각 배열의 POTCAR 가 비지 않았는지 확인한다. mainclust 는 둘 다
+    조용히 넘어가므로 여기서 막지 않으면 0바이트 POTCAR 로 계산이 제출된다.
+
+    Returns
+    -------
+    MainclustResult
+        ``potcar_report`` 속성에 확인 결과 문자열이 붙는다(확인했을 때).
+    """
+    if check_potcar:
+        check_potcar_sources(workdir)
+
     drv = MainclustDriver(workdir=workdir, binary=binary, echo=echo, **kwargs)
-    return drv.run(answers_reuse(energy=energy, reference=reference))
+    result = drv.run(answers_reuse(energy=energy, reference=reference))
+
+    if check_potcar and result.ok:
+        total, bad = check_generated_potcars(workdir)
+        result.potcar_report = describe_potcars(total, bad)
+        if bad:
+            raise MainclustError(
+                "con* 는 만들어졌지만 POTCAR 가 온전하지 않습니다.\n"
+                + result.potcar_report
+                + "\n\n  이대로 제출하면 VASP 가 엉뚱한 계산을 하거나 바로 죽습니다.",
+                result.transcript)
+    return result
 
 
 # ----------------------------------------------------------------------------
