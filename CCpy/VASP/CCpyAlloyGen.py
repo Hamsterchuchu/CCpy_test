@@ -59,6 +59,10 @@ ex) CCpyAlloyGen.py 1 -i=Pt32.cif -re=Pt -comp=Fe4,Co4,Ni4,Cu4 -n=500 -vasp -pre
                      ex) -comp=Fe4,Co4,Ni4,Cu4  or  -comp=Fe:4,Co:4,Ni:4,Cu:4
     -keep_comp     : reshuffle the current composition of the -re pool (-comp is ignored)
     -n=#           : target number of unique structures                 (DEFAULT : 500)
+                     An UPPER BOUND, not a quota. When fewer distinct structures
+                     than n exist (common for layered/domain, or a small cell),
+                     generation stops as soon as every reachable one has been
+                     written and says so, instead of grinding on toward n.
     -seed=#        : random seed                   (DEFAULT : auto-generated, saved to metadata.txt)
     -fmt=[F]       : cif | vasp | folder           (DEFAULT : folder)
                      folder : conf dirs with POSCAR (S000001/POSCAR)

@@ -939,6 +939,24 @@ _SYMMETRY_SITE_MAP_CACHE = {}
 _SYMMETRY_RANDOM_BASELINE_CACHE = {}
 Q_RANDOM_BASELINE_SAMPLES = 512
 Q_DEFINITION_VERSION = "symmetry_random_calibrated_v2"
+
+# How many empty rounds a (parent, target Q) bucket gets before it is retired.
+# When every bucket has been retired the reachable set is exhausted, and
+# layered/domain generation stops there instead of grinding on toward an `n`
+# that set cannot supply.
+#
+# Two kinds of empty round are told apart, because they mean different things:
+#   * the search reached the Q window but only landed on structures already
+#     saved -- the bucket works, it is just crowded, and the search is
+#     stochastic, so more rounds do keep finding new ones (measured: retiring
+#     these after one empty round cost ~16% of the final count).
+#   * the search never came within UNREACHABLE_Q_FACTOR x tolerance of the
+#     target Q -- that Q level is not reachable on this parent's site count at
+#     all, and repeating it only burns full bucket searches.
+EMPTY_BUCKET_PATIENCE = 5
+UNREACHABLE_Q_PATIENCE = 2
+UNREACHABLE_Q_FACTOR = 2.0
+
 LOW_Q_MIN_SEARCH_STEPS = 12_000
 LOW_Q_FALLBACK_SEEDS = (105, 54321, 271828, 314159, 161803)
 
@@ -2048,6 +2066,64 @@ def _parse_order_levels(order_levels):
     return sorted(set(levels), reverse=True)
 
 
+DECORATION_ENUM_LIMIT = 200_000
+
+
+def decoration_space_size(replace_sites, elements):
+    """
+    Number of distinct site-choice x assignment combinations, before symmetry
+    filtering. Closed form, so it costs nothing to ask.
+    """
+    n_replace = len(elements)
+    n_sites = len(replace_sites)
+    if n_sites == n_replace:
+        site_set_count = 1
+    else:
+        site_set_count = factorial(n_sites) // (
+            factorial(n_replace) * factorial(n_sites - n_replace)
+        )
+    return site_set_count * multiset_count(Counter(elements))
+
+
+def enumerate_unique_decorations(parent, replace_sites, elements, perms, limit=DECORATION_ENUM_LIMIT):
+    """
+    Enumerate every symmetry-unique decoration of `replace_sites` with
+    `elements`, so a sampling run can know how many distinct structures
+    actually exist instead of chasing a target larger than the whole set.
+
+    Returns (entries, space_size). `entries` is a list of (sites, assignment)
+    pairs, one per symmetry-unique structure, or None when the assignment space
+    is bigger than `limit`. `space_size` is the size of that space either way.
+
+    Works on the atomic-number array rather than copies of the Atoms object,
+    which is what keeps a six-figure enumeration affordable.
+    """
+    from ase.data import atomic_numbers as _atomic_numbers
+
+    sites = list(replace_sites)
+    n_replace = len(elements)
+    space_size = decoration_space_size(sites, elements)
+    if space_size > limit:
+        return None, space_size
+
+    base_numbers = np.asarray(parent.get_atomic_numbers(), dtype=np.int16)
+    number_of = {el: _atomic_numbers[el] for el in set(elements)}
+    site_sets = (
+        [tuple(sites)] if len(sites) == n_replace
+        else itertools.combinations(sites, n_replace)
+    )
+    seen = {}
+    for chosen_sites in site_sets:
+        for assignment in generate_multiset_permutations(elements):
+            numbers = base_numbers.copy()
+            for idx, el in zip(chosen_sites, assignment):
+                numbers[idx] = number_of[el]
+            key = min(tuple(numbers[perm].tolist()) for perm in perms)
+            if key not in seen:
+                seen[key] = (chosen_sites, assignment)
+    return list(seen.values()), space_size
+
+
 def _infer_children_per_parent(target, n_parents, order_levels, children_per_parent=None):
     """
     Decide how many randomized descendants to generate per parent for each
@@ -2242,13 +2318,7 @@ def generate_structures(
     #    arrangement (e.g. keeping the current one: Pt16 on 16 Pt sites) would
     #    spin through max_attempts looking for structures that cannot exist.
     if mode in {"random", "spread"} and target > 0:
-        if len(replace_sites) == n_replace:
-            site_choices = 1
-        else:
-            site_choices = factorial(len(replace_sites)) // (
-                factorial(n_replace) * factorial(len(replace_sites) - n_replace)
-            )
-        arrangement_bound = site_choices * multiset_count(composition)
+        arrangement_bound = decoration_space_size(replace_sites, elements)
         if target > arrangement_bound:
             print(
                 f"[notice] target {target} exceeds the {arrangement_bound} distinct "
@@ -2743,19 +2813,38 @@ def generate_structures(
 
             # Step 3. Round-robin over parent x Q buckets so an exact target
             # does not systematically starve later parents or lower Q levels.
-            child_jobs = [
+            #
+            # A bucket is one (parent, target Q) pair. `n` is an upper bound,
+            # not a quota: once a bucket can only return structures that are
+            # already saved, more rounds of it are pure waste, so it is
+            # retired. When every bucket has been retired the reachable set is
+            # exhausted and generation stops there. Without this, a layered /
+            # domain case whose reachable set is far smaller than n kept
+            # grinding through cpp x parents x Q x bucket trials (and on to
+            # max_attempts) to fill a target it could never reach.
+            all_buckets = [
                 (entry, target_q)
-                for _round in range(cpp)
                 for entry in parent_entries
                 for target_q in child_order_levels
             ]
-            for entry, target_q in child_jobs:
+            retired = set()
+            empty_rounds = {}
+            saturated = False
+            for _round in range(cpp):
                 if kept >= target or attempts >= max_attempts:
                     break
-                child_trials = 0
-                max_child_trials = int(max_trials_per_bucket)
-                resume_candidate = None
-                while child_trials < max_child_trials and attempts < max_attempts:
+                for entry, target_q in all_buckets:
+                    bucket_key = (entry["parent_id"], target_q)
+                    if bucket_key in retired:
+                        continue
+                    if kept >= target or attempts >= max_attempts:
+                        break
+                    child_trials = 0
+                    max_child_trials = int(max_trials_per_bucket)
+                    resume_candidate = None
+                    saved_here = False
+                    best_q_gap = float("inf")
+                    while child_trials < max_child_trials and attempts < max_attempts:
                         child_trials += 1
                         attempts += 1
                         low_q_search = target_q <= max(float(order_tolerance), 0.10)
@@ -2780,6 +2869,7 @@ def generate_structures(
                             initial_candidate=initial_candidate,
                             rng=search_rng,
                         )
+                        best_q_gap = min(best_q_gap, abs(actual_q - target_q))
                         if abs(actual_q - target_q) > order_tolerance:
                             resume_candidate = atoms
                             continue
@@ -2817,13 +2907,37 @@ def generate_structures(
                         )
                         if kept % 50 == 0:
                             print(f"Saved {kept} unique structures (attempts={attempts})")
+                        saved_here = True
                         break
+
+                    # -- bucket outcome (see EMPTY_BUCKET_PATIENCE). A bucket
+                    #    that never got near its target Q is retired quickly;
+                    #    one that only hit duplicates gets the full patience.
+                    if saved_here:
+                        empty_rounds[bucket_key] = 0
+                    else:
+                        patience = (
+                            UNREACHABLE_Q_PATIENCE
+                            if best_q_gap > UNREACHABLE_Q_FACTOR * float(order_tolerance)
+                            else EMPTY_BUCKET_PATIENCE
+                        )
+                        empty_rounds[bucket_key] = empty_rounds.get(bucket_key, 0) + 1
+                        if empty_rounds[bucket_key] >= patience:
+                            retired.add(bucket_key)
+                if len(retired) >= len(all_buckets):
+                    saturated = True
+                    break
 
             parent_map_path = _parent_map_write(output_dir, parent_records)
             print(f"Parent map written: {parent_map_path}")
             print(f"Unique layered structures saved: {kept}")
             print(f"Layer parent/child candidates tried: {attempts}")
-            if kept < target:
+            if saturated:
+                print(f"All reachable layered configurations were generated: {kept} "
+                      f"(n={target} was an upper bound, not a quota).")
+                print("Every parent x Q bucket stopped returning new symmetry-unique "
+                      "structures, so generation ended here instead of running on.")
+            elif kept < target:
                 print("[Notice] Target was not reached. Balanced parent sampling and symmetry duplicates can reduce the final count.")
             elif kept == target:
                 print("Requested target count was reached exactly.")
@@ -2990,19 +3104,38 @@ def generate_structures(
                     })
 
             # Step 3. Round-robin over parent x Q buckets.
-            child_jobs = [
+            #
+            # A bucket is one (parent, target Q) pair. `n` is an upper bound,
+            # not a quota: once a bucket can only return structures that are
+            # already saved, more rounds of it are pure waste, so it is
+            # retired. When every bucket has been retired the reachable set is
+            # exhausted and generation stops there. Without this, a layered /
+            # domain case whose reachable set is far smaller than n kept
+            # grinding through cpp x parents x Q x bucket trials (and on to
+            # max_attempts) to fill a target it could never reach.
+            all_buckets = [
                 (entry, target_q)
-                for _round in range(cpp)
                 for entry in parent_entries
                 for target_q in child_order_levels
             ]
-            for entry, target_q in child_jobs:
+            retired = set()
+            empty_rounds = {}
+            saturated = False
+            for _round in range(cpp):
                 if kept >= target or attempts >= max_attempts:
                     break
-                child_trials = 0
-                max_child_trials = int(max_trials_per_bucket)
-                resume_candidate = None
-                while child_trials < max_child_trials and attempts < max_attempts:
+                for entry, target_q in all_buckets:
+                    bucket_key = (entry["parent_id"], target_q)
+                    if bucket_key in retired:
+                        continue
+                    if kept >= target or attempts >= max_attempts:
+                        break
+                    child_trials = 0
+                    max_child_trials = int(max_trials_per_bucket)
+                    resume_candidate = None
+                    saved_here = False
+                    best_q_gap = float("inf")
+                    while child_trials < max_child_trials and attempts < max_attempts:
                         child_trials += 1
                         attempts += 1
                         low_q_search = target_q <= max(float(order_tolerance), 0.10)
@@ -3030,6 +3163,7 @@ def generate_structures(
                             initial_candidate=initial_candidate,
                             rng=search_rng,
                         )
+                        best_q_gap = min(best_q_gap, abs(actual_q - target_q))
                         if abs(actual_q - target_q) > order_tolerance:
                             if low_q_search:
                                 print(
@@ -3085,13 +3219,37 @@ def generate_structures(
                         )
                         if kept % 50 == 0:
                             print(f"Saved {kept} unique structures (attempts={attempts})")
+                        saved_here = True
                         break
+
+                    # -- bucket outcome (see EMPTY_BUCKET_PATIENCE). A bucket
+                    #    that never got near its target Q is retired quickly;
+                    #    one that only hit duplicates gets the full patience.
+                    if saved_here:
+                        empty_rounds[bucket_key] = 0
+                    else:
+                        patience = (
+                            UNREACHABLE_Q_PATIENCE
+                            if best_q_gap > UNREACHABLE_Q_FACTOR * float(order_tolerance)
+                            else EMPTY_BUCKET_PATIENCE
+                        )
+                        empty_rounds[bucket_key] = empty_rounds.get(bucket_key, 0) + 1
+                        if empty_rounds[bucket_key] >= patience:
+                            retired.add(bucket_key)
+                if len(retired) >= len(all_buckets):
+                    saturated = True
+                    break
 
             parent_map_path = _parent_map_write(output_dir, parent_records)
             print(f"Parent map written: {parent_map_path}")
             print(f"Unique domain structures saved: {kept}")
             print(f"Domain parent/child candidates tried: {attempts}")
-            if kept < target:
+            if saturated:
+                print(f"All reachable domain configurations were generated: {kept} "
+                      f"(n={target} was an upper bound, not a quota).")
+                print("Every parent x Q bucket stopped returning new symmetry-unique "
+                      "structures, so generation ended here instead of running on.")
+            elif kept < target:
                 print("[Notice] Target was not reached. Balanced parent sampling and symmetry duplicates can reduce the final count.")
             elif kept == target:
                 print("Requested target count was reached exactly.")
@@ -3100,6 +3258,64 @@ def generate_structures(
         # Other sampling modes
         # -----------------------------------------------------------------
         else:
+            # -- `n` is an upper bound, not a quota. When the whole decoration
+            #    space is small enough that it could hold fewer than n distinct
+            #    structures, count them exactly first and lower the target to
+            #    that number, so the run ends on "there are only this many"
+            #    rather than sampling duplicates until max_attempts.
+            #
+            #    Symmetry can shrink the space by at most len(perms), so
+            #    space // len(perms) is a hard lower bound on the unique count:
+            #    when that already exceeds target the ceiling cannot bind and
+            #    the enumeration is skipped entirely (the usual case - a real
+            #    HEA cell has millions of assignments).
+            space_size = decoration_space_size(replace_sites, elements)
+            unique_entries = None
+            if space_size // max(1, len(perms)) <= target:
+                unique_entries, _space = enumerate_unique_decorations(
+                    parent, replace_sites, elements, perms
+                )
+            if unique_entries is not None:
+                n_unique = len(unique_entries)
+                print(f"Symmetry-unique configurations that exist in total: {n_unique} "
+                      f"(from {space_size} assignments)")
+                if n_unique < target:
+                    print(f"[Notice] Only {n_unique} distinct structures exist, so n={target} "
+                          f"is capped to {n_unique} and generation stops there.")
+                    target = n_unique
+            if unique_entries is not None and target >= len(unique_entries):
+                # Every distinct structure is wanted, so hand them over directly
+                # instead of waiting for random sampling to rediscover the last
+                # few. Shuffled with the run's seeded RNG, so -seed still
+                # reproduces the run and the folder order stays unbiased.
+                order = list(range(len(unique_entries)))
+                random.shuffle(order)
+                for position in order:
+                    chosen_sites, assignment = unique_entries[position]
+                    atoms = parent.copy()
+                    for idx, el in zip(chosen_sites, assignment):
+                        atoms[idx].symbol = el
+                    attempts += 1
+                    kept += 1
+                    write_structure_with_twins(
+                        atoms, output_dir, kept, output_format, vasp_folder,
+                        potcar_source=potcar_source_path,
+                        bare_output_dir=bare_output_dir,
+                        bare_potcar_source=bare_potcar_source_path,
+                        redox_output_dirs=redox_output_dirs,
+                        redox_index_sets=redox_index_sets,
+                        redox_potcar_sources=redox_potcar_source_paths,
+                        adsorbate_elements=adsorbate_elements_set,
+                        metadata=manifest_metadata(
+                            mode=mode,
+                            **sro_metadata(atoms),
+                        ),
+                    )
+                    if kept % 50 == 0:
+                        print(f"Saved {kept}/{target} unique structures (attempts={attempts})")
+
+            no_new_streak = 0
+            stall_limit = max(20000, 200 * int(target))
             while kept < target and attempts < max_attempts:
                 attempts += 1
 
@@ -3114,8 +3330,15 @@ def generate_structures(
 
                 key = canonical_decoration_key(atoms, perms)
                 if key in seen_keys:
+                    # Safety net for the case the exact ceiling was too large to
+                    # enumerate: stop once sampling has clearly run dry instead
+                    # of spinning to max_attempts.
+                    no_new_streak += 1
+                    if no_new_streak >= stall_limit:
+                        break
                     continue
 
+                no_new_streak = 0
                 seen_keys.add(key)
                 kept += 1
                 write_structure_with_twins(
@@ -3138,7 +3361,13 @@ def generate_structures(
 
             print(f"Unique structures saved: {kept}")
             print(f"Attempts: {attempts}")
-            if kept < target:
+            if kept >= target and unique_entries is not None and target == len(unique_entries):
+                print("Every symmetry-unique configuration that exists was generated.")
+            elif kept < target and no_new_streak >= stall_limit:
+                print(f"[Notice] Sampling stopped: {stall_limit} attempts in a row returned "
+                      "structures already saved, so the reachable set looks exhausted at "
+                      f"{kept}. n was an upper bound, not a quota.")
+            elif kept < target:
                 print("[Warning] Target was not reached. Increase max_attempts or lower target.")
 
     if vasp_folder and template_dir:
@@ -4744,7 +4973,7 @@ def run_wizard(initial=None):
         _row("replace", "# substituted pool (default = substrate minus adsorbate)")
         _row("comp", "# target composition (default = current) / 'keep'=reshuffle")
         _row("mode", "# random/spread/layered/domain/exhaustive")
-        _row("n", "# target number of structures (ignored for exhaustive)")
+        _row("n", "# max number of structures (stops early if fewer exist; ignored for exhaustive)")
         _row("seed", "# empty = auto-generated, then recorded in metadata.txt")
         _row("fmt", "# cif/vasp/folder" + ("  (vasp=y, so the final output is a VASP input folder)"
                                           if _bool("vasp") else ""))
@@ -5152,7 +5381,7 @@ def build_argparser():
             "ones are removed."
         ),
     )
-    p.add_argument("--target", type=int, default=500, help="Target number of unique structures")
+    p.add_argument("--target", type=int, default=500, help="Upper bound on the number of unique structures; generation stops early once every reachable configuration has been written")
     p.add_argument("--max-attempts", type=int, default=2_000_000, help="Max attempts for sampling modes")
     p.add_argument("--symprec", type=float, default=1e-3, help="spglib symmetry tolerance")
     p.add_argument("--seed", type=int, default=None, help="Random seed. If omitted, a time-based seed is generated and saved to metadata.txt")
