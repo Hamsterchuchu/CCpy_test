@@ -720,6 +720,214 @@ def _split_quadrants(sites, frac, h_axis, v_axis, tl_n, tr_n, bl_n, br_n):
     return tl_sites, tr_sites, bl_sites, br_sites
 
 
+# -----------------------------------------------------------------------------
+# 3D block clusters ("shape=block")
+# -----------------------------------------------------------------------------
+#
+# The 2x2 / quincunx templates only cut the two axes of the top view, so every
+# region runs the full height of the cell along the view axis. Seen from the
+# side such a structure reads as stacked slabs -- a layered structure -- and the
+# regions are only visible looking down the view axis.
+#
+# Block clusters cut all three axes at once. Each element gets one seed point,
+# and every site joins the seed it is closest to (minimum-image), so a region is
+# a compact lump rather than a prism. The seeds sit on a body-diagonal
+# (tetrahedral) arrangement, which is the placement that leaves no axis
+# uniform: projected on a-b, b-c or a-c the four seeds still land on four
+# distinct spots, so no viewing direction turns the structure into layers.
+#
+#   4 elements : the four "even" corners of a 2x2x2 grid (a tetrahedron)
+#   5 elements : the same four, plus the cell centre for the fifth element,
+#                which is the 3D reading of the quincunx centre
+CLUSTER_SEEDS_4 = (
+    (0.25, 0.25, 0.25),
+    (0.75, 0.75, 0.25),
+    (0.75, 0.25, 0.75),
+    (0.25, 0.75, 0.75),
+)
+CLUSTER_SEEDS_5_CENTER = (0.5, 0.5, 0.5)
+
+
+def cluster_seed_points(n_regions):
+    """Fractional seed coordinates for an n-region block cluster."""
+    if n_regions == 4:
+        return [np.array(s, dtype=float) for s in CLUSTER_SEEDS_4]
+    if n_regions == 5:
+        return [np.array(CLUSTER_SEEDS_5_CENTER, dtype=float)] + [
+            np.array(s, dtype=float) for s in CLUSTER_SEEDS_4
+        ]
+    raise ValueError(
+        "block cluster shape supports 4 or 5 regions; got %d." % n_regions
+    )
+
+
+def validate_block_cluster_elements(elems, composition, n_regions):
+    """
+    Validate the element order for a block cluster.
+
+    Unlike the 2x2 template this does NOT require equal counts: the seeds claim
+    as many sites as each element has, so an uneven composition simply gives
+    lumps of uneven size. Only distinctness and membership in the composition
+    are required.
+    """
+    if len(elems) != n_regions:
+        raise ValueError(
+            "block cluster with %d regions needs %d elements; got %d."
+            % (n_regions, n_regions, len(elems))
+        )
+    if len(set(elems)) != n_regions:
+        raise ValueError("block cluster regions must all be different elements.")
+    for el in elems:
+        if el not in composition:
+            raise ValueError(f"Element {el} in cluster pattern is not in composition.")
+    return [(el, composition[el]) for el in elems]
+
+
+def unique_block_cluster_orders(composition, cluster_pattern=None):
+    """
+    Element orders for block clusters: which element goes to which seed.
+
+    With a pattern given, only that assignment is returned. The 4-element form
+    'A,B/C,D' and the 5-element form 'Center:A,B/C,D' are reused unchanged, so
+    the same pattern string means the same thing in both shapes -- in block
+    shape the four slots are the four tetrahedral seeds instead of the four
+    top-view quadrants, and the centre is the middle of the cell in 3D.
+    """
+    n_regions = len(composition)
+    if n_regions not in (4, 5):
+        raise ValueError(
+            "block cluster shape supports 4- or 5-element compositions; got %d: %s"
+            % (n_regions, list(composition.keys()))
+        )
+
+    if cluster_pattern is not None and str(cluster_pattern).strip() != "":
+        raw = str(cluster_pattern)
+        if ":" in raw:
+            center_part, corners_part = raw.split(":", 1)
+            elems = [center_part.strip()] + _pattern_row_elements(corners_part)
+        else:
+            elems = _pattern_row_elements(raw)
+        return [validate_block_cluster_elements(elems, composition, n_regions)]
+
+    elems = list(composition.keys())
+    orders = []
+    if n_regions == 4:
+        for perm in itertools.permutations(elems, 4):
+            orders.append(validate_block_cluster_elements(list(perm), composition, 4))
+    else:
+        for center_el in elems:
+            others = [el for el in elems if el != center_el]
+            for perm in itertools.permutations(others, 4):
+                orders.append(
+                    validate_block_cluster_elements(
+                        [center_el] + list(perm), composition, 5
+                    )
+                )
+    return orders
+
+
+def _pattern_row_elements(text):
+    """Split a 'A,B/C,D' pattern body into its four element names."""
+    rows = str(text).replace(";", "/").strip().split("/")
+    if len(rows) != 2:
+        raise ValueError("pattern must have two rows, e.g. 'Co,Fe/Ni,Cu'.")
+    elems = []
+    for row in rows:
+        parts = [x.strip() for x in row.split(",") if x.strip()]
+        if len(parts) != 2:
+            raise ValueError(
+                "Each cluster row must contain two elements, e.g. 'Co,Fe/Ni,Cu'."
+            )
+        elems.extend(parts)
+    return elems
+
+
+def _assign_sites_to_seeds(parent, sites, seeds, capacities):
+    """
+    Give every site to a seed, honouring each seed's exact capacity.
+
+    Distances are minimum-image, so a region next to a cell face wraps around
+    instead of being cut in half. Sites are handed out in order of increasing
+    distance over all (site, seed) pairs: the closest claim wins, and once a
+    seed is full the sites it wanted go to their next-closest seed. That keeps
+    the regions compact while landing exactly on the requested counts, which is
+    the same "rank, then cut" idea the 2x2 template uses -- just in 3D and with
+    no requirement that the counts be equal.
+    """
+    cell = np.asarray(parent.get_cell(), dtype=float)
+    frac = parent.get_scaled_positions()
+    sites = list(sites)
+
+    pairs = []
+    for seed_index, seed in enumerate(seeds):
+        delta = frac[sites] - seed
+        delta -= np.rint(delta)
+        distances = np.linalg.norm(delta @ cell, axis=1)
+        for position, site in enumerate(sites):
+            pairs.append((float(distances[position]), site, seed_index))
+    # Ties are broken by site then seed index so a run is reproducible.
+    pairs.sort(key=lambda item: (item[0], item[1], item[2]))
+
+    remaining = list(capacities)
+    assigned = {}
+    groups = [[] for _ in seeds]
+    for _distance, site, seed_index in pairs:
+        if site in assigned or remaining[seed_index] <= 0:
+            continue
+        assigned[site] = seed_index
+        remaining[seed_index] -= 1
+        groups[seed_index].append(site)
+
+    if len(assigned) != len(sites):
+        raise ValueError(
+            "Block cluster assignment did not cover every site "
+            f"({len(assigned)} of {len(sites)}); check that the composition sum "
+            "matches the number of replacement sites."
+        )
+    return groups
+
+
+def make_block_cluster_configuration(parent, replace_sites, cluster_order, view_axis="z"):
+    """
+    Create a 3D block cluster: one compact lump per element, cut on all three axes.
+
+    cluster_order is [(element, count), ...] in seed order -- for 4 elements the
+    four tetrahedral seeds, for 5 elements the cell centre followed by those
+    four. `view_axis` is accepted for a common signature with the top-view
+    templates and is not used: a block cluster has no privileged axis, which is
+    the whole point of it.
+    """
+    n_regions = len(cluster_order)
+    sites = list(replace_sites)
+    total_needed = sum(n for _, n in cluster_order)
+    if total_needed != len(sites):
+        raise ValueError(
+            "cluster mode requires full replacement of the selected sublattice: "
+            f"composition_sum={total_needed}, replacement_sites={len(sites)}."
+        )
+
+    seeds = cluster_seed_points(n_regions)
+    capacities = [int(n) for _, n in cluster_order]
+    groups = _assign_sites_to_seeds(parent, sites, seeds, capacities)
+
+    atoms = parent.copy()
+    for (element, _n), group in zip(cluster_order, groups):
+        for idx in group:
+            atoms[idx].symbol = element
+
+    if n_regions == 4:
+        labels = ["S1", "S2", "S3", "S4"]
+    else:
+        labels = ["center", "S1", "S2", "S3", "S4"]
+    regions = [
+        (label, element, n, group)
+        for label, (element, n), group in zip(labels, cluster_order, groups)
+    ]
+    _verify_cluster_regions(atoms, regions)
+    chosen = [idx for group in groups for idx in group]
+    return atoms, chosen, regions
+
+
 def _verify_cluster_regions(atoms, regions):
     """
     Check that every region really holds the element and the number of atoms it
@@ -797,8 +1005,16 @@ def cluster_region_rows(atoms, regions, view_axis="z"):
     return rows
 
 
-def print_cluster_region_table(rows, view_axis="z", title="Cluster regions"):
-    """Print the region table returned by cluster_region_rows()."""
+def print_cluster_region_table(rows, view_axis="z", title="Cluster regions", wrapping=False):
+    """
+    Print the region table returned by cluster_region_rows().
+
+    `wrapping` marks a shape whose regions may cross a cell face (block
+    clusters do, since the nearest seed is found with the minimum image). The
+    printed ranges are plain bounding boxes, so such a region looks wide even
+    though it is compact; the note says so rather than letting the numbers
+    mislead.
+    """
     axis_names = ("a", "b", "c")
     print(f"\n[{title}]  (fractional coordinates; view axis = {view_axis})")
     print("  %-7s %-4s %9s %8s %-6s %-13s %-13s %-13s" % (
@@ -807,14 +1023,24 @@ def print_cluster_region_table(rows, view_axis="z", title="Cluster regions"):
         print("  %-7s %-4s %9d %8d %-6s [%.3f,%.3f]  [%.3f,%.3f]  [%.3f,%.3f]" % (
             r["region"], r["element"], r["declared_n"], r["actual_n"], r["match"],
             r["a_min"], r["a_max"], r["b_min"], r["b_max"], r["c_min"], r["c_max"]))
+    if wrapping:
+        print("  (regions may wrap across a cell face, so a range here is the plain "
+              "bounding box\n   of a region that is still compact around its seed)")
+        return
     spanning = [axis_names[k] for k in range(3)
                 if all(r["spans_%s" % axis_names[k]] for r in rows)]
     if spanning:
-        print("  * Every region spans the whole cell along: %s"
-              % ", ".join(spanning)
-              + " -- along %s the regions are not separated, so seen from that"
-                % "/".join(spanning)
-              + " direction the structure looks layered, not clustered.")
+        joined = ", ".join(spanning)
+        print("  * Every region spans the whole cell along %s: the regions are "
+              "separated only in the" % joined)
+        print("    plane normal to %s, so every cross-section perpendicular to %s "
+              "has the same" % (joined, joined))
+        print("    composition at every height. Looking down %s shows the intended "
+              "regions, but" % joined)
+        print("    from the side the structure reads as stacked slabs -- a layered "
+              "structure -- with")
+        print("    each slab holding a mixture of the regions that sit behind one "
+              "another.")
 
 
 def cluster_map_write(output_dir, records):
@@ -2336,6 +2562,7 @@ def generate_structures(
     layer_axis="z",
     view_axis="z",
     cluster_pattern=None,
+    cluster_shape="plane",
     children_per_parent=None,
     keep_composition=False,
     generate_potcar=False,
@@ -2354,6 +2581,9 @@ def generate_structures(
         mode = "cluster"
     if cluster_pattern is None and domain_pattern is not None:
         cluster_pattern = domain_pattern
+    cluster_shape = str(cluster_shape or "plane").strip().lower()
+    if cluster_shape not in {"plane", "block"}:
+        raise ValueError("cluster_shape must be 'plane' or 'block'.")
     if mode not in {"random", "spread", "layered", "cluster", "exhaustive"}:
         raise ValueError(f"Unknown mode: {mode}")
     if mode != "exhaustive" and (target <= 0 or max_attempts <= 0):
@@ -2445,7 +2675,10 @@ def generate_structures(
         print(f"Layer axis: {layer_axis}")
     if mode == "cluster":
         _cluster_n = len(composition)
-        if _cluster_n == 4:
+        if cluster_shape == "block":
+            print(f"Cluster mode: 3D block regions ({_cluster_n} compact lumps, "
+                  "all three axes cut)")
+        elif _cluster_n == 4:
             print(f"Cluster mode: intuitive 2x2 top-view regions along {view_axis}-axis")
             print(f"Cluster pattern: {cluster_pattern if cluster_pattern else 'composition order (TL,TR/BL,BR)'}")
         elif _cluster_n == 5:
@@ -2749,6 +2982,7 @@ def generate_structures(
         "layer_axis": layer_axis if mode == "layered" else None,
         "view_axis": view_axis if mode == "cluster" else None,
         "cluster_pattern": cluster_pattern if mode == "cluster" else None,
+        "cluster_shape": cluster_shape if mode == "cluster" else None,
         "children_per_parent": children_per_parent,
         "structure_axes": "random / spread(same-element dispersed) / layered / cluster(2x2 phase-separated template)",
         "output_format": output_format,
@@ -3102,7 +3336,20 @@ def generate_structures(
                 )
 
             cluster_component_count = len(composition)
-            if cluster_component_count == 4:
+            if cluster_shape == "block":
+                cluster_template_orders = unique_block_cluster_orders(
+                    composition, cluster_pattern
+                )
+                cluster_configurator = make_block_cluster_configuration
+                cluster_scheme_desc = (
+                    "3D block cluster (%d compact lumps on body-diagonal seeds)"
+                    % cluster_component_count
+                )
+                default_pattern_desc = "all seed assignments"
+
+                def _cluster_label(order):
+                    return "block_" + "-".join(el for el, _ in order)
+            elif cluster_component_count == 4:
                 cluster_template_orders = unique_cluster_orders(composition, cluster_pattern)
                 cluster_configurator = make_cluster_template_configuration
                 cluster_scheme_desc = "intuitive 2x2 top-view cluster (TL/TR/BL/BR)"
@@ -3128,7 +3375,7 @@ def generate_structures(
                     )
             else:
                 raise ValueError(
-                    "cluster mode currently supports exactly 4 elements (rectangular 2x2 "
+                    "cluster mode with shape=plane supports exactly 4 elements (rectangular 2x2 "
                     "top-view template) or 5 elements (quincunx: center + 4 corners); "
                     f"got {cluster_component_count} elements in composition: {list(composition.keys())}."
                 )
@@ -3139,7 +3386,11 @@ def generate_structures(
                 print(f"Cluster templates before symmetry filtering: {len(cluster_template_orders)}")
                 print(f"Cluster mode first filters symmetry-unique {cluster_scheme_desc} parents.")
                 print("Then each unique parent generates balanced children at target order-parameter levels.")
-            print(f"View axis: {view_axis}")
+            if cluster_shape == "block":
+                print("Seeds: body-diagonal (tetrahedral) placement -- no axis is "
+                      "left uniform, so the regions stay visible from every side.")
+            else:
+                print(f"View axis: {view_axis}")
 
             # Step 1. Build symmetry-unique Q=1 cluster parent structures.
             # As with layered mode, a candidate order can fail the geometric
@@ -3204,6 +3455,7 @@ def generate_structures(
                     print_cluster_region_table(
                         rows, view_axis=view_axis,
                         title="Cluster regions of parent P001 (%s)" % entry["order_label"],
+                        wrapping=(cluster_shape == "block"),
                     )
                     if len(parent_entries) > 1:
                         print("  (the other %d parents use the same regions with the "
@@ -5021,6 +5273,7 @@ def run_wizard(initial=None):
         # mode detail (visible)
         "axis": "z",
         "view": "z",
+        "shape": "plane",
         "pattern": "",
         "order": "1,0.75,0.5,0.25,0",
         # CCpy VASP input generation (visible)
@@ -5162,7 +5415,8 @@ def run_wizard(initial=None):
         _row("symprec", "# spglib symmetry tolerance")
         print("  --- mode detail (layered/cluster) " + "-" * 38)
         _row("axis", "# layered layer axis (x/y/z)")
-        _row("view", "# cluster top-view axis (x/y/z)")
+        _row("view", "# cluster top-view axis (x/y/z), used by shape=plane")
+        _row("shape", "# plane = 2x2 top-view prisms / block = 3D lumps cut on all three axes")
         _row("pattern", "# cluster pattern (ex: Co,Fe/Ni,Cu / empty = auto all)")
         _row("order", "# target order parameter Q level")
         print("  --- CCpy VASP inputs " + "-" * 51)
@@ -5214,8 +5468,12 @@ def run_wizard(initial=None):
             print("[Validation failed] %s" % exc)
             return False
 
+        if mode == "cluster" and s["shape"].strip().lower() not in ("plane", "block"):
+            print("[Validation failed] shape must be plane or block: %r" % s["shape"])
+            return False
         if mode == "cluster" and len(composition) not in (4, 5):
-            print("[Validation failed] cluster mode supports only 4-element (2x2) or 5-element (quincunx) compositions. "
+            print("[Validation failed] cluster mode supports only 4-element (2x2 / 4-lump) or "
+                  "5-element (quincunx / centre+4) compositions. "
                   "Currently %d elements." % len(composition))
             return False
 
@@ -5385,6 +5643,7 @@ def run_wizard(initial=None):
             layer_axis=s["axis"].strip(),
             view_axis=s["view"].strip(),
             cluster_pattern=pattern,
+            cluster_shape=s["shape"].strip().lower(),
             children_per_parent=children,
             generate_potcar=_bool("gen_potcar"),
             potcar_library=s["potcar_lib"].strip() or None,
@@ -5547,6 +5806,16 @@ def build_argparser():
         choices=["x", "y", "z"],
         default="z",
         help="Viewing axis for cluster mode. view-axis z means x-y top view.",
+    )
+    p.add_argument(
+        "--cluster-shape",
+        choices=["plane", "block"],
+        default="plane",
+        help=(
+            "plane (default): the 2x2 / quincunx top-view template, whose regions "
+            "run the full height of the cell along --view-axis. block: 3D regions "
+            "cut on all three axes, one compact lump per element."
+        ),
     )
     p.add_argument(
         "--cluster-pattern",
@@ -5744,6 +6013,7 @@ def main():
         layer_axis=args.layer_axis,
         view_axis=args.view_axis,
         cluster_pattern=args.cluster_pattern,
+        cluster_shape=args.cluster_shape,
         children_per_parent=args.children_per_parent,
         generate_potcar=args.generate_potcar,
         potcar_library=args.potcar_library,

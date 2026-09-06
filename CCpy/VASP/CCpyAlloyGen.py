@@ -28,7 +28,7 @@ if len(sys.argv) <= 1 or sys.argv[1] in ("-h", "--help", "help", "-help"):
 1 : random     (fully random substitution)
 2 : spread     (same-element dispersed, spread-biased substitution)
 3 : layered    (layer-ordered parent -> disorder controlled by target Q)
-4 : cluster    (top-view 2x2 regions / 5-element quincunx template)
+4 : cluster    (2x2 / quincunx regions; -shape=block for 3D lumps)
 5 : exhaustive (enumerate all symmetry-unique configurations)
 w : wizard     (settings sheet with no mode preset -- same as '1')
 
@@ -112,12 +112,23 @@ ex) CCpyAlloyGen.py 1 -i=Pt32.cif -re=Pt -comp=Fe4,Co4,Ni4,Cu4 -n=500 -vasp -pre
 
     < MODE DETAILS >
     -axis=[x|y|z]  : layer stacking axis           (mode 3, DEFAULT : z)
-    -view=[x|y|z]  : top-view axis                 (mode 4, DEFAULT : z)
-                     The 2x2 / quincunx template splits only the two axes of
-                     that top view, so every region runs the full height of the
-                     cell along -view itself. Each run prints the region table
-                     (declared vs actual atom count, and where each region sits)
-                     and writes [DIR]/cluster_map.csv with the same numbers.
+    -view=[x|y|z]  : top-view axis                 (mode 4, shape=plane, DEFAULT : z)
+    -shape=[S]     : plane | block                 (mode 4, DEFAULT : plane)
+                     plane : the 2x2 / quincunx top-view template. It splits only
+                       the two axes of the top view, so every region runs the
+                       full height of the cell along -view. Seen from the front
+                       you get the regions; seen from the side the same picture
+                       repeats at every height, so the structure reads as two
+                       stacked layers instead of four regions.
+                     block : regions cut on all three axes. Each element gets one
+                       seed point and every site joins its nearest seed
+                       (minimum-image), so a region is a compact lump. The seeds
+                       sit body-diagonally, which leaves no axis uniform -- the
+                       regions stay visible from every side. Counts do not have
+                       to be equal here.
+                     Either way the run prints the region table (declared vs
+                     actual atom count, and where each region sits) and writes
+                     [DIR]/cluster_map.csv with the same numbers.
     -pattern=[P]   : cluster pattern               (mode 4, DEFAULT : auto-enumerate all)
                      4-element  ex) -pattern=Co,Fe/Ni,Cu
                      5-element  ex) -pattern=Cu:Co,Fe/Ni,Ti
@@ -200,6 +211,7 @@ max_attempts = 2000000
 
 layer_axis = "z"
 view_axis = "z"
+cluster_shape = "plane"
 cluster_pattern = None
 order_levels = "1,0.75,0.5,0.25,0"
 children_per_parent = None
@@ -313,6 +325,9 @@ for arg in sys.argv[2:]:
     elif arg.startswith("-view="):
         view_axis = arg.split("=", 1)[1]
         given["view"] = arg.split("=", 1)[1]
+    elif arg.startswith("-shape="):
+        cluster_shape = arg.split("=", 1)[1].lower()
+        given["shape"] = arg.split("=", 1)[1]
     elif arg.startswith("-pattern="):
         cluster_pattern = arg.split("=", 1)[1]
         given["pattern"] = arg.split("=", 1)[1]
@@ -500,6 +515,7 @@ result = generate_structures(
     layer_axis=layer_axis,
     view_axis=view_axis,
     cluster_pattern=cluster_pattern,
+    cluster_shape=cluster_shape,
     children_per_parent=children_per_parent,
     generate_potcar=generate_potcar,
     potcar_library=potcar_library,
