@@ -248,7 +248,7 @@ def resolve_binary(binary=None, workdir="."):
             return found
         raise MainclustError("Could not find mainclust at: %s" % tried[-1][1])
 
-    found = _try("environment variable $%s" % BINARY_ENV, os.environ.get(BINARY_ENV))
+    found = _try("$%s" % BINARY_ENV, os.environ.get(BINARY_ENV))
     if found:
         return found
 
@@ -256,7 +256,7 @@ def resolve_binary(binary=None, workdir="."):
     if found:
         return found
 
-    found = _try("working directory", os.path.join(workdir, name))
+    found = _try("working dir", os.path.join(workdir, name))
     if found:
         return found
 
@@ -266,14 +266,16 @@ def resolve_binary(binary=None, workdir="."):
         return os.path.abspath(hit)
 
     raise MainclustError(
-        "Could not find mainclust. Looked in the following places, in order:\n"
-        + "\n".join("  %-14s %s" % (d, p) for d, p in tried)
-        + "\n\nmainclust is an external binary not included in the repository. "
-          "Fetch it once and place it at\n"
-          "  %s\n"
-          "or set $%s to its path, so it doesn't need to be copied into every "
-          "system's folder."
-          % (os.path.join(_config_dir(), DEFAULT_BINARY), BINARY_ENV))
+        "Could not find mainclust. Looked in these places, in order:\n"
+        + "\n".join("  %-16s %s" % (d, p) for d, p in tried)
+        + "\n\nmainclust is an external binary and is not shipped with this\n"
+          "repository. Fetch it once and install it with\n\n"
+          "  cp mainclust %s\n"
+          "  chmod +x %s\n\n"
+          "or point $%s at it. Either way it no longer has to be copied\n"
+          "into every alloy folder."
+          % (os.path.join(_config_dir(), DEFAULT_BINARY),
+             os.path.join(_config_dir(), DEFAULT_BINARY), BINARY_ENV))
 
 
 # ----------------------------------------------------------------------------

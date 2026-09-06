@@ -225,6 +225,20 @@ def input_gen(opt):
             print("Please choose from prim / cspecs / kpoints / incar.")
             quit()
 
+    # -- mainclust check ----------------------------------------------------
+    # 이 명령은 con* 까지 만드는 것이 기본이므로, 파일을 하나라도 쓰기 전에
+    # 바이너리부터 확인한다. 다 만들어 놓고 마지막에 없다고 하면 사용자는
+    # 이미 덮어써진 PRIM/KPOINTS/INCAR 을 떠안게 된다.
+    if opt["only"] is None and not opt.get("norun"):
+        from CCpy.CASM.CASMrun import resolve_binary, MainclustError
+        try:
+            resolve_binary(workdir=".")
+        except MainclustError as err:
+            print("\n%s" % err)
+            print("\nTo write only the input files (PRIM / CSPECS / KPOINTS /")
+            print("INCAR) and stop before enumeration, add -norun.")
+            quit()
+
     # -- reference structure --------------------------------------------------
     src = opt.get("str")
     if src is None:
