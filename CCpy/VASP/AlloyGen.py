@@ -1709,29 +1709,75 @@ def write_structure_with_twins(
 # POTCAR auto-generation (potpaw_PBE-style library)
 # -----------------------------------------------------------------------------
 
-# Default element -> POTCAR variant folder name, matching the "recommended"
-# PAW-PBE potentials the lab has historically used (carried over from an
-# older server's mapping). Only used when --generate-potcar is requested;
-# any element can be overridden via --potcar-variants.
-DEFAULT_POTCAR_VARIANTS = {
-    "Ac": "Ac", "Ag": "Ag", "Al": "Al", "Ar": "Ar", "As": "As", "Au": "Au",
-    "B": "B", "Ba": "Ba_sv", "Be": "Be_sv", "Bi": "Bi", "Br": "Br", "C": "C",
-    "Ca": "Ca_sv", "Cd": "Cd", "Ce": "Ce", "Cl": "Cl", "Co": "Co", "Cr": "Cr_pv",
-    "Cs": "Cs_sv", "Cu": "Cu_pv", "Dy": "Dy_3", "Er": "Er_3", "Eu": "Eu",
-    "F": "F", "Fe": "Fe_pv", "Ga": "Ga_d", "Gd": "Gd", "Ge": "Ge_d", "H": "H",
-    "He": "He", "Hf": "Hf_pv", "Hg": "Hg", "Ho": "Ho_3", "I": "I",
-    "In": "In_d", "Ir": "Ir", "K": "K_sv", "Kr": "Kr", "La": "La",
-    "Li": "Li_sv", "Lu": "Lu_3", "Mg": "Mg_pv", "Mn": "Mn_pv", "Mo": "Mo_pv",
-    "N": "N", "Na": "Na_pv", "Nb": "Nb_pv", "Nd": "Nd_3", "Ne": "Ne",
-    "Ni": "Ni_pv", "Np": "Np", "O": "O", "Os": "Os_pv", "P": "P", "Pa": "Pa",
-    "Pb": "Pb_d", "Pd": "Pd", "Pm": "Pm_3", "Pr": "Pr_3", "Pt": "Pt",
-    "Pu": "Pu", "Rb": "Rb_sv", "Re": "Re_pv", "Rh": "Rh_pv", "Ru": "Ru_pv",
-    "S": "S", "Sb": "Sb", "Sc": "Sc_sv", "Se": "Se", "Si": "Si", "Sm": "Sm_3",
-    "Sn": "Sn_d", "Sr": "Sr_sv", "Ta": "Ta_pv", "Tb": "Tb_3", "Tc": "Tc_pv",
-    "Te": "Te", "Th": "Th", "Ti": "Ti_pv", "Tl": "Tl_d", "Tm": "Tm_3",
-    "U": "U", "V": "V_pv", "W": "W_pv", "Xe": "Xe", "Y": "Y_sv",
-    "Yb": "Yb_2", "Zn": "Zn", "Zr": "Zr_sv",
-}
+# Element -> POTCAR variant folder name.
+#
+# This used to be a hardcoded table copied from an older server. It has now been
+# removed: the mapping is read from the same place CCpyVASPInputGen reads it,
+# i.e. the "POTCAR:" section of the CCpy preset yaml (`~/.CCpy_test/vasp/`), so
+# `-gen_potcar` and `-vasp` can never disagree about which pseudopotential an
+# element gets. Only used when --generate-potcar is requested; any element can
+# still be overridden per run via --potcar-variants.
+_POTCAR_MAP_CACHE = {}
+
+
+def load_ccpy_potcar_map(preset_yaml=None):
+    """
+    Return the element -> POTCAR variant mapping CCpy itself uses.
+
+    Resolution order, mirroring CCpy/VASP/VASPio.py:
+      1. the "POTCAR:" section of `preset_yaml` in the CCpy vasp config folder
+      2. the "POTCAR:" section of `default.yaml` in that folder
+      3. the "POTCAR:" section of the packaged CCpy/VASP/vasp_default.yaml
+
+    Returns (mapping, source_path). The packaged yaml is only reached when the
+    config folder has no usable mapping, so a machine whose config has not been
+    initialised yet still gets the same table CCpy would install there.
+    """
+    cache_key = str(preset_yaml or "")
+    if cache_key in _POTCAR_MAP_CACHE:
+        return _POTCAR_MAP_CACHE[cache_key]
+
+    import yaml as _yaml
+
+    def _read(path):
+        if not path or not os.path.isfile(path):
+            return None
+        try:
+            with open(path) as handle:
+                data = _yaml.load(handle, Loader=_yaml.FullLoader)
+        except Exception:
+            return None
+        section = (data or {}).get("POTCAR")
+        if not isinstance(section, dict) or not section:
+            return None
+        return {str(el): str(variant) for el, variant in section.items()}
+
+    candidates = []
+    if _ccpy_vasp_config_dir is not None:
+        try:
+            config_dir = str(_ccpy_vasp_config_dir())
+        except Exception:
+            config_dir = None
+        if config_dir:
+            if preset_yaml:
+                name = preset_yaml if str(preset_yaml).endswith(".yaml") else str(preset_yaml) + ".yaml"
+                candidates.append(os.path.join(config_dir, name))
+            candidates.append(os.path.join(config_dir, "default.yaml"))
+    candidates.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "vasp_default.yaml"))
+
+    for path in candidates:
+        mapping = _read(path)
+        if mapping:
+            _POTCAR_MAP_CACHE[cache_key] = (mapping, path)
+            return mapping, path
+
+    raise FileNotFoundError(
+        "Could not read a POTCAR mapping from any of these:\n  "
+        + "\n  ".join(candidates)
+        + "\nAdd a 'POTCAR:' section to the CCpy preset yaml, or give every element "
+        "explicitly with --potcar-variants."
+    )
+
 
 # Shared library location(s), potpaw_PBE.54 (PBE PAW set). Different lab
 # servers have used different casing for the "potential"/"Potential" folder
@@ -1769,8 +1815,8 @@ def parse_potcar_variant_overrides(text):
     """
     Parse 'Fe:Fe_sv,Co:Co_pv' style overrides into a dict.
 
-    Used to replace or add entries on top of DEFAULT_POTCAR_VARIANTS for
-    specific elements, e.g. when the default recommended variant is not
+    Used to replace or add entries on top of the yaml POTCAR mapping for
+    specific elements, e.g. when the variant CCpy uses by default is not
     what a particular study needs.
     """
     if text is None or not str(text).strip():
@@ -1793,35 +1839,43 @@ def parse_potcar_variant_overrides(text):
     return overrides
 
 
-def resolve_potcar_variant_map(elements, potcar_library, overrides=None):
+def resolve_potcar_variant_map(elements, potcar_library, overrides=None, preset_yaml=None):
     """
     Resolve element -> POTCAR variant folder name for every element in `elements`.
 
-    DEFAULT_POTCAR_VARIANTS is the base; `overrides` replaces or adds entries.
-    Raises a clear error listing any elements with no known default and no
-    override (nothing is silently guessed), and validates that the resolved
-    variant folder actually contains a POTCAR file in potcar_library,
-    suggesting the variants that do exist for that element on mismatch.
+    The base table is the "POTCAR:" section of the CCpy preset yaml (the same
+    mapping CCpyVASPInputGen / VASPio use); `overrides` replaces or adds
+    entries. Raises a clear error listing any elements the yaml does not cover
+    and that have no override (nothing is silently guessed), and validates that
+    the resolved variant folder actually contains a POTCAR file in
+    potcar_library, suggesting the variants that do exist for that element on
+    mismatch.
+
+    Returns (variant_map, mapping_source_path) so the caller can report which
+    yaml the mapping came from.
     """
     if not potcar_library or not os.path.isdir(potcar_library):
         raise FileNotFoundError(f"POTCAR library not found: {potcar_library}")
 
+    base_map, mapping_source = load_ccpy_potcar_map(preset_yaml)
     overrides = dict(overrides or {})
     variant_map = {}
     missing = []
     for el in sorted(set(elements)):
         if el in overrides:
             variant_map[el] = overrides[el]
-        elif el in DEFAULT_POTCAR_VARIANTS:
-            variant_map[el] = DEFAULT_POTCAR_VARIANTS[el]
+        elif el in base_map:
+            variant_map[el] = base_map[el]
         else:
             missing.append(el)
 
     if missing:
         suggestion = ",".join(f"{el}:{el}" for el in missing)
         raise ValueError(
-            "No default POTCAR variant is known for: " + ", ".join(missing) +
-            ". Specify it explicitly, e.g. --potcar-variants '" + suggestion + "' "
+            "The POTCAR mapping in " + mapping_source + " has no entry for: "
+            + ", ".join(missing) +
+            ". Add it to that yaml's POTCAR section, or specify it for this run, "
+            "e.g. --potcar-variants '" + suggestion + "' "
             "(replace with the correct variant name for each)."
         )
 
@@ -1847,7 +1901,7 @@ def resolve_potcar_variant_map(elements, potcar_library, overrides=None):
             "Could not find a POTCAR for the following resolved variants in "
             f"{potcar_library}:\n" + "\n".join(lines_out)
         )
-    return variant_map
+    return variant_map, mapping_source
 
 
 def build_combined_potcar(species_order, potcar_library, variant_map):
@@ -2328,7 +2382,7 @@ def generate_structures(
                 potcar_variants if isinstance(potcar_variants, dict)
                 else parse_potcar_variant_overrides(potcar_variants)
             )
-            potcar_variant_map_used = resolve_potcar_variant_map(
+            potcar_variant_map_used, potcar_map_source = resolve_potcar_variant_map(
                 final_species, potcar_library, overrides
             )
             potcar_species_order = final_species
@@ -2361,6 +2415,8 @@ def generate_structures(
                 fh.write(combined_text)
 
             print(f"POTCAR library: {potcar_library}", flush=True)
+            print(f"POTCAR mapping source (same table CCpy VASPInput uses): "
+                  f"{potcar_map_source}", flush=True)
             print(f"POTCAR species order: {potcar_species_order}", flush=True)
             print(
                 "POTCAR variant map: " + ", ".join(
@@ -5144,7 +5200,8 @@ def build_argparser():
         help=(
             "Auto-generate a composition-correct POTCAR for each structure by "
             "concatenating per-element POTCAR files from --potcar-library, using "
-            "DEFAULT_POTCAR_VARIANTS unless overridden by --potcar-variants. Only "
+            "the POTCAR mapping of the CCpy preset yaml (the same table "
+            "CCpyVASPInputGen uses) unless overridden by --potcar-variants. Only "
             "applies together with --vasp-folder."
         ),
     )
@@ -5161,8 +5218,8 @@ def build_argparser():
         "--potcar-variants",
         default=None,
         help=(
-            "Comma-separated Element:Variant overrides on top of "
-            "DEFAULT_POTCAR_VARIANTS, e.g. 'Fe:Fe_sv,Co:Co_pv'. Only used with "
+            "Comma-separated Element:Variant overrides on top of the CCpy yaml "
+            "POTCAR mapping, e.g. 'Fe:Fe_sv,Co:Co_pv'. Only used with "
             "--generate-potcar."
         ),
     )

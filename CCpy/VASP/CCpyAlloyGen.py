@@ -147,7 +147,10 @@ ex) CCpyAlloyGen.py 1 -i=Pt32.cif -re=Pt -comp=Fe4,Co4,Ni4,Cu4 -n=500 -vasp -pre
 
     < LEGACY VASP FILES (Gen-HEA style, only with -fmt=folder) >
     -template=[DIR]  : copy INCAR/KPOINTS/POTCAR from DIR into every structure folder
-    -gen_potcar      : build POTCAR by concatenating a potpaw_PBE-style library
+    -gen_potcar      : build POTCAR by concatenating a potpaw_PBE-style library.
+                       The element -> pseudopotential mapping is read from the
+                       CCpy preset yaml ([PRESET_DIR]), the same table
+                       CCpyVASPInputGen / -vasp use, so both paths agree.
     -potcar_lib=[DIR]: potpaw library path          (DEFAULT : auto-detect)
     -potcar_var=[..] : variant overrides            ex) -potcar_var=Fe:Fe_sv,Co:Co_pv
 --------------------------------------'''.replace("[PRESET_DIR]", _PRESET_DIR)
