@@ -27,9 +27,15 @@ def _help():
 Calling `CCpyCASMInputGen.py 1` with no arguments walks you through it with
 questions; giving even one sub_option skips the questions (for scripts).
 
-Requirements -- the working directory needs a per-element POTCAR_<element>.
-INCAR is written when absent (CCpy yaml defaults + the lecture notes, sec. 3);
-an INCAR that is already there is left untouched. mainclust is looked for in
+Option 1 creates a folder named after the alloy (-occ=Cu,Ni -> Cu-Ni/, and
+Cu-Ni_sym/ with -sym) and builds everything inside it, so several systems can
+sit side by side under one parent. -dir= picks another name, -here works in
+the current folder.
+
+Requirements -- a structure file. POTCAR_<element> is copied in from the
+folder you started in, or built from the POTCAR library through the CCpy yaml
+mapping. INCAR is written when absent (CCpy yaml defaults + the lecture notes,
+sec. 3); an INCAR already there is left untouched. mainclust is looked for in
 the order $CCpy_MAINCLUST / ~/.CCpy_test / working directory / $PATH.
 
 
@@ -59,6 +65,16 @@ ex) CCpyCASMInputGen.py 1
     -r=#        : specify the radius directly (angstrom)
     -sizes=#,#  : cluster sizes               (DEFAULT : 2,3,4)
     -sp=A,B     : measure distances between just these elements (Li-C: -sp=Li)
+
+    < FOLDER >   [option 1]
+    -dir=NAME   : folder to build in         (DEFAULT : from -occ elements)
+    -here       : build in the current folder, do not create one
+
+    < POTCAR >   [option 1]
+    -potlib=P   : POTCAR library path        (DEFAULT : $CCpy_POTCAR_LIBRARY,
+                  then the paths AlloyGen uses)
+    -pot=A:V    : variant per element, e.g. -pot=Fe:Fe_sv,Co:Co_pv
+    -nopotcar   : never build POTCAR_<element>, only use what is there
 
     < INCAR >   [option 1]
     -preset=F   : yaml to use                 (DEFAULT : default.yaml)
@@ -118,6 +134,80 @@ def _suggest_supercell(natoms, target=8):
     return (need, 1, 1)
 
 
+def _occ_elements(occupancy, ordered):
+    """Every species that may sit on a site, first-seen order, Vac dropped."""
+    from CCpy.CASM.CASMprim import VACANCY
+    out = []
+    groups = [occupancy] if isinstance(occupancy, str) \
+        else [str(occupancy[e]) for e in ordered]
+    for group in groups:
+        for sp in group.replace(",", " ").split():
+            if sp != VACANCY and sp not in out:
+                out.append(sp)
+    return out
+
+
+def _alloy_name(occupancy, ordered, sym=False):
+    """Folder name from the species that may sit on the sites: Cu,Ir -> Cu-Ir.
+
+    Method 2 gets a _sym suffix so the two methods can live side by side --
+    comparing the symmetric and asymmetric hull is the whole point of running
+    both, and that needs two folders, not one overwritten twice.
+    """
+    elts = _occ_elements(occupancy, ordered)
+    name = "-".join(elts) if elts else "CASM"
+    return name + "_sym" if sym else name
+
+
+def _enter_dir(opt, name):
+    """Create the working folder and move into it. Returns the folder or None.
+
+    Staying put is right in two cases: -here was given, or we are already
+    standing in a folder of that name (re-running inside Cu-Ir/ must not make
+    Cu-Ir/Cu-Ir/).
+    """
+    if opt.get("here"):
+        return None
+    if os.path.basename(os.path.abspath(".")) == name:
+        print("\n* Already in %s/, staying here." % name)
+        return None
+
+    if os.path.isdir(name):
+        inside = [f for f in os.listdir(name) if not f.startswith(".")]
+        if inside:
+            print("\n* %s/ already exists and is not empty (%d entries)."
+                  % (name, len(inside)))
+            if not opt["interactive"] or opt.get("yes"):
+                print("  Give -dir=<other name> to use another folder, or")
+                print("  -here to work in the current one.")
+                quit()
+            if _ask("  Use it anyway? (y/n)", "n").lower() not in ("y", "yes"):
+                print("  Nothing was created.")
+                quit()
+    else:
+        os.makedirs(name)
+    os.chdir(name)
+    print("\n* Working in %s/" % name)
+    return name
+
+
+def _abandon_dir(origin, name):
+    """Undo _enter_dir when a later step fails, if nothing was written yet.
+
+    Leaving an empty Cu-Ir/ behind after an error is worse than useless: the
+    next run then reports that the folder already exists.
+    """
+    if not name:
+        return
+    try:
+        os.chdir(origin)
+        if not os.listdir(name):
+            os.rmdir(name)
+            print("       Removed the empty %s/." % name)
+    except OSError:
+        pass
+
+
 def _confirm_size(n, opt):
     """Check whether the configuration count is manageable. It doubles with
     every extra mixed site."""
@@ -173,6 +263,16 @@ def _parse_subopts(argv):
             opt["kl"] = float(arg.split("=", 1)[1])
         elif arg.startswith("-kp="):
             opt["kp"] = [int(v) for v in arg.split("=", 1)[1].split(",")]
+        elif arg.startswith("-dir="):
+            opt["dir"] = arg.split("=", 1)[1].strip()
+        elif arg == "-here":
+            opt["here"] = True
+        elif arg.startswith("-potlib="):
+            opt["potlib"] = arg.split("=", 1)[1]
+        elif arg.startswith("-pot="):
+            opt["pot"] = arg.split("=", 1)[1]
+        elif arg == "-nopotcar":
+            opt["nopotcar"] = True
         elif arg.startswith("-preset="):
             opt["preset"] = arg.split("=", 1)[1]
         elif arg.startswith("-encut="):
@@ -253,6 +353,11 @@ def input_gen(opt):
     if not os.path.isfile(src):
         print("%s is missing." % src)
         quit()
+    # 폴더를 만들고 그 안으로 들어가므로, 지금 준 상대 경로를 미리 굳혀 둔다.
+    src = os.path.abspath(src)
+    origin = os.getcwd()
+    if opt.get("ref"):
+        opt["ref"] = [os.path.abspath(r) for r in opt["ref"]]
 
     made = []
 
@@ -284,6 +389,27 @@ def input_gen(opt):
             print("\nNo -occ given, so every site is left fixed.")
             print("For a binary alloy, give something like -occ=Cu,Ir.")
             occupancy = dict((e, e) for e in ordered)
+
+        # -- working folder ---------------------------------------------
+        name = opt.get("dir") or _alloy_name(occupancy, ordered,
+                                             sym=opt.get("sym", False))
+        entered = _enter_dir(opt, name)
+
+        # -- per-element POTCAR -----------------------------------------
+        from CCpy.CASM import CASMpotcar as pot
+        try:
+            recs, pnotes = pot.ensure(
+                ".", elements=_occ_elements(occupancy, ordered),
+                search_dirs=[origin], library=opt.get("potlib"),
+                overrides=pot.parse_overrides(opt["pot"]) if opt.get("pot") else None,
+                preset=opt.get("preset"),
+                generate=not opt.get("nopotcar"))
+            print("\n[POTCAR]")
+            print(pot.describe(recs, pnotes))
+        except pot.PotcarError as err:
+            print("\n[POTCAR] %s" % err)
+            _abandon_dir(origin, entered)
+            quit()
 
         guess = " ".join(str(v) for v in _suggest_supercell(len(species)))
         sc = opt.get("sc")
