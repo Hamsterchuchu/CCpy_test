@@ -226,9 +226,9 @@ def input_gen(opt):
             quit()
 
     # -- mainclust check ----------------------------------------------------
-    # 이 명령은 con* 까지 만드는 것이 기본이므로, 파일을 하나라도 쓰기 전에
-    # 바이너리부터 확인한다. 다 만들어 놓고 마지막에 없다고 하면 사용자는
-    # 이미 덮어써진 PRIM/KPOINTS/INCAR 을 떠안게 된다.
+    # This command builds all the way to con* by default, so the binary is
+    # checked before a single file is written. Checking only at the end would
+    # leave the user with an already-overwritten PRIM/KPOINTS/INCAR.
     if opt["only"] is None and not opt.get("norun"):
         from CCpy.CASM.CASMrun import resolve_binary, MainclustError
         try:
