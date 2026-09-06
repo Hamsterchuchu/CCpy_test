@@ -928,6 +928,215 @@ def make_block_cluster_configuration(parent, replace_sites, cluster_order, view_
     return atoms, chosen, regions
 
 
+# -----------------------------------------------------------------------------
+# 2x2x2 octant clusters ("shape=octant") -- the default
+# -----------------------------------------------------------------------------
+#
+# The plain 2x2 template cuts only the two axes of the top view, so each region
+# runs the full height of the cell along the view axis. Seen from the front the
+# regions are there; seen from the side the same picture repeats at every
+# height, so the structure reads as two stacked layers instead of four regions.
+#
+# Cutting the view axis as well gives 2x2x2 = 8 boxes. Four elements cannot each
+# own one box, so every element takes TWO boxes that meet only at the body
+# diagonal -- the far half carries the near half's 2x2 pattern turned by 180
+# degrees:
+#
+#     near half (front)         far half (back)
+#       TL = A   TR = B           TL = D   TR = C
+#       BL = C   BR = D           BL = B   BR = A
+#
+# Pairing along the body diagonal is what makes this genuinely three
+# dimensional: both halves of every axis hold all four elements, just arranged
+# differently, so no viewing direction collapses the structure into layers.
+# (Pairing two boxes that share a face would instead rebuild a prism along that
+# direction, which is the very thing being fixed.)
+
+
+def _split_octants(sites, frac, h_axis, v_axis, d_axis, capacities):
+    """
+    Rank-based 2x2x2 split of `sites` into eight exact-count groups.
+
+    `capacities` is eight counts in the order
+        near TL, near TR, near BL, near BR, far TL, far TR, far BL, far BR
+    ("near" = larger coordinate along d_axis, matching the top/bottom
+    convention of _split_quadrants). The cell is first cut in two along
+    d_axis by rank, then each half goes through the existing 2x2 split, so
+    the exact counts and the coordinate-plane guard of the 2D template carry
+    over unchanged.
+    """
+    sites = list(sites)
+    if len(capacities) != 8:
+        raise ValueError("_split_octants needs eight capacities.")
+    near_n = sum(capacities[:4])
+    far_n = sum(capacities[4:])
+    if near_n + far_n != len(sites):
+        raise ValueError(
+            "Octant split counts do not match the number of sites: "
+            f"sum={near_n + far_n}, sites={len(sites)}."
+        )
+
+    by_depth_desc = sorted(sites, key=lambda i: frac[i, d_axis], reverse=True)
+    _validate_rank_cuts(
+        by_depth_desc, [near_n], frac[:, d_axis],
+        "near/far cluster boundary along the view axis"
+    )
+    near_sites = by_depth_desc[:near_n]
+    far_sites = by_depth_desc[near_n:]
+
+    near = _split_quadrants(near_sites, frac, h_axis, v_axis, *capacities[:4])
+    far = _split_quadrants(far_sites, frac, h_axis, v_axis, *capacities[4:])
+    return list(near) + list(far)
+
+
+def _halve_counts(counts):
+    """
+    Split each element's count into its two body-diagonal boxes.
+
+    An odd count cannot be halved exactly, so the leftover atom alternates
+    between the near and the far half. That keeps the two halves the same size
+    (which the depth cut needs) instead of piling every leftover on one side.
+    """
+    near, far = [], []
+    leftover_to_near = True
+    for n in counts:
+        half = int(n) // 2
+        if int(n) % 2:
+            if leftover_to_near:
+                near.append(half + 1)
+                far.append(half)
+            else:
+                near.append(half)
+                far.append(half + 1)
+            leftover_to_near = not leftover_to_near
+        else:
+            near.append(half)
+            far.append(half)
+    return near, far
+
+
+def make_octant_cluster_configuration(parent, replace_sites, cluster_order, view_axis="z"):
+    """
+    Create a 2x2x2 cluster: the 2x2 top-view template, cut along the view axis too.
+
+    cluster_order is [(TL, n), (TR, n), (BL, n), (BR, n)] exactly as in the
+    plain template, so the same pattern string means the same near-side picture.
+    Each element also takes the box diagonally opposite in the far half.
+    """
+    if len(cluster_order) != 4:
+        raise ValueError("cluster_order must contain four regions: TL, TR, BL, BR.")
+
+    sites = list(replace_sites)
+    total_needed = sum(n for _, n in cluster_order)
+    if total_needed != len(sites):
+        raise ValueError(
+            "cluster mode requires full replacement of the selected sublattice: "
+            f"composition_sum={total_needed}, replacement_sites={len(sites)}."
+        )
+
+    h_axis, v_axis = _view_axis_to_plane_indices(view_axis)
+    d_axis = _axis_to_index(view_axis)
+    frac = parent.get_scaled_positions()
+
+    elements = [el for el, _ in cluster_order]
+    near_counts, far_counts = _halve_counts([n for _, n in cluster_order])
+    # far half = near pattern rotated 180 degrees: TL<->BR, TR<->BL
+    far_order = [3, 2, 1, 0]
+    capacities = list(near_counts) + [far_counts[j] for j in far_order]
+
+    groups = _split_octants(sites, frac, h_axis, v_axis, d_axis, capacities)
+
+    atoms = parent.copy()
+    corner_names = ["TL", "TR", "BL", "BR"]
+    regions = []
+    for slot in range(4):
+        element = elements[slot]
+        for idx in groups[slot]:
+            atoms[idx].symbol = element
+        regions.append(
+            ("near-" + corner_names[slot], element, near_counts[slot], groups[slot])
+        )
+    for slot in range(4):
+        element = elements[far_order[slot]]
+        for idx in groups[4 + slot]:
+            atoms[idx].symbol = element
+        regions.append(
+            ("far-" + corner_names[slot], element, capacities[4 + slot], groups[4 + slot])
+        )
+
+    _verify_cluster_regions(atoms, regions)
+    chosen = [idx for group in groups for idx in group]
+    return atoms, chosen, regions
+
+
+def make_octant_quincunx_configuration(parent, replace_sites, cluster_order, view_axis="z"):
+    """
+    Five-element version: a 3D core plus a 2x2x2 outer shell.
+
+    The centre element takes the sites closest to the centroid in all three
+    directions (the plain quincunx ranks them in the top-view plane only, which
+    is what turned its centre into a column). The remaining sites go through the
+    same 2x2x2 split as the four-element template.
+    """
+    if len(cluster_order) != 5:
+        raise ValueError("cluster_order must contain five regions: center, TL, TR, BL, BR.")
+
+    sites = list(replace_sites)
+    total_needed = sum(n for _, n in cluster_order)
+    if total_needed != len(sites):
+        raise ValueError(
+            "cluster mode requires full replacement of the selected sublattice: "
+            f"composition_sum={total_needed}, replacement_sites={len(sites)}."
+        )
+
+    center_el, center_n = cluster_order[0]
+    h_axis, v_axis = _view_axis_to_plane_indices(view_axis)
+    d_axis = _axis_to_index(view_axis)
+    frac = parent.get_scaled_positions()
+
+    centroid = frac[sites].mean(axis=0)
+    radial2_full = np.full(len(frac), np.nan)
+    for i in sites:
+        delta = frac[i] - centroid
+        radial2_full[i] = float(np.dot(delta, delta))
+    by_radius = sorted(sites, key=lambda i: radial2_full[i])
+    _validate_rank_cuts(
+        by_radius, [center_n], radial2_full, "center/outer cluster boundary"
+    )
+    center_sites = by_radius[:center_n]
+    outer_sites = by_radius[center_n:]
+
+    elements = [el for el, _ in cluster_order[1:]]
+    near_counts, far_counts = _halve_counts([n for _, n in cluster_order[1:]])
+    far_order = [3, 2, 1, 0]
+    capacities = list(near_counts) + [far_counts[j] for j in far_order]
+    groups = _split_octants(outer_sites, frac, h_axis, v_axis, d_axis, capacities)
+
+    atoms = parent.copy()
+    for idx in center_sites:
+        atoms[idx].symbol = center_el
+    regions = [("center", center_el, center_n, center_sites)]
+    corner_names = ["TL", "TR", "BL", "BR"]
+    for slot in range(4):
+        element = elements[slot]
+        for idx in groups[slot]:
+            atoms[idx].symbol = element
+        regions.append(
+            ("near-" + corner_names[slot], element, near_counts[slot], groups[slot])
+        )
+    for slot in range(4):
+        element = elements[far_order[slot]]
+        for idx in groups[4 + slot]:
+            atoms[idx].symbol = element
+        regions.append(
+            ("far-" + corner_names[slot], element, capacities[4 + slot], groups[4 + slot])
+        )
+
+    _verify_cluster_regions(atoms, regions)
+    chosen = center_sites + [idx for group in groups for idx in group]
+    return atoms, chosen, regions
+
+
 def _verify_cluster_regions(atoms, regions):
     """
     Check that every region really holds the element and the number of atoms it
@@ -2562,7 +2771,7 @@ def generate_structures(
     layer_axis="z",
     view_axis="z",
     cluster_pattern=None,
-    cluster_shape="plane",
+    cluster_shape="octant",
     children_per_parent=None,
     keep_composition=False,
     generate_potcar=False,
@@ -2581,9 +2790,9 @@ def generate_structures(
         mode = "cluster"
     if cluster_pattern is None and domain_pattern is not None:
         cluster_pattern = domain_pattern
-    cluster_shape = str(cluster_shape or "plane").strip().lower()
-    if cluster_shape not in {"plane", "block"}:
-        raise ValueError("cluster_shape must be 'plane' or 'block'.")
+    cluster_shape = str(cluster_shape or "octant").strip().lower()
+    if cluster_shape not in {"octant", "plane", "block"}:
+        raise ValueError("cluster_shape must be 'octant', 'plane' or 'block'.")
     if mode not in {"random", "spread", "layered", "cluster", "exhaustive"}:
         raise ValueError(f"Unknown mode: {mode}")
     if mode != "exhaustive" and (target <= 0 or max_attempts <= 0):
@@ -2678,6 +2887,9 @@ def generate_structures(
         if cluster_shape == "block":
             print(f"Cluster mode: 3D block regions ({_cluster_n} compact lumps, "
                   "all three axes cut)")
+        elif cluster_shape == "octant":
+            print(f"Cluster mode: 2x2x2 regions along {view_axis}-axis "
+                  "(the far half repeats the near 2x2 turned 180 degrees)")
         elif _cluster_n == 4:
             print(f"Cluster mode: intuitive 2x2 top-view regions along {view_axis}-axis")
             print(f"Cluster pattern: {cluster_pattern if cluster_pattern else 'composition order (TL,TR/BL,BR)'}")
@@ -3336,7 +3548,41 @@ def generate_structures(
                 )
 
             cluster_component_count = len(composition)
-            if cluster_shape == "block":
+            if cluster_shape == "octant":
+                if cluster_component_count == 4:
+                    cluster_template_orders = unique_cluster_orders(
+                        composition, cluster_pattern
+                    )
+                    cluster_configurator = make_octant_cluster_configuration
+                    cluster_scheme_desc = "2x2x2 region template (near 2x2 + 180-turned far 2x2)"
+                    default_pattern_desc = "composition order (TL,TR/BL,BR)"
+
+                    def _cluster_label(order):
+                        return (
+                            "oct_" + "-".join(el for el, _ in order[:2])
+                            + "_over_" + "-".join(el for el, _ in order[2:])
+                        )
+                elif cluster_component_count == 5:
+                    cluster_template_orders = unique_quincunx_orders(
+                        composition, cluster_pattern
+                    )
+                    cluster_configurator = make_octant_quincunx_configuration
+                    cluster_scheme_desc = "3D core + 2x2x2 outer shell"
+                    default_pattern_desc = "auto-generated center/corner assignment (Center:TL,TR/BL,BR)"
+
+                    def _cluster_label(order):
+                        center_el = order[0][0]
+                        return (
+                            f"oct_{center_el}core_"
+                            + "-".join(el for el, _ in order[1:3])
+                            + "_over_" + "-".join(el for el, _ in order[3:5])
+                        )
+                else:
+                    raise ValueError(
+                        "cluster mode with shape=octant supports 4- or 5-element "
+                        f"compositions; got {cluster_component_count}: {list(composition.keys())}."
+                    )
+            elif cluster_shape == "block":
                 cluster_template_orders = unique_block_cluster_orders(
                     composition, cluster_pattern
                 )
@@ -5273,7 +5519,7 @@ def run_wizard(initial=None):
         # mode detail (visible)
         "axis": "z",
         "view": "z",
-        "shape": "plane",
+        "shape": "octant",
         "pattern": "",
         "order": "1,0.75,0.5,0.25,0",
         # CCpy VASP input generation (visible)
@@ -5416,7 +5662,7 @@ def run_wizard(initial=None):
         print("  --- mode detail (layered/cluster) " + "-" * 38)
         _row("axis", "# layered layer axis (x/y/z)")
         _row("view", "# cluster top-view axis (x/y/z), used by shape=plane")
-        _row("shape", "# plane = 2x2 top-view prisms / block = 3D lumps cut on all three axes")
+        _row("shape", "# octant = 2x2x2 boxes / plane = 2x2 prisms (old) / block = 3D lumps")
         _row("pattern", "# cluster pattern (ex: Co,Fe/Ni,Cu / empty = auto all)")
         _row("order", "# target order parameter Q level")
         print("  --- CCpy VASP inputs " + "-" * 51)
@@ -5468,8 +5714,8 @@ def run_wizard(initial=None):
             print("[Validation failed] %s" % exc)
             return False
 
-        if mode == "cluster" and s["shape"].strip().lower() not in ("plane", "block"):
-            print("[Validation failed] shape must be plane or block: %r" % s["shape"])
+        if mode == "cluster" and s["shape"].strip().lower() not in ("octant", "plane", "block"):
+            print("[Validation failed] shape must be octant, plane or block: %r" % s["shape"])
             return False
         if mode == "cluster" and len(composition) not in (4, 5):
             print("[Validation failed] cluster mode supports only 4-element (2x2 / 4-lump) or "
@@ -5809,12 +6055,14 @@ def build_argparser():
     )
     p.add_argument(
         "--cluster-shape",
-        choices=["plane", "block"],
-        default="plane",
+        choices=["octant", "plane", "block"],
+        default="octant",
         help=(
-            "plane (default): the 2x2 / quincunx top-view template, whose regions "
-            "run the full height of the cell along --view-axis. block: 3D regions "
-            "cut on all three axes, one compact lump per element."
+            "octant (default): 2x2x2 boxes -- the 2x2 top-view template with the "
+            "view axis cut as well, the far half carrying the near pattern turned "
+            "180 degrees. plane: the original 2x2 / quincunx template, whose "
+            "regions run the full height of the cell along --view-axis. block: "
+            "one compact 3D lump per element, grown from body-diagonal seeds."
         ),
     )
     p.add_argument(
