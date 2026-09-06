@@ -19,8 +19,8 @@ Main improvements over the original Code500.py:
 2) spglib symmetry search is performed only once on the parent structure.
 3) Flexible composition, replacement element, and generation mode.
 4) Supports both random sampling and exhaustive enumeration for small cases.
-5) Four physical structure axes: random, spread, layered, and domain.
-6) Layered/domain ordered-parent generation controlled by a symmetry-invariant,
+5) Four physical structure axes: random, spread, layered, and cluster.
+6) Layered/cluster ordered-parent generation controlled by a symmetry-invariant,
    composition-corrected overlap Q plus first-shell Warren-Cowley SRO.
 7) Short structure IDs (S000001) with full metadata in structures.csv.
 8) Can write CIF files or VASP POSCAR-style folders.
@@ -461,9 +461,9 @@ def spread_configuration(parent, replace_sites, elements):
     return atoms, chosen
 
 
-def parse_domain_pattern(pattern, composition):
+def parse_cluster_pattern(pattern, composition):
     """
-    Parse one human-readable 2x2 top-view domain pattern.
+    Parse one human-readable 2x2 top-view cluster pattern.
 
     Example
     -------
@@ -479,13 +479,13 @@ def parse_domain_pattern(pattern, composition):
     (bottom_left, count), (bottom_right, count)].
     """
     if pattern is None or str(pattern).strip() == "":
-        raise ValueError("No domain_pattern was provided.")
+        raise ValueError("No cluster pattern was provided.")
 
     raw = str(pattern).replace(";", "/").strip()
     rows = raw.split("/")
     if len(rows) != 2:
         raise ValueError(
-            "domain_pattern must have two rows, e.g. 'Co,Fe/Ni,Cu'."
+            "pattern must have two rows, e.g. 'Co,Fe/Ni,Cu'."
         )
 
     elems = []
@@ -493,54 +493,54 @@ def parse_domain_pattern(pattern, composition):
         parts = [x.strip() for x in row.split(",") if x.strip()]
         if len(parts) != 2:
             raise ValueError(
-                "Each domain row must contain two elements, e.g. 'Co,Fe/Ni,Cu'."
+                "Each cluster row must contain two elements, e.g. 'Co,Fe/Ni,Cu'."
             )
         elems.extend(parts)
 
-    return validate_domain_elements(elems, composition)
+    return validate_cluster_elements(elems, composition)
 
 
-def validate_domain_elements(elems, composition):
-    """Validate four domain elements and attach composition counts."""
+def validate_cluster_elements(elems, composition):
+    """Validate four cluster-region elements and attach composition counts."""
     if len(elems) != 4:
-        raise ValueError("domain mode requires exactly four domain elements.")
+        raise ValueError("cluster mode requires exactly four region elements.")
     if len(set(elems)) != 4:
-        raise ValueError("domain mode requires four different elements.")
+        raise ValueError("cluster mode requires four different elements.")
     for el in elems:
         if el not in composition:
-            raise ValueError(f"Element {el} in domain pattern is not in composition.")
+            raise ValueError(f"Element {el} in cluster pattern is not in composition.")
 
     counts = [composition[el] for el in elems]
     if len(set(counts)) != 1:
         raise ValueError(
-            "domain mode currently requires equal counts for the four elements, "
+            "cluster mode currently requires equal counts for the four elements, "
             "e.g. Fe:8,Co:8,Ni:8,Cu:8."
         )
     return [(el, composition[el]) for el in elems]
 
 
-def unique_domain_orders(composition, domain_pattern=None):
+def unique_cluster_orders(composition, cluster_pattern=None):
     """
-    Return domain orders for 2x2 top-view domain templates.
+    Return cluster orders for 2x2 top-view cluster templates.
 
-    If domain_pattern is provided, only that specific template is returned.
-    If domain_pattern is omitted, all 4! possible element arrangements over
+    If cluster_pattern is provided, only that specific template is returned.
+    If cluster_pattern is omitted, all 4! possible element arrangements over
     TL/TR/BL/BR are generated. Symmetry-equivalent structures are later removed
     by canonical_decoration_key(), so the user does not need to manually specify
     patterns such as 'Co,Fe/Ni,Cu'.
     """
-    if domain_pattern is not None and str(domain_pattern).strip() != "":
-        return [parse_domain_pattern(domain_pattern, composition)]
+    if cluster_pattern is not None and str(cluster_pattern).strip() != "":
+        return [parse_cluster_pattern(cluster_pattern, composition)]
 
     elems = list(composition.keys())
     if len(elems) != 4:
         raise ValueError(
-            "Automatic domain mode requires exactly four elements in composition, "
+            "Automatic cluster mode requires exactly four elements in composition, "
             "e.g. Fe:8,Co:8,Ni:8,Cu:8."
         )
     if len(set(composition.values())) != 1:
         raise ValueError(
-            "Automatic domain mode requires equal counts for all four elements, "
+            "Automatic cluster mode requires equal counts for all four elements, "
             "e.g. Fe:8,Co:8,Ni:8,Cu:8."
         )
 
@@ -550,22 +550,22 @@ def unique_domain_orders(composition, domain_pattern=None):
         if perm in seen:
             continue
         seen.add(perm)
-        orders.append(validate_domain_elements(list(perm), composition))
+        orders.append(validate_cluster_elements(list(perm), composition))
     return orders
 
 
 def validate_quincunx_elements(elems, composition):
     """
-    Validate a 5-element quincunx domain order: center + TL/TR/BL/BR corners.
+    Validate a 5-element quincunx cluster order: center + TL/TR/BL/BR corners.
 
     The four outer (corner) elements must share an equal count so the outer
     ring can be split into four equal-count quadrants; the center element's
     count may differ from the corners.
     """
     if len(elems) != 5:
-        raise ValueError("quincunx domain mode requires exactly five domain elements.")
+        raise ValueError("quincunx cluster mode requires exactly five region elements.")
     if len(set(elems)) != 5:
-        raise ValueError("quincunx domain mode requires five different elements.")
+        raise ValueError("quincunx cluster mode requires five different elements.")
     for el in elems:
         if el not in composition:
             raise ValueError(f"Element {el} in quincunx pattern is not in composition.")
@@ -575,7 +575,7 @@ def validate_quincunx_elements(elems, composition):
     outer_counts = [composition[el] for el in outer_els]
     if len(set(outer_counts)) != 1:
         raise ValueError(
-            "quincunx domain mode requires the four outer (corner) elements to have "
+            "quincunx cluster mode requires the four outer (corner) elements to have "
             "equal counts; the center element's count may differ from them. "
             f"got outer counts {dict(zip(outer_els, outer_counts))} for center={center_el}."
         )
@@ -611,28 +611,28 @@ def parse_quincunx_pattern(pattern, composition):
     if not center_el:
         raise ValueError("quincunx pattern is missing the center element before ':'.")
 
-    corner_order = parse_domain_pattern(corners_part, composition)
+    corner_order = parse_cluster_pattern(corners_part, composition)
     corner_elems = [el for el, _ in corner_order]
     return validate_quincunx_elements([center_el] + corner_elems, composition)
 
 
-def unique_quincunx_orders(composition, domain_pattern=None):
+def unique_quincunx_orders(composition, cluster_pattern=None):
     """
-    Return domain orders for the 5-element quincunx (center + 2x2 corners) template.
+    Return cluster orders for the 5-element quincunx (center + 2x2 corners) template.
 
-    If domain_pattern is provided (format 'CenterElement:TL,TR/BL,BR'), only that
+    If cluster_pattern is provided (format 'CenterElement:TL,TR/BL,BR'), only that
     specific template is returned. If omitted, every element is tried as the
     center; only center choices whose remaining four elements share an equal
     count are valid, combined with all 4! corner arrangements. Symmetry-
     equivalent results are later removed by canonical_decoration_key().
     """
-    if domain_pattern is not None and str(domain_pattern).strip() != "":
-        return [parse_quincunx_pattern(domain_pattern, composition)]
+    if cluster_pattern is not None and str(cluster_pattern).strip() != "":
+        return [parse_quincunx_pattern(cluster_pattern, composition)]
 
     elems = list(composition.keys())
     if len(elems) != 5:
         raise ValueError(
-            "Automatic quincunx domain mode requires exactly five elements in "
+            "Automatic quincunx cluster mode requires exactly five elements in "
             "composition, e.g. Cu:4,Co:4,Fe:4,Ni:4,Ti:4."
         )
 
@@ -678,7 +678,7 @@ def _split_quadrants(sites, frac, h_axis, v_axis, tl_n, tr_n, bl_n, br_n):
     """
     Rank-based 2x2 (top-view) split of `sites` into exact-count TL/TR/BL/BR groups.
 
-    Shared by the 4-element rectangular domain template and the 5-element
+    Shared by the 4-element rectangular cluster template and the 5-element
     quincunx template (applied there to the outer ring after the center
     cluster has been carved out).
 
@@ -702,7 +702,7 @@ def _split_quadrants(sites, frac, h_axis, v_axis, tl_n, tr_n, bl_n, br_n):
     sites_by_v_desc = sorted(sites, key=lambda i: frac[i, v_axis], reverse=True)
     _validate_rank_cuts(
         sites_by_v_desc, [top_n], frac[:, v_axis],
-        "top/bottom domain boundary"
+        "top/bottom cluster boundary"
     )
     top_sites = sites_by_v_desc[:top_n]
     bottom_sites = sites_by_v_desc[top_n:top_n + bottom_n]
@@ -710,8 +710,8 @@ def _split_quadrants(sites, frac, h_axis, v_axis, tl_n, tr_n, bl_n, br_n):
     # Left has smaller horizontal coordinate. Right has larger horizontal coordinate.
     top_by_h = sorted(top_sites, key=lambda i: frac[i, h_axis])
     bottom_by_h = sorted(bottom_sites, key=lambda i: frac[i, h_axis])
-    _validate_rank_cuts(top_by_h, [tl_n], frac[:, h_axis], "top left/right domain boundary")
-    _validate_rank_cuts(bottom_by_h, [bl_n], frac[:, h_axis], "bottom left/right domain boundary")
+    _validate_rank_cuts(top_by_h, [tl_n], frac[:, h_axis], "top left/right cluster boundary")
+    _validate_rank_cuts(bottom_by_h, [bl_n], frac[:, h_axis], "bottom left/right cluster boundary")
 
     tl_sites = top_by_h[:tl_n]
     tr_sites = top_by_h[tl_n:tl_n + tr_n]
@@ -720,16 +720,141 @@ def _split_quadrants(sites, frac, h_axis, v_axis, tl_n, tr_n, bl_n, br_n):
     return tl_sites, tr_sites, bl_sites, br_sites
 
 
-def make_domain_template_configuration(parent, replace_sites, domain_order, view_axis="z"):
+def _verify_cluster_regions(atoms, regions):
     """
-    Create an intuitive 2x2 domain structure in top view.
+    Check that every region really holds the element and the number of atoms it
+    was asked for, in the finished structure.
+
+    The rank-based splits are supposed to guarantee this by construction, but
+    "supposed to" is what a check is for: a wrong count here would silently
+    hand VASP a structure whose composition is not the one on the label. Also
+    rejects a site claimed by two regions.
+    """
+    symbols = atoms.get_chemical_symbols()
+    seen = {}
+    problems = []
+    for label, element, declared_n, sites in regions:
+        actual = sum(1 for i in sites if str(symbols[i]) == element)
+        if len(sites) != int(declared_n):
+            problems.append(
+                f"{label}: asked for {declared_n} sites, the split produced {len(sites)}"
+            )
+        if actual != len(sites):
+            problems.append(
+                f"{label}: {len(sites)} sites but only {actual} of them are {element}"
+            )
+        for i in sites:
+            if i in seen:
+                problems.append(f"site {i} is claimed by both {seen[i]} and {label}")
+            seen[i] = label
+    if problems:
+        raise ValueError(
+            "Cluster region check failed:\n  " + "\n  ".join(problems)
+        )
+
+
+def cluster_region_rows(atoms, regions, view_axis="z"):
+    """
+    Describe each cluster region: declared vs actual atom count, and where the
+    region actually sits in the cell.
+
+    The fractional span along each axis is what shows whether a region is a
+    compact block or a prism cutting straight through the cell. The 2x2 and
+    quincunx templates only partition the two axes of the top view, so the
+    region always spans the full cell along `view_axis` -- `spans` in the
+    returned rows makes that explicit rather than leaving it to be discovered
+    in VESTA.
+    """
+    symbols = atoms.get_chemical_symbols()
+    frac = atoms.get_scaled_positions()
+    view_index = _axis_to_index(view_axis)
+    all_span = [
+        (float(frac[:, k].min()), float(frac[:, k].max())) for k in range(3)
+    ]
+    rows = []
+    for label, element, declared_n, sites in regions:
+        sites = list(sites)
+        actual_n = sum(1 for i in sites if str(symbols[i]) == element)
+        sub = frac[sites]
+        span = [(float(sub[:, k].min()), float(sub[:, k].max())) for k in range(3)]
+        full = [
+            abs(span[k][0] - all_span[k][0]) < 1e-6 and abs(span[k][1] - all_span[k][1]) < 1e-6
+            for k in range(3)
+        ]
+        rows.append({
+            "region": label,
+            "element": element,
+            "declared_n": int(declared_n),
+            "actual_n": int(actual_n),
+            "match": "OK" if int(actual_n) == int(declared_n) else "MISMATCH",
+            "a_min": span[0][0], "a_max": span[0][1],
+            "b_min": span[1][0], "b_max": span[1][1],
+            "c_min": span[2][0], "c_max": span[2][1],
+            "centroid": tuple(float(v) for v in sub.mean(axis=0)),
+            "spans_a": full[0], "spans_b": full[1], "spans_c": full[2],
+            "spans_view_axis": full[view_index],
+        })
+    return rows
+
+
+def print_cluster_region_table(rows, view_axis="z", title="Cluster regions"):
+    """Print the region table returned by cluster_region_rows()."""
+    axis_names = ("a", "b", "c")
+    print(f"\n[{title}]  (fractional coordinates; view axis = {view_axis})")
+    print("  %-7s %-4s %9s %8s %-6s %-13s %-13s %-13s" % (
+        "region", "el", "declared", "actual", "check", "a-range", "b-range", "c-range"))
+    for r in rows:
+        print("  %-7s %-4s %9d %8d %-6s [%.3f,%.3f]  [%.3f,%.3f]  [%.3f,%.3f]" % (
+            r["region"], r["element"], r["declared_n"], r["actual_n"], r["match"],
+            r["a_min"], r["a_max"], r["b_min"], r["b_max"], r["c_min"], r["c_max"]))
+    spanning = [axis_names[k] for k in range(3)
+                if all(r["spans_%s" % axis_names[k]] for r in rows)]
+    if spanning:
+        print("  * Every region spans the whole cell along: %s"
+              % ", ".join(spanning)
+              + " -- along %s the regions are not separated, so seen from that"
+                % "/".join(spanning)
+              + " direction the structure looks layered, not clustered.")
+
+
+def cluster_map_write(output_dir, records):
+    """
+    Write cluster_map.csv: one row per parent x region, with the declared and
+    the actual atom count and the region's extent in the cell.
+    """
+    path = os.path.join(output_dir, "cluster_map.csv")
+    fields = ["parent_id", "pattern", "region", "element", "declared_n", "actual_n",
+              "match", "a_min", "a_max", "b_min", "b_max", "c_min", "c_max",
+              "centroid_a", "centroid_b", "centroid_c",
+              "spans_a", "spans_b", "spans_c", "n_sites", "sites"]
+    with open(path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(fields)
+        for rec in records:
+            r = rec["row"]
+            writer.writerow([
+                rec["parent_id"], rec["pattern"], r["region"], r["element"],
+                r["declared_n"], r["actual_n"], r["match"],
+                "%.6f" % r["a_min"], "%.6f" % r["a_max"],
+                "%.6f" % r["b_min"], "%.6f" % r["b_max"],
+                "%.6f" % r["c_min"], "%.6f" % r["c_max"],
+                "%.6f" % r["centroid"][0], "%.6f" % r["centroid"][1], "%.6f" % r["centroid"][2],
+                r["spans_a"], r["spans_b"], r["spans_c"],
+                len(rec["sites"]), " ".join(str(i + 1) for i in sorted(rec["sites"])),
+            ])
+    return path
+
+
+def make_cluster_template_configuration(parent, replace_sites, cluster_order, view_axis="z"):
+    """
+    Create an intuitive 2x2 cluster structure in top view.
 
     For view_axis='z', the structure is divided in the x-y plane as:
 
         top-left      top-right
         bottom-left   bottom-right
 
-    Example domain_order from pattern 'Co,Fe/Ni,Cu':
+    Example cluster_order from pattern 'Co,Fe/Ni,Cu':
         top-left     = Co
         top-right    = Fe
         bottom-left  = Ni
@@ -737,24 +862,24 @@ def make_domain_template_configuration(parent, replace_sites, domain_order, view
 
     See _split_quadrants() for the rank-based splitting method used here.
     """
-    if len(domain_order) != 4:
-        raise ValueError("domain_order must contain four domains: TL, TR, BL, BR.")
+    if len(cluster_order) != 4:
+        raise ValueError("cluster_order must contain four regions: TL, TR, BL, BR.")
 
-    total_needed = sum(n for _, n in domain_order)
+    total_needed = sum(n for _, n in cluster_order)
     sites = list(replace_sites)
     if total_needed != len(sites):
         raise ValueError(
-            "domain mode requires full replacement of the selected sublattice: "
+            "cluster mode requires full replacement of the selected sublattice: "
             f"composition_sum={total_needed}, replacement_sites={len(sites)}."
         )
 
     h_axis, v_axis = _view_axis_to_plane_indices(view_axis)
     frac = parent.get_scaled_positions()
 
-    tl_el, tl_n = domain_order[0]
-    tr_el, tr_n = domain_order[1]
-    bl_el, bl_n = domain_order[2]
-    br_el, br_n = domain_order[3]
+    tl_el, tl_n = cluster_order[0]
+    tr_el, tr_n = cluster_order[1]
+    bl_el, bl_n = cluster_order[2]
+    br_el, br_n = cluster_order[3]
 
     tl_sites, tr_sites, bl_sites, br_sites = _split_quadrants(
         sites, frac, h_axis, v_axis, tl_n, tr_n, bl_n, br_n
@@ -771,12 +896,19 @@ def make_domain_template_configuration(parent, replace_sites, domain_order, view
         atoms[idx].symbol = br_el
 
     chosen = tl_sites + tr_sites + bl_sites + br_sites
-    return atoms, chosen
+    regions = [
+        ("TL", tl_el, tl_n, tl_sites),
+        ("TR", tr_el, tr_n, tr_sites),
+        ("BL", bl_el, bl_n, bl_sites),
+        ("BR", br_el, br_n, br_sites),
+    ]
+    _verify_cluster_regions(atoms, regions)
+    return atoms, chosen, regions
 
 
-def make_quincunx_configuration(parent, replace_sites, domain_order, view_axis="z"):
+def make_quincunx_configuration(parent, replace_sites, cluster_order, view_axis="z"):
     r"""
-    Create a 5-element quincunx (center + 2x2 corners) domain structure in top view.
+    Create a 5-element quincunx (center + 2x2 corners) cluster structure in top view.
 
     For view_axis='z', the structure is divided in the x-y plane as:
 
@@ -786,31 +918,31 @@ def make_quincunx_configuration(parent, replace_sites, domain_order, view_axis="
                   /  \
         bottom-left  bottom-right
 
-    domain_order is [(center_el, n), (tl_el, n), (tr_el, n), (bl_el, n), (br_el, n)],
+    cluster_order is [(center_el, n), (tl_el, n), (tr_el, n), (bl_el, n), (br_el, n)],
     e.g. from parse_quincunx_pattern('Cu:Co,Fe/Ni,Ti', composition).
 
     The center cluster is the `center_n` sites ranked closest to the centroid
     of the replacement sublattice (rank-based, not a fixed geometric radius,
     so exact counts are guaranteed regardless of spacing). The remaining outer
     ring is then split into TL/TR/BL/BR with the same rank-based method used
-    by the rectangular 2x2 domain template (see _split_quadrants()).
+    by the rectangular 2x2 cluster template (see _split_quadrants()).
     """
-    if len(domain_order) != 5:
-        raise ValueError("domain_order must contain five domains: center, TL, TR, BL, BR.")
+    if len(cluster_order) != 5:
+        raise ValueError("cluster_order must contain five regions: center, TL, TR, BL, BR.")
 
-    total_needed = sum(n for _, n in domain_order)
+    total_needed = sum(n for _, n in cluster_order)
     sites = list(replace_sites)
     if total_needed != len(sites):
         raise ValueError(
-            "quincunx domain mode requires full replacement of the selected sublattice: "
+            "quincunx cluster mode requires full replacement of the selected sublattice: "
             f"composition_sum={total_needed}, replacement_sites={len(sites)}."
         )
 
-    center_el, center_n = domain_order[0]
-    tl_el, tl_n = domain_order[1]
-    tr_el, tr_n = domain_order[2]
-    bl_el, bl_n = domain_order[3]
-    br_el, br_n = domain_order[4]
+    center_el, center_n = cluster_order[0]
+    tl_el, tl_n = cluster_order[1]
+    tr_el, tr_n = cluster_order[2]
+    bl_el, bl_n = cluster_order[3]
+    br_el, br_n = cluster_order[4]
 
     h_axis, v_axis = _view_axis_to_plane_indices(view_axis)
     frac = parent.get_scaled_positions()
@@ -847,7 +979,15 @@ def make_quincunx_configuration(parent, replace_sites, domain_order, view_axis="
         atoms[idx].symbol = br_el
 
     chosen = center_sites + tl_sites + tr_sites + bl_sites + br_sites
-    return atoms, chosen
+    regions = [
+        ("center", center_el, center_n, center_sites),
+        ("TL", tl_el, tl_n, tl_sites),
+        ("TR", tr_el, tr_n, tr_sites),
+        ("BL", bl_el, bl_n, bl_sites),
+        ("BR", br_el, br_n, br_sites),
+    ]
+    _verify_cluster_regions(atoms, regions)
+    return atoms, chosen, regions
 
 
 def _axis_to_index(layer_axis):
@@ -942,7 +1082,7 @@ Q_DEFINITION_VERSION = "symmetry_random_calibrated_v2"
 
 # How many empty rounds a (parent, target Q) bucket gets before it is retired.
 # When every bucket has been retired the reachable set is exhausted, and
-# layered/domain generation stops there instead of grinding on toward an `n`
+# layered/cluster generation stops there instead of grinding on toward an `n`
 # that set cannot supply.
 #
 # Two kinds of empty round are told apart, because they mean different things:
@@ -1308,7 +1448,7 @@ def generate_to_order_target(
             proposed_q, proposed_sro, proposed_score = evaluate(current)
 
             # Simulated annealing: accept uphill moves early, then gradually
-            # become greedy. This is substantially more robust for domain Q=0
+            # become greedy. This is substantially more robust for cluster Q=0
             # than a fixed small exploration probability.
             progress = step / max(1, steps_per_restart - 1)
             temperature = max(0.03, 1.5 * (1.0 - progress) ** 2)
@@ -2195,7 +2335,7 @@ def generate_structures(
     exhaustive_limit=2_000_000,
     layer_axis="z",
     view_axis="z",
-    domain_pattern=None,
+    cluster_pattern=None,
     children_per_parent=None,
     keep_composition=False,
     generate_potcar=False,
@@ -2204,12 +2344,21 @@ def generate_structures(
     adsorbate_elements=None,
     redox_remove=None,
     redox_max_sets=50,
+    domain_pattern=None,
 ):
-    if mode not in {"random", "spread", "layered", "domain", "exhaustive"}:
+    # `domain` was renamed to `cluster` (the 2x2 / quincunx template carves out
+    # spatial regions, which reads as clusters rather than crystallographic
+    # domains). The old spelling stays accepted so existing scripts and saved
+    # commands keep working.
+    if mode == "domain":
+        mode = "cluster"
+    if cluster_pattern is None and domain_pattern is not None:
+        cluster_pattern = domain_pattern
+    if mode not in {"random", "spread", "layered", "cluster", "exhaustive"}:
         raise ValueError(f"Unknown mode: {mode}")
     if mode != "exhaustive" and (target <= 0 or max_attempts <= 0):
         raise ValueError("target and max_attempts must be positive in sampling modes.")
-    if mode in {"layered", "domain"}:
+    if mode in {"layered", "cluster"}:
         if not np.isfinite(order_tolerance) or order_tolerance <= 0:
             raise ValueError("order_tolerance must be a finite positive number.")
         if int(order_search_steps) <= 0:
@@ -2294,16 +2443,16 @@ def generate_structures(
     print(f"Mode: {mode}")
     if mode == "layered":
         print(f"Layer axis: {layer_axis}")
-    if mode == "domain":
-        _domain_n = len(composition)
-        if _domain_n == 4:
-            print(f"Domain mode: intuitive 2x2 top-view domain along {view_axis}-axis")
-            print(f"Domain pattern: {domain_pattern if domain_pattern else 'composition order (TL,TR/BL,BR)'}")
-        elif _domain_n == 5:
-            print(f"Domain mode: quincunx top-view domain (center + 4 corners) along {view_axis}-axis")
-            print(f"Domain pattern: {domain_pattern if domain_pattern else 'auto-generated (Center:TL,TR/BL,BR)'}")
+    if mode == "cluster":
+        _cluster_n = len(composition)
+        if _cluster_n == 4:
+            print(f"Cluster mode: intuitive 2x2 top-view regions along {view_axis}-axis")
+            print(f"Cluster pattern: {cluster_pattern if cluster_pattern else 'composition order (TL,TR/BL,BR)'}")
+        elif _cluster_n == 5:
+            print(f"Cluster mode: quincunx top-view regions (center + 4 corners) along {view_axis}-axis")
+            print(f"Cluster pattern: {cluster_pattern if cluster_pattern else 'auto-generated (Center:TL,TR/BL,BR)'}")
         else:
-            print(f"Domain mode: along {view_axis}-axis ({_domain_n}-element composition; only 4 or 5 are supported)")
+            print(f"Cluster mode: along {view_axis}-axis ({_cluster_n}-element composition; only 4 or 5 are supported)")
     print(f"Random seed: {actual_seed}")
 
     perms, failed = precompute_symmetry_permutations(parent, symprec=symprec)
@@ -2338,7 +2487,7 @@ def generate_structures(
             f"SRO first shell: nearest={nearest_distance:.6f} Angstrom, "
             f"cutoff={sro_cutoff:.6f} Angstrom"
         )
-    elif mode in {"layered", "domain"}:
+    elif mode in {"layered", "cluster"}:
         if len(replace_sites) != n_replace:
             raise ValueError(
                 f"{mode} mode requires full replacement before SRO targeting: "
@@ -2579,29 +2728,29 @@ def generate_structures(
         "mode": mode,
         "target": target,
         "max_attempts": max_attempts,
-        "order_levels": _parse_order_levels(order_levels) if mode in {"layered", "domain"} else None,
+        "order_levels": _parse_order_levels(order_levels) if mode in {"layered", "cluster"} else None,
         "order_parameter": (
             "Q=(symmetry_best_match-random_symmetry_best_match_mean)/(1-random_symmetry_best_match_mean); Q=1 ordered, random ensemble mean~0"
-            if mode in {"layered", "domain"} else None
+            if mode in {"layered", "cluster"} else None
         ),
-        "order_parameter_version": Q_DEFINITION_VERSION if mode in {"layered", "domain"} else None,
-        "q_random_baseline_samples": Q_RANDOM_BASELINE_SAMPLES if mode in {"layered", "domain"} else None,
-        "order_tolerance": order_tolerance if mode in {"layered", "domain"} else None,
-        "order_search_steps": order_search_steps if mode in {"layered", "domain"} else None,
-        "low_q_min_search_steps": LOW_Q_MIN_SEARCH_STEPS if mode in {"layered", "domain"} else None,
-        "low_q_fallback_seeds": list(LOW_Q_FALLBACK_SEEDS) if mode in {"layered", "domain"} else None,
+        "order_parameter_version": Q_DEFINITION_VERSION if mode in {"layered", "cluster"} else None,
+        "q_random_baseline_samples": Q_RANDOM_BASELINE_SAMPLES if mode in {"layered", "cluster"} else None,
+        "order_tolerance": order_tolerance if mode in {"layered", "cluster"} else None,
+        "order_search_steps": order_search_steps if mode in {"layered", "cluster"} else None,
+        "low_q_min_search_steps": LOW_Q_MIN_SEARCH_STEPS if mode in {"layered", "cluster"} else None,
+        "low_q_fallback_seeds": list(LOW_Q_FALLBACK_SEEDS) if mode in {"layered", "cluster"} else None,
         "sro_definition": "composition-weighted RMS Warren-Cowley alpha over selected first shell",
         "sro_cutoff_factor": sro_cutoff_factor if neighbor_map is not None else None,
         "sro_nearest_distance": nearest_distance,
         "sro_cutoff": sro_cutoff,
-        "sro_tolerance": sro_tolerance if mode in {"layered", "domain"} else None,
-        "sro_weight": sro_weight if mode in {"layered", "domain"} else None,
+        "sro_tolerance": sro_tolerance if mode in {"layered", "cluster"} else None,
+        "sro_weight": sro_weight if mode in {"layered", "cluster"} else None,
         "max_trials_per_bucket": max_trials_per_bucket,
         "layer_axis": layer_axis if mode == "layered" else None,
-        "view_axis": view_axis if mode == "domain" else None,
-        "domain_pattern": domain_pattern if mode == "domain" else None,
+        "view_axis": view_axis if mode == "cluster" else None,
+        "cluster_pattern": cluster_pattern if mode == "cluster" else None,
         "children_per_parent": children_per_parent,
-        "structure_axes": "random / spread(same-element dispersed) / layered / domain(2x2 phase-separated template)",
+        "structure_axes": "random / spread(same-element dispersed) / layered / cluster(2x2 phase-separated template)",
         "output_format": output_format,
         "vasp_folder": vasp_folder,
         "generate_potcar": generate_potcar,
@@ -2819,7 +2968,7 @@ def generate_structures(
             # already saved, more rounds of it are pure waste, so it is
             # retired. When every bucket has been retired the reachable set is
             # exhausted and generation stops there. Without this, a layered /
-            # domain case whose reachable set is far smaller than n kept
+            # cluster case whose reachable set is far smaller than n kept
             # grinding through cpp x parents x Q x bucket trials (and on to
             # max_attempts) to fill a target it could never reach.
             all_buckets = [
@@ -2943,34 +3092,34 @@ def generate_structures(
                 print("Requested target count was reached exactly.")
 
         # -----------------------------------------------------------------
-        # Domain mode: explicit human-intuitive 2x2 top-view domain parent
+        # Cluster mode: explicit human-intuitive 2x2 top-view cluster parent
         # -----------------------------------------------------------------
-        elif mode == "domain":
+        elif mode == "cluster":
             if len(replace_sites) != n_replace:
                 raise ValueError(
-                    "Domain mode requires full replacement of the selected sublattice: "
+                    "Cluster mode requires full replacement of the selected sublattice: "
                     f"found {len(replace_sites)} sites in pool {replace_elements}, but composition sum is {n_replace}."
                 )
 
-            domain_component_count = len(composition)
-            if domain_component_count == 4:
-                domain_template_orders = unique_domain_orders(composition, domain_pattern)
-                domain_configurator = make_domain_template_configuration
-                domain_scheme_desc = "intuitive 2x2 top-view domain (TL/TR/BL/BR)"
+            cluster_component_count = len(composition)
+            if cluster_component_count == 4:
+                cluster_template_orders = unique_cluster_orders(composition, cluster_pattern)
+                cluster_configurator = make_cluster_template_configuration
+                cluster_scheme_desc = "intuitive 2x2 top-view cluster (TL/TR/BL/BR)"
                 default_pattern_desc = "composition order (TL,TR/BL,BR)"
 
-                def _domain_label(order):
+                def _cluster_label(order):
                     return (
                         "-".join(el for el, _ in order[:2])
                         + "_over_" + "-".join(el for el, _ in order[2:])
                     )
-            elif domain_component_count == 5:
-                domain_template_orders = unique_quincunx_orders(composition, domain_pattern)
-                domain_configurator = make_quincunx_configuration
-                domain_scheme_desc = "quincunx top-view domain (center + TL/TR/BL/BR corners)"
+            elif cluster_component_count == 5:
+                cluster_template_orders = unique_quincunx_orders(composition, cluster_pattern)
+                cluster_configurator = make_quincunx_configuration
+                cluster_scheme_desc = "quincunx top-view cluster (center + TL/TR/BL/BR corners)"
                 default_pattern_desc = "auto-generated center/corner assignment (Center:TL,TR/BL,BR)"
 
-                def _domain_label(order):
+                def _cluster_label(order):
                     center_el = order[0][0]
                     return (
                         f"{center_el}center_"
@@ -2979,20 +3128,20 @@ def generate_structures(
                     )
             else:
                 raise ValueError(
-                    "domain mode currently supports exactly 4 elements (rectangular 2x2 "
+                    "cluster mode currently supports exactly 4 elements (rectangular 2x2 "
                     "top-view template) or 5 elements (quincunx: center + 4 corners); "
-                    f"got {domain_component_count} elements in composition: {list(composition.keys())}."
+                    f"got {cluster_component_count} elements in composition: {list(composition.keys())}."
                 )
 
-            if domain_pattern:
-                print(f"Domain template specified by user: {domain_pattern}")
+            if cluster_pattern:
+                print(f"Cluster template specified by user: {cluster_pattern}")
             else:
-                print(f"Domain templates before symmetry filtering: {len(domain_template_orders)}")
-                print(f"Domain mode first filters symmetry-unique {domain_scheme_desc} parents.")
+                print(f"Cluster templates before symmetry filtering: {len(cluster_template_orders)}")
+                print(f"Cluster mode first filters symmetry-unique {cluster_scheme_desc} parents.")
                 print("Then each unique parent generates balanced children at target order-parameter levels.")
             print(f"View axis: {view_axis}")
 
-            # Step 1. Build symmetry-unique Q=1 domain parent structures.
+            # Step 1. Build symmetry-unique Q=1 cluster parent structures.
             # As with layered mode, a candidate order can fail the geometric
             # rank-cut validation (e.g. an ambiguous coordinate-plane split);
             # such orders are skipped instead of aborting the whole run.
@@ -3000,15 +3149,15 @@ def generate_structures(
             parent_seen = set()
             skipped_orders = 0
             max_skip_messages = 5
-            for domain_template_order in domain_template_orders:
+            for cluster_template_order in cluster_template_orders:
                 try:
-                    base_atoms, chosen = domain_configurator(
-                        parent, replace_sites, domain_template_order, view_axis=view_axis
+                    base_atoms, chosen, regions = cluster_configurator(
+                        parent, replace_sites, cluster_template_order, view_axis=view_axis
                     )
                 except ValueError as exc:
                     skipped_orders += 1
                     if skipped_orders <= max_skip_messages:
-                        print(f"  [skip] domain order {_domain_label(domain_template_order)} incompatible: {exc}")
+                        print(f"  [skip] cluster order {_cluster_label(cluster_template_order)} incompatible: {exc}")
                     elif skipped_orders == max_skip_messages + 1:
                         print("  [skip] (further incompatible-order messages suppressed)")
                     continue
@@ -3017,11 +3166,11 @@ def generate_structures(
                     continue
                 parent_seen.add(key)
                 parent_id = len(parent_entries) + 1
-                domain_label = _domain_label(domain_template_order)
+                cluster_label = _cluster_label(cluster_template_order)
                 parent_entries.append({
                     "parent_id": parent_id,
-                    "order": domain_template_order,
-                    "order_label": domain_label,
+                    "order": cluster_template_order,
+                    "order_label": cluster_label,
                     "base_atoms": base_atoms,
                     "chosen": chosen,
                     "parent_key": key,
@@ -3029,17 +3178,46 @@ def generate_structures(
                     "q_random_match": symmetry_random_match_baseline(
                         base_atoms, chosen, perms
                     ),
+                    "regions": regions,
                 })
 
             if skipped_orders:
-                print(f"Domain orders skipped (incompatible geometry): {skipped_orders}")
+                print(f"Cluster orders skipped (incompatible geometry): {skipped_orders}")
             if not parent_entries:
                 raise ValueError(
-                    "No domain order was geometrically compatible with this structure. "
-                    "Try a different --view-axis, an explicit --domain-pattern, or a "
+                    "No cluster order was geometrically compatible with this structure. "
+                    "Try a different --view-axis, an explicit --cluster-pattern, or a "
                     "composition whose counts match the real site geometry."
                 )
-            print(f"Symmetry-unique domain parents: {len(parent_entries)}")
+            print(f"Symmetry-unique cluster parents: {len(parent_entries)}")
+
+            # -- Region check. Every Q=1 parent is verified atom by atom (the
+            #    configurator raises on a mismatch), and the numbers are written
+            #    out so the declared composition per region can be compared with
+            #    what the structure actually contains without opening a viewer.
+            cluster_map_records = []
+            for entry in parent_entries:
+                rows = cluster_region_rows(
+                    entry["base_atoms"], entry["regions"], view_axis=view_axis
+                )
+                if entry["parent_id"] == 1:
+                    print_cluster_region_table(
+                        rows, view_axis=view_axis,
+                        title="Cluster regions of parent P001 (%s)" % entry["order_label"],
+                    )
+                    if len(parent_entries) > 1:
+                        print("  (the other %d parents use the same regions with the "
+                              "elements permuted; all of them are in cluster_map.csv)"
+                              % (len(parent_entries) - 1))
+                for row, (_label, _el, _n, sites) in zip(rows, entry["regions"]):
+                    cluster_map_records.append({
+                        "parent_id": "P%03d" % entry["parent_id"],
+                        "pattern": entry["order_label"],
+                        "row": row,
+                        "sites": sites,
+                    })
+            cluster_map_path = cluster_map_write(output_dir, cluster_map_records)
+            print(f"Cluster region map written: {cluster_map_path}")
 
             child_order_levels = [q for q in order_levels if not np.isclose(q, 1.0)]
             cpp = _infer_children_per_parent(target, len(parent_entries), order_levels, children_per_parent)
@@ -3074,7 +3252,7 @@ def generate_structures(
                             redox_potcar_sources=redox_potcar_source_paths,
                             adsorbate_elements=adsorbate_elements_set,
                             metadata=manifest_metadata(
-                                parent_id=f"P{entry['parent_id']:03d}", mode="domain",
+                                parent_id=f"P{entry['parent_id']:03d}", mode="cluster",
                                 axis=view_axis, pattern=entry["order_label"],
                                 target_q=1.0, actual_q=1.0,
                                 q_random_match=f"{entry['q_random_match']:.8f}",
@@ -3088,7 +3266,7 @@ def generate_structures(
                         ordered_parent_saved = True
                     parent_records.append({
                         "parent_id": entry["parent_id"],
-                        "mode": f"domain_{view_axis}",
+                        "mode": f"cluster_{view_axis}",
                         "label": f"parent{entry['parent_id']:03d}",
                         "order": entry["order_label"],
                         "ordered_parent_saved": ordered_parent_saved,
@@ -3097,7 +3275,7 @@ def generate_structures(
                 for entry in parent_entries:
                     parent_records.append({
                         "parent_id": entry["parent_id"],
-                        "mode": f"domain_{view_axis}",
+                        "mode": f"cluster_{view_axis}",
                         "label": f"parent{entry['parent_id']:03d}",
                         "order": entry["order_label"],
                         "ordered_parent_saved": False,
@@ -3110,7 +3288,7 @@ def generate_structures(
             # already saved, more rounds of it are pure waste, so it is
             # retired. When every bucket has been retired the reachable set is
             # exhausted and generation stops there. Without this, a layered /
-            # domain case whose reachable set is far smaller than n kept
+            # cluster case whose reachable set is far smaller than n kept
             # grinding through cpp x parents x Q x bucket trials (and on to
             # max_attempts) to fill a target it could never reach.
             all_buckets = [
@@ -3205,7 +3383,7 @@ def generate_structures(
                             redox_potcar_sources=redox_potcar_source_paths,
                             adsorbate_elements=adsorbate_elements_set,
                             metadata=manifest_metadata(
-                                parent_id=f"P{entry['parent_id']:03d}", mode="domain",
+                                parent_id=f"P{entry['parent_id']:03d}", mode="cluster",
                                 axis=view_axis, pattern=entry["order_label"],
                                 target_q=f"{target_q:.8f}", actual_q=f"{actual_q:.8f}",
                                 q_random_match=f"{entry['q_random_match']:.8f}",
@@ -3242,10 +3420,10 @@ def generate_structures(
 
             parent_map_path = _parent_map_write(output_dir, parent_records)
             print(f"Parent map written: {parent_map_path}")
-            print(f"Unique domain structures saved: {kept}")
-            print(f"Domain parent/child candidates tried: {attempts}")
+            print(f"Unique cluster structures saved: {kept}")
+            print(f"Cluster parent/child candidates tried: {attempts}")
             if saturated:
-                print(f"All reachable domain configurations were generated: {kept} "
+                print(f"All reachable cluster configurations were generated: {kept} "
                       f"(n={target} was an upper bound, not a quota).")
                 print("Every parent x Q bucket stopped returning new symmetry-unique "
                       "structures, so generation ended here instead of running on.")
@@ -4777,8 +4955,8 @@ def _suggest_output_dir(input_file, mode, composition, layer_axis="z", view_axis
     composition_tag = "".join(f"{el}{count}" for el, count in composition.items())
     if mode == "layered":
         mode_tag = f"layered_{layer_axis}"
-    elif mode == "domain":
-        mode_tag = f"domain_{view_axis}"
+    elif mode == "cluster":
+        mode_tag = f"cluster_{view_axis}"
     else:
         mode_tag = mode
     safe_name = re.sub(
@@ -4811,13 +4989,13 @@ def run_wizard(initial=None):
     One-screen settings sheet (replaces the old step-by-step wizard).
 
     `initial` pre-fills sheet keys from the command line, so
-    `CCpyAlloyGen.py 4 -n=100` opens the sheet already set to domain mode with
+    `CCpyAlloyGen.py 4 -n=100` opens the sheet already set to cluster mode with
     100 structures. Pre-filled keys count as user input, so the
     structure-derived defaults never overwrite them.
 
     Every setting is shown at once with its current value. Edit any of them
     with `key=value` (several edits can be chained with commas, e.g.
-    `mode=domain,n=100`), then press Enter or type `run` to validate and
+    `mode=cluster,n=100`), then press Enter or type `run` to validate and
     execute. `q` quits without running.
 
     Hidden advanced keys are accepted the same way even though they are not
@@ -4972,7 +5150,7 @@ def run_wizard(initial=None):
         _row("input", "# structure file ('input=?' to pick again from the list)")
         _row("replace", "# substituted pool (default = substrate minus adsorbate)")
         _row("comp", "# target composition (default = current) / 'keep'=reshuffle")
-        _row("mode", "# random/spread/layered/domain/exhaustive")
+        _row("mode", "# random/spread/layered/cluster/exhaustive")
         _row("n", "# max number of structures (stops early if fewer exist; ignored for exhaustive)")
         _row("seed", "# empty = auto-generated, then recorded in metadata.txt")
         _row("fmt", "# cif/vasp/folder" + ("  (vasp=y, so the final output is a VASP input folder)"
@@ -4982,10 +5160,10 @@ def run_wizard(initial=None):
         _row("output", "# empty = auto-suggested")
         _row("overwrite", "# y = delete the existing output folder, then create")
         _row("symprec", "# spglib symmetry tolerance")
-        print("  --- mode detail (layered/domain) " + "-" * 39)
+        print("  --- mode detail (layered/cluster) " + "-" * 38)
         _row("axis", "# layered layer axis (x/y/z)")
-        _row("view", "# domain top-view axis (x/y/z)")
-        _row("pattern", "# domain pattern (ex: Co,Fe/Ni,Cu / empty = auto all)")
+        _row("view", "# cluster top-view axis (x/y/z)")
+        _row("pattern", "# cluster pattern (ex: Co,Fe/Ni,Cu / empty = auto all)")
         _row("order", "# target order parameter Q level")
         print("  --- CCpy VASP inputs " + "-" * 51)
         _row("vasp", "# y = auto-generate INCAR/KPOINTS/POTCAR (same as CCpyVASPInputGen)")
@@ -5006,8 +5184,10 @@ def run_wizard(initial=None):
             return False
 
         mode = s["mode"].strip().lower()
-        if mode not in ("random", "spread", "layered", "domain", "exhaustive"):
-            print("[Validation failed] mode must be one of random/spread/layered/domain/exhaustive: %r" % s["mode"])
+        if mode == "domain":
+            mode = "cluster"          # old spelling, still accepted
+        if mode not in ("random", "spread", "layered", "cluster", "exhaustive"):
+            print("[Validation failed] mode must be one of random/spread/layered/cluster/exhaustive: %r" % s["mode"])
             return False
 
         try:
@@ -5034,8 +5214,8 @@ def run_wizard(initial=None):
             print("[Validation failed] %s" % exc)
             return False
 
-        if mode == "domain" and len(composition) not in (4, 5):
-            print("[Validation failed] domain mode supports only 4-element (2x2) or 5-element (quincunx) compositions. "
+        if mode == "cluster" and len(composition) not in (4, 5):
+            print("[Validation failed] cluster mode supports only 4-element (2x2) or 5-element (quincunx) compositions. "
                   "Currently %d elements." % len(composition))
             return False
 
@@ -5169,7 +5349,7 @@ def run_wizard(initial=None):
         print("  output=%s  n=%s  fmt=%s  seed=%s  overwrite=%s" % (output_dir, target, fmt_display, seed, overwrite))
         if mode == "layered":
             print("  axis=%s  order=%s" % (s["axis"], s["order"]))
-        if mode == "domain":
+        if mode == "cluster":
             print("  view=%s  pattern=%s  order=%s" % (s["view"], pattern, s["order"]))
         if surface:
             print("  surface=%s  ->  %s_surface" % (surface, str(output_dir).rstrip("/\\")))
@@ -5193,7 +5373,7 @@ def run_wizard(initial=None):
             output_format=output_format,
             vasp_folder=vasp_folder,
             overwrite=overwrite,
-            order_levels=s["order"] if mode in ("layered", "domain") else None,
+            order_levels=s["order"] if mode in ("layered", "cluster") else None,
             order_tolerance=order_tol,
             order_search_steps=order_steps,
             sro_cutoff_factor=sro_cutoff,
@@ -5204,7 +5384,7 @@ def run_wizard(initial=None):
             exhaustive_limit=limit,
             layer_axis=s["axis"].strip(),
             view_axis=s["view"].strip(),
-            domain_pattern=pattern,
+            cluster_pattern=pattern,
             children_per_parent=children,
             generate_potcar=_bool("gen_potcar"),
             potcar_library=s["potcar_lib"].strip() or None,
@@ -5262,7 +5442,7 @@ def run_wizard(initial=None):
         _print_sheet()
         # Keep taking edits until the user says "n", the same habit as
         # CCpySIESTAInputGen / CCpyVASPInputGen's option menus.
-        print('\n* Anything want to modify or add? (ex: mode=domain,n=100, comp=Fe4,Co4,Ni4,Cu4)')
+        print('\n* Anything want to modify or add? (ex: mode=cluster,n=100, comp=Fe4,Co4,Ni4,Cu4)')
         print('  else, enter "n" to finish     (q = cancel)')
         try:
             ans = input(": ").strip()
@@ -5352,7 +5532,7 @@ def build_argparser():
     )
     p.add_argument(
         "--mode",
-        choices=["random", "spread", "layered", "domain", "exhaustive"],
+        choices=["random", "spread", "layered", "cluster", "exhaustive", "domain"],
         default="random",
         help="Generation mode",
     )
@@ -5366,13 +5546,14 @@ def build_argparser():
         "--view-axis",
         choices=["x", "y", "z"],
         default="z",
-        help="Viewing axis for domain mode. view-axis z means x-y top view.",
+        help="Viewing axis for cluster mode. view-axis z means x-y top view.",
     )
     p.add_argument(
+        "--cluster-pattern",
         "--domain-pattern",
         default=None,
         help=(
-            "Top-view pattern for domain mode. For a 4-element composition use the "
+            "Top-view pattern for cluster mode. For a 4-element composition use the "
             "rectangular 2x2 form 'TL,TR/BL,BR' (e.g. 'Co,Fe/Ni,Cu'). For a "
             "5-element composition use the quincunx form 'Center:TL,TR/BL,BR' "
             "(e.g. 'Cu:Co,Fe/Ni,Ti'), where Center is placed in the middle and "
@@ -5401,7 +5582,7 @@ def build_argparser():
     p.add_argument(
         "--order-levels",
         default="1,0.75,0.5,0.25,0",
-        help="Target parent-overlap order parameters for layered/domain modes: 1=ordered, 0=random-like",
+        help="Target parent-overlap order parameters for layered/cluster modes: 1=ordered, 0=random-like",
     )
     p.add_argument(
         "--order-tolerance",
@@ -5445,7 +5626,7 @@ def build_argparser():
         default=2_000_000,
         help="Safety limit for exhaustive enumeration upper bound",
     )
-    p.add_argument("--children-per-parent", type=int, default=None, help="For layered/domain modes: number of unique structures per parent and non-parent Q level. If omitted, inferred from target.")
+    p.add_argument("--children-per-parent", type=int, default=None, help="For layered/cluster modes: number of unique structures per parent and non-parent Q level. If omitted, inferred from target.")
     p.add_argument(
         "--generate-potcar",
         action="store_true",
@@ -5562,7 +5743,7 @@ def main():
         exhaustive_limit=args.exhaustive_limit,
         layer_axis=args.layer_axis,
         view_axis=args.view_axis,
-        domain_pattern=args.domain_pattern,
+        cluster_pattern=args.cluster_pattern,
         children_per_parent=args.children_per_parent,
         generate_potcar=args.generate_potcar,
         potcar_library=args.potcar_library,

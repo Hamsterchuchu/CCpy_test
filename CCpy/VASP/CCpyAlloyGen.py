@@ -28,7 +28,7 @@ if len(sys.argv) <= 1 or sys.argv[1] in ("-h", "--help", "help", "-help"):
 1 : random     (fully random substitution)
 2 : spread     (same-element dispersed, spread-biased substitution)
 3 : layered    (layer-ordered parent -> disorder controlled by target Q)
-4 : domain     (top-view 2x2 domain / 5-element quincunx template)
+4 : cluster    (top-view 2x2 regions / 5-element quincunx template)
 5 : exhaustive (enumerate all symmetry-unique configurations)
 w : wizard     (settings sheet with no mode preset -- same as '1')
 
@@ -37,7 +37,7 @@ w : wizard     (settings sheet with no mode preset -- same as '1')
 Every option opens the one-screen settings sheet, where the input file is
 picked from a numbered list and every setting is shown at once. Sub-options
 pre-fill that sheet rather than running behind your back, so
-`CCpyAlloyGen.py 4 -n=100` opens it already set to domain mode with n=100.
+`CCpyAlloyGen.py 4 -n=100` opens it already set to cluster mode with n=100.
 Edit anything with key=value, then enter "n" to run. Add -batch to skip every
 question and run immediately (then -i= is required).
 
@@ -60,7 +60,7 @@ ex) CCpyAlloyGen.py 1 -i=Pt32.cif -re=Pt -comp=Fe4,Co4,Ni4,Cu4 -n=500 -vasp -pre
     -keep_comp     : reshuffle the current composition of the -re pool (-comp is ignored)
     -n=#           : target number of unique structures                 (DEFAULT : 500)
                      An UPPER BOUND, not a quota. When fewer distinct structures
-                     than n exist (common for layered/domain, or a small cell),
+                     than n exist (common for layered/cluster, or a small cell),
                      generation stops as soon as every reachable one has been
                      written and says so, instead of grinding on toward n.
     -seed=#        : random seed                   (DEFAULT : auto-generated, saved to metadata.txt)
@@ -113,7 +113,12 @@ ex) CCpyAlloyGen.py 1 -i=Pt32.cif -re=Pt -comp=Fe4,Co4,Ni4,Cu4 -n=500 -vasp -pre
     < MODE DETAILS >
     -axis=[x|y|z]  : layer stacking axis           (mode 3, DEFAULT : z)
     -view=[x|y|z]  : top-view axis                 (mode 4, DEFAULT : z)
-    -pattern=[P]   : domain pattern                (mode 4, DEFAULT : auto-enumerate all)
+                     The 2x2 / quincunx template splits only the two axes of
+                     that top view, so every region runs the full height of the
+                     cell along -view itself. Each run prints the region table
+                     (declared vs actual atom count, and where each region sits)
+                     and writes [DIR]/cluster_map.csv with the same numbers.
+    -pattern=[P]   : cluster pattern               (mode 4, DEFAULT : auto-enumerate all)
                      4-element  ex) -pattern=Co,Fe/Ni,Cu
                      5-element  ex) -pattern=Cu:Co,Fe/Ni,Ti
     -order=[Q,..]  : target order parameters Q     (mode 3/4, DEFAULT : 1,0.75,0.5,0.25,0)
@@ -167,7 +172,7 @@ ex) CCpyAlloyGen.py 1 -i=Pt32.cif -re=Pt -comp=Fe4,Co4,Ni4,Cu4 -n=500 -vasp -pre
 
 
 option = sys.argv[1]
-mode_map = {"1": "random", "2": "spread", "3": "layered", "4": "domain", "5": "exhaustive",
+mode_map = {"1": "random", "2": "spread", "3": "layered", "4": "cluster", "5": "exhaustive",
             "w": "wizard", "wizard": "wizard"}
 if option not in mode_map:
     print("Unknown option: %s  (use 1-5 or w; run without arguments for help)" % option)
@@ -195,7 +200,7 @@ max_attempts = 2000000
 
 layer_axis = "z"
 view_axis = "z"
-domain_pattern = None
+cluster_pattern = None
 order_levels = "1,0.75,0.5,0.25,0"
 children_per_parent = None
 exhaustive_limit = 2000000
@@ -309,7 +314,7 @@ for arg in sys.argv[2:]:
         view_axis = arg.split("=", 1)[1]
         given["view"] = arg.split("=", 1)[1]
     elif arg.startswith("-pattern="):
-        domain_pattern = arg.split("=", 1)[1]
+        cluster_pattern = arg.split("=", 1)[1]
         given["pattern"] = arg.split("=", 1)[1]
     elif arg.startswith("-order="):
         order_levels = arg.split("=", 1)[1]
@@ -483,7 +488,7 @@ result = generate_structures(
     output_format=output_format,
     vasp_folder=vasp_folder,
     overwrite=overwrite,
-    order_levels=order_levels if mode in ("layered", "domain") else None,
+    order_levels=order_levels if mode in ("layered", "cluster") else None,
     order_tolerance=order_tolerance,
     order_search_steps=order_search_steps,
     sro_cutoff_factor=sro_cutoff_factor,
@@ -494,7 +499,7 @@ result = generate_structures(
     exhaustive_limit=exhaustive_limit,
     layer_axis=layer_axis,
     view_axis=view_axis,
-    domain_pattern=domain_pattern,
+    cluster_pattern=cluster_pattern,
     children_per_parent=children_per_parent,
     generate_potcar=generate_potcar,
     potcar_library=potcar_library,
