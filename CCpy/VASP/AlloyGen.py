@@ -810,11 +810,17 @@ def print_cluster_region_table(rows, view_axis="z", title="Cluster regions"):
     spanning = [axis_names[k] for k in range(3)
                 if all(r["spans_%s" % axis_names[k]] for r in rows)]
     if spanning:
-        print("  * Every region spans the whole cell along: %s"
-              % ", ".join(spanning)
-              + " -- along %s the regions are not separated, so seen from that"
-                % "/".join(spanning)
-              + " direction the structure looks layered, not clustered.")
+        joined = ", ".join(spanning)
+        print("  * Every region spans the whole cell along %s: the regions are "
+              "separated only in the" % joined)
+        print("    plane normal to %s, so every cross-section perpendicular to %s "
+              "has the same" % (joined, joined))
+        print("    composition at every height. Looking down %s shows the intended "
+              "regions, but" % joined)
+        print("    from the side the structure reads as stacked slabs -- a layered "
+              "structure -- with")
+        print("    each slab holding a mixture of the regions that sit behind one "
+              "another.")
 
 
 def cluster_map_write(output_dir, records):
