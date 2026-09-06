@@ -62,7 +62,11 @@ ex) CCpyAlloyGen.py 1 -i=Pt32.cif -re=Pt -comp=Fe4,Co4,Ni4,Cu4 -n=500 -vasp -pre
     -seed=#        : random seed                   (DEFAULT : auto-generated, saved to metadata.txt)
     -fmt=[F]       : cif | vasp | folder           (DEFAULT : folder)
                      folder : conf dirs with POSCAR (S000001/POSCAR)
-                     (ignored with -vasp: the folders get full VASP inputs)
+                     Asking for cif or vasp turns the settings sheet's vasp=y
+                     off for you (a plain structure format and VASP input
+                     folders are mutually exclusive), so -fmt=cif really does
+                     write cif files. Add -vasp to keep the input folders; then
+                     the structures go through cif and -fmt is ignored.
     -overwrite     : remove the output directory first if it exists
     -surface=[EL,..]: also write adsorbate-free surface twins to [DIR]_surface.
                      A bare element here means ALL atoms of it -- a clean surface.

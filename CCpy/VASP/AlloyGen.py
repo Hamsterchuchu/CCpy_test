@@ -4695,11 +4695,29 @@ def run_wizard(initial=None):
             if counts:
                 s["comp"] = ",".join(f"{el}{counts[el]}" for el in sorted(counts))
 
+    # -- fmt and vasp are not independent: vasp=y always wins and turns the
+    #    output into VASP input folders, whatever fmt says. The sheet used to
+    #    keep vasp=y while showing the fmt=cif the user had just typed, and the
+    #    "fmt ignored" note was printed for every value EXCEPT cif, so asking
+    #    for cif silently produced folders. Asking for a plain structure format
+    #    now switches vasp off unless the user set vasp themselves, and the
+    #    sheet shows that before anything runs.
+    _PLAIN_FORMATS = ("cif", "vasp", "poscar")
+
+    def _sync_vasp_with_fmt():
+        if s["fmt"].strip().lower() in _PLAIN_FORMATS and "vasp" not in user_set:
+            if s["vasp"].strip().lower() in ("y", "yes", "true", "1"):
+                s["vasp"] = "n"
+                print("* fmt=%s : vasp is set to n, so the structures are written as %s "
+                      "and no VASP input folder is generated (type vasp=y to keep them)."
+                      % (s["fmt"].strip().lower(), s["fmt"].strip().lower()))
+
     for key, value in (initial or {}).items():
         if key in s and value not in (None, ""):
             s[key] = str(value)
             if key != "input":
                 user_set.add(key)
+    _sync_vasp_with_fmt()
 
     if s["input"] and os.path.isfile(s["input"]):
         _apply_structure_defaults()          # -i= was given on the command line
@@ -4844,7 +4862,10 @@ def run_wizard(initial=None):
         vasp_folder = False
         output_format = out_fmt
         if ccpy_vasp:
-            if out_fmt not in ("", "cif"):
+            # Say so for cif too. cif is exactly the value that looks like it
+            # was honoured (the intermediate files really are cifs) while the
+            # folders are what actually lands on disk.
+            if out_fmt not in ("", "folder", "poscar_folder"):
                 print("* vasp=y : structures are generated as cif, then converted to VASP input folders (fmt=%s ignored)." % out_fmt)
             output_format = "cif"
         elif out_fmt in ("folder", "poscar_folder"):
@@ -5064,6 +5085,8 @@ def run_wizard(initial=None):
                 continue
             s[key] = value
             user_set.add(key)
+            if key == "fmt":
+                _sync_vasp_with_fmt()
 
 
 def build_argparser():
