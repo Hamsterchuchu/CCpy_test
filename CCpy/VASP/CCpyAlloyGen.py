@@ -28,7 +28,7 @@ if len(sys.argv) <= 1 or sys.argv[1] in ("-h", "--help", "help", "-help"):
 1 : random     (fully random substitution)
 2 : spread     (same-element dispersed, spread-biased substitution)
 3 : layered    (layer-ordered parent -> disorder controlled by target Q)
-4 : cluster    (2x2 / quincunx regions; -shape=block for 3D lumps)
+4 : cluster    (2x2x2 regions; -shape= plane(old 2D) | block(3D lumps))
 5 : exhaustive (enumerate all symmetry-unique configurations)
 w : wizard     (settings sheet with no mode preset -- same as '1')
 
@@ -113,19 +113,23 @@ ex) CCpyAlloyGen.py 1 -i=Pt32.cif -re=Pt -comp=Fe4,Co4,Ni4,Cu4 -n=500 -vasp -pre
     < MODE DETAILS >
     -axis=[x|y|z]  : layer stacking axis           (mode 3, DEFAULT : z)
     -view=[x|y|z]  : top-view axis                 (mode 4, shape=plane, DEFAULT : z)
-    -shape=[S]     : plane | block                 (mode 4, DEFAULT : plane)
-                     plane : the 2x2 / quincunx top-view template. It splits only
-                       the two axes of the top view, so every region runs the
-                       full height of the cell along -view. Seen from the front
-                       you get the regions; seen from the side the same picture
-                       repeats at every height, so the structure reads as two
-                       stacked layers instead of four regions.
-                     block : regions cut on all three axes. Each element gets one
-                       seed point and every site joins its nearest seed
-                       (minimum-image), so a region is a compact lump. The seeds
-                       sit body-diagonally, which leaves no axis uniform -- the
-                       regions stay visible from every side. Counts do not have
-                       to be equal here.
+    -shape=[S]     : octant | plane | block        (mode 4, DEFAULT : octant)
+                     octant : the 2x2 template with -view cut as well, giving
+                       2x2x2 boxes. Each element takes its near-side box and the
+                       box diagonally opposite in the far half, so the far half
+                       is the near 2x2 turned 180 degrees. Both halves of every
+                       axis then hold all four elements, and no viewing direction
+                       collapses the structure into layers. 5 elements: a 3D core
+                       plus that 2x2x2 shell.
+                     plane : the original template. It splits only the two axes of
+                       the top view, so every region runs the full height of the
+                       cell along -view. Seen from the front you get the regions;
+                       seen from the side the same picture repeats at every
+                       height, so the structure reads as two stacked layers.
+                       Kept for reproducing earlier runs.
+                     block : one compact 3D lump per element, grown from
+                       body-diagonal seed points (nearest seed wins). Regions are
+                       rounded rather than boxes, and counts need not be equal.
                      Either way the run prints the region table (declared vs
                      actual atom count, and where each region sits) and writes
                      [DIR]/cluster_map.csv with the same numbers.
@@ -211,7 +215,7 @@ max_attempts = 2000000
 
 layer_axis = "z"
 view_axis = "z"
-cluster_shape = "plane"
+cluster_shape = "octant"
 cluster_pattern = None
 order_levels = "1,0.75,0.5,0.25,0"
 children_per_parent = None
