@@ -353,7 +353,8 @@ def input_gen(opt):
     if not os.path.isfile(src):
         print("%s is missing." % src)
         quit()
-    # 폴더를 만들고 그 안으로 들어가므로, 지금 준 상대 경로를 미리 굳혀 둔다.
+    # A folder is about to be created and entered, so fix the path given now
+    # (which may be relative) before the working directory changes.
     src = os.path.abspath(src)
     origin = os.getcwd()
     if opt.get("ref"):
