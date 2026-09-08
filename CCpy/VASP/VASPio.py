@@ -516,14 +516,16 @@ class VASPInput():
                 incar_dict = set_opt(incar_dict, 'VDW_C6', C6)
                 incar_dict = set_opt(incar_dict, 'VDW_R0', R0)
             elif vdw == "optb88":
-                incar_dict = set_opt(incar_dict, 'LUSE_VDW', True)
+                incar_dict = set_opt(incar_dict, 'LUSE_VDW', ".TRUE.")
+                incar_dict = set_opt(incar_dict, 'LASPH', ".TRUE.")
                 incar_dict = set_opt(incar_dict, 'AGGAC', 0.0)
                 incar_dict = set_opt(incar_dict, 'GGA', "BO")
                 incar_dict = set_opt(incar_dict, 'PARAM1', 0.183333333)
                 incar_dict = set_opt(incar_dict, 'PARAM2', 0.22)
                 #shutil.copy('%s' % MODULE_DIR + '/vdw_kernel.bindat', './%s/' % dirname)
             elif vdw == "optb86b":
-                incar_dict = set_opt(incar_dict, 'LUSE_VDW', True)
+                incar_dict = set_opt(incar_dict, 'LUSE_VDW', ".TRUE.")
+                incar_dict = set_opt(incar_dict, 'LASPH', ".TRUE.")
                 incar_dict = set_opt(incar_dict, 'AGGAC', 0.0)
                 incar_dict = set_opt(incar_dict, 'GGA', "MK")
                 incar_dict = set_opt(incar_dict, 'PARAM1', 0.1234)
