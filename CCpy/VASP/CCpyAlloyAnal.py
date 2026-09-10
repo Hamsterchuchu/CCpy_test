@@ -217,12 +217,9 @@ every other atom is what makes them invisible.
   number inside its own folder's CONTCAR. 'side' appears only when something
   is actually adsorbed on the underside of the slab.
 
-  sub_site / sub_neighbors : the same classification against the SECOND
-  substrate layer. The adsorbate does not bond to that layer, so this is a
-  descriptor of what the site sits on, not a site of its own. On an ideal
-  fcc(111) slab it just repeats fcc/hcp (hcp <=> sub_site 'top'); it earns its
-  place by naming the SUBSURFACE elements under the site, which is what makes
-  two geometrically identical sites of a substituted surface differ in energy.
+  Only the top substrate layer is classified. The second layer is read for
+  one purpose alone -- telling fcc from hcp for a three-fold hollow -- and is
+  not reported as a site of its own.
 
   The 'dE vs group avg' column of the roll-up needs BOTH the sites and the
   adsorption energies, so it appears under option 4 and not under option 1 on

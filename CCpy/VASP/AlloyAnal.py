@@ -63,13 +63,9 @@ catches what projection structurally cannot see -- it ignores height, so an
 adsorbate that drifted away from the surface still gets a confident label,
 while d_min and height show it at once.
 
-Every atom also gets "sub_site": the same classification run against the
-SECOND substrate layer. The adsorbate does not bond to that layer, so this is
-a descriptor of what the site sits on rather than a site, and it stays a
-secondary column. For an ideal fcc(111) slab it only repeats fcc/hcp
-(hcp <=> sub_site 'top'). It earns its place where fcc/hcp says nothing: the
-subsurface ELEMENTS under the site on a substituted / HEA surface, which is
-what shifts the adsorption energy between otherwise identical sites.
+Only the top substrate layer is classified. The second layer is read for one
+purpose alone -- telling fcc from hcp for a three-fold hollow -- and is not
+reported as a site of its own.
 """
 
 import ast
@@ -126,8 +122,7 @@ SITE_NAMES = {1: "top", 2: "bridge", 3: "hollow3", 4: "hollow4"}
 # own answer lives in the separate diff file, so this table stays readable.
 # 'side' is added only when something actually sits on the bottom face.
 SITE_COLUMNS = ["Structure", "folder", "atom", "local_no", "site", "ensemble",
-                "neighbors", "sub_site", "sub_ensemble", "sub_neighbors",
-                "d_min (A)", "height (A)", "agree"]
+                "neighbors", "d_min (A)", "height (A)", "agree"]
 # The cross-check file: only the atoms the two methods disagree on, with both
 # answers side by side and the numbers needed to judge which one to believe.
 DIFF_COLUMNS = ["Structure", "folder", "atom", "local_no",
@@ -1497,14 +1492,8 @@ def analyze_sites(atoms, adsorbate_elements, substrate_elements=None,
     """
     Adsorption site of every adsorbate atom of one structure, by both methods.
 
-    Besides the site on the top layer, the same classification is run against
-    the SECOND substrate layer ("sub_site"). The adsorbate does not bond to
-    that layer, so it is a descriptor of what the site sits on, not a site of
-    its own -- which is why it stays a secondary column. On an ideal fcc(111)
-    slab it repeats the fcc/hcp answer (hcp <=> sub_site 'top'); what it adds
-    is the case fcc/hcp cannot express: which SUBSURFACE elements are under
-    the site on a substituted / HEA surface, and a second layer that relaxed
-    out of ideal stacking.
+    Only the top substrate layer is classified. The second layer is read for
+    one purpose alone -- telling fcc from hcp for a three-fold hollow.
 
     Returns (rows, info). Every row is one adsorbate atom; info carries the
     slab normal, the vacuum gap and any warning worth printing once.
@@ -1555,7 +1544,6 @@ def analyze_sites(atoms, adsorbate_elements, substrate_elements=None,
         groups = layer_groups(signed, sub_idx, layer_tol)
         top_layer = groups[0]
         second_layer = groups[1] if len(groups) > 1 else []
-        third_layer = groups[2] if len(groups) > 2 else []
 
         # A top layer much thinner than the layers below it means the split is
         # cutting through one buckled layer -- the one failure mode of the
@@ -1585,20 +1573,6 @@ def analyze_sites(atoms, adsorbate_elements, substrate_elements=None,
             primary = secondary
         main_neighbours = primary.get("neighbour_labels", "")
 
-        sub_site, sub_neighbours, sub_ensemble, d_min_sub = "", "", "", None
-        if second_layer:
-            sub_dist, sub_proj = classify_atom(atoms, index, second_layer,
-                                               third_layer, normal, basis,
-                                               dist_tol=dist_tol, hcp_tol=hcp_tol,
-                                               frame=frame_for(second_layer))
-            sub_primary = sub_proj if main == "proj" else sub_dist
-            if sub_primary.get("site") in UNRESOLVED:
-                sub_primary = sub_dist
-            sub_site = site_label(sub_primary)
-            sub_neighbours = sub_primary.get("neighbour_labels", "")
-            sub_ensemble = ensemble_label(atoms, sub_primary.get("neighbours", []))
-            d_min_sub = round(float(sub_dist["d_min"]), 3)
-
         height = float(signed[index] - np.mean(signed[top_layer]))
         rows.append({
             "atom": label_atom(atoms, index),
@@ -1609,9 +1583,6 @@ def analyze_sites(atoms, adsorbate_elements, substrate_elements=None,
             "ensemble": ensemble_label(atoms, primary.get("neighbours", [])),
             "neighbors": main_neighbours,
             "agree": agree,
-            "sub_site": sub_site,
-            "sub_ensemble": sub_ensemble,
-            "sub_neighbors": sub_neighbours,
             "site_dist": site_label(by_dist),
             "ensemble_dist": ensemble_label(atoms, by_dist.get("neighbours", [])),
             "neighbors_dist": by_dist["neighbour_labels"],
@@ -1619,7 +1590,6 @@ def analyze_sites(atoms, adsorbate_elements, substrate_elements=None,
             "ensemble_proj": ensemble_label(atoms, by_proj.get("neighbours", [])),
             "neighbors_proj": by_proj.get("neighbour_labels", ""),
             "d_min (A)": round(by_dist["d_min"], 3),
-            "d_min_sub (A)": d_min_sub,
             "height (A)": round(height, 3),
             "weights": by_proj.get("weights", ""),
         })

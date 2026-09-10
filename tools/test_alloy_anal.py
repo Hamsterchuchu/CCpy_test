@@ -30,10 +30,7 @@ Checks
      columns are not in it, they are in 04_[SET]_SiteDiff.csv, which appears
      only when the two disagree
  9b. 'side' is left out unless something really sits on the underside
- 10. sub_site -- the same classification against the second layer -- matches
-     the stacking that was built: an hcp hollow sits on a second-layer ATOM
-     ('top'), an fcc hollow on a second-layer hollow, and the four-fold hollow
-     of fcc(100) sits on a second-layer atom
+ 10. the site file carries no second-layer (sub_site) columns
  11. the options are split the way the CLI advertises them: option 2 is the
      ADSORPTION energy of every folder against the one _surface reference
      (dE_surface, dE_surface_r1, dE_surface_r2), option 3 is the REDOX
@@ -159,10 +156,6 @@ def build(root):
     slab.set_chemical_symbols(symbols)
     sites = ["ontop", "bridge", "fcc", "hcp"]
     expected = {"ontop": "top", "bridge": "bridge", "fcc": "hollow3-fcc", "hcp": "hollow3-hcp"}
-    # What the site sits ON, one layer down. fcc(111) is ABC stacked, so an hcp
-    # hollow has a second-layer atom right under it and an fcc hollow does not;
-    # an atom of layer 1 itself sits over a layer-2 hollow.
-    expected_sub = {"ontop": "hollow3", "bridge": "", "fcc": "hollow3", "hcp": "top"}
     for number, site in enumerate(sites, start=1):
         sid = "S%06d" % number
         main = slab.copy()
@@ -171,24 +164,22 @@ def build(root):
         put(os.path.join(root, "A_set_surface", sid), slab, -280.0)
         put(os.path.join(root, "A_set_r1", sid), slab, -290.0 - number)
         put(os.path.join(root, "A_set_r2", sid), slab, -295.0 - number, use_outcar=False)
-        truth.append(("A_set", sid, expected[site], expected_sub[site]))
+        truth.append(("A_set", sid, expected[site]))
     with open(os.path.join(root, "A_set_surface", "metadata.txt"), "w") as handle:
         handle.write("%-22s = %s\n" % ("replace_elements", "['Pt']"))
         handle.write("%-22s = %s\n" % ("adsorbate_elements_removed", "['Li']"))
 
     # -- set B: fcc(100) hollow / bridge / top, and one folder with no energy
     square = fcc100("Pt", size=(3, 3, 4), vacuum=10.0)
-    # fcc(100): layer 2 sits under the four-fold hollows of layer 1, so the
-    # hollow site sits on an atom and an ontop site sits on a hollow.
-    for number, (site, label, sub) in enumerate([("hollow", "hollow4", "top"),
-                                                 ("bridge", "bridge", ""),
-                                                 ("ontop", "top", "hollow4")], start=1):
+    for number, (site, label) in enumerate([("hollow", "hollow4"),
+                                            ("bridge", "bridge"),
+                                            ("ontop", "top")], start=1):
         sid = "S%06d" % number
         main = square.copy()
         add_adsorbate(main, "O", 1.5, site)
         put(os.path.join(root, "B_set", sid), main, None if number == 3 else -100.0 - number)
         put(os.path.join(root, "B_set_surface", sid), square, -90.0)
-        truth.append(("B_set", sid, label, sub))
+        truth.append(("B_set", sid, label))
 
     # -- set C: adsorbate under the slab (bottom face)
     base = fcc111("Pt", size=(3, 3, 4), vacuum=10.0)
@@ -202,7 +193,7 @@ def build(root):
     under.positions[-1] = [centre[0], centre[1], zmin - 2.0]
     put(os.path.join(root, "C_set", "S000001"), under, -100.0)
     put(os.path.join(root, "C_set_surface", "S000001"), base, -90.0)
-    truth.append(("C_set", "S000001", "hollow3-hcp", "top"))
+    truth.append(("C_set", "S000001", "hollow3-hcp"))
 
     # -- set E: two S adsorbates and a redox twin for each of them, so the
     #    remaining atom's number SHIFTS in one twin but not the other. That is
@@ -453,7 +444,7 @@ try:
           all(os.path.exists(os.path.join(work, "04_%s_AlloyAnal.csv" % n))
               for n in ("A_set", "B_set", "C_set")))
 
-    for set_name, sid, expected_label, expected_sub in truth:
+    for set_name, sid, expected_label in truth:
         element = "Li" if set_name in ("A_set", "C_set") else "O"
         row = sites.get((set_name, sid, element))
         if row is None:
@@ -469,11 +460,6 @@ try:
               row["site"].split("-")[0] == want, row["site"])
         check("%s %s both methods agree here" % (set_name, sid),
               row["agree"] == "same", row["agree"])
-        if expected_sub:
-            check("%s %s sub_site -> %s" % (set_name, sid, expected_sub),
-                  row["sub_site"].split("-")[0] == expected_sub, row["sub_site"])
-            check("%s %s sub_neighbors not empty" % (set_name, sid),
-                  bool(row["sub_neighbors"]), repr(row["sub_neighbors"]))
 
     energies = {name: read_csv(os.path.join(work, "04_%s_AlloyAnal.csv" % name))
                 for name in ("A_set", "B_set", "C_set")}
@@ -519,10 +505,11 @@ try:
     # The site file must carry one answer, not both, and no bookkeeping columns.
     header = list(read_csv(os.path.join(work, "04_A_set_AdsorptionSites.csv"))[0])
     for gone in ("site_dist", "site_proj", "neighbors_dist", "neighbors_proj",
-                 "element", "atom_no", "main_atom", "d_min_sub (A)"):
+                 "element", "atom_no", "main_atom", "d_min_sub (A)",
+                 "sub_site", "sub_ensemble", "sub_neighbors"):
         check("site file drops the '%s' column" % gone, gone not in header, header)
     for kept in ("atom", "local_no", "site", "ensemble", "neighbors",
-                 "sub_site", "sub_ensemble", "agree"):
+                 "d_min (A)", "height (A)", "agree"):
         check("site file keeps the '%s' column" % kept, kept in header, header)
     check("'side' is left out when nothing is on the underside",
           "side" not in header, header)
