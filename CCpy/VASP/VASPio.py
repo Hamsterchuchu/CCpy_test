@@ -742,7 +742,7 @@ class VASPInput():
         try:
             os.mkdir("Band-DOS")
         except:
-            print("Band-DOS directory is exist already. All files wii be override.")
+            print("Band-DOS directory is exist already. All files will be override.")
 
         os.chdir("Band-DOS")
 
@@ -937,7 +937,7 @@ class VASPInput():
         try:
             os.mkdir("Phonon_opt")
         except:
-            print("Phonon_opt directory is exist already. All files wii be override.")
+            print("Phonon_opt directory is exist already. All files will be override.")
 
         os.chdir("Phonon_opt")
         prev_files =["CONTCAR","INCAR", "KPOINTS", "POSCAR", "POTCAR"]
