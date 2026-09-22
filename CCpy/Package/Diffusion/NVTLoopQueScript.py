@@ -62,10 +62,16 @@ NCORE = 4
 #user_incar = {"NCORE": NCORE, "ICHARG": 0, "EDIFF": 1E-05, "ISIF": 2, "MDALGO": 3, "LANGEVIN_GAMMA": [10] * structure.ntypesp, "LANGEVIN_GAMMA_L": 1}   # Langevin NVT
 user_incar = {"NCORE": NCORE, "ICHARG": 0, "PREC": "Normal"}
 
-# -- Upper bound for re-running VASP in the same run directory. Without a bound a
-#    VASP that dies in seconds is retried until the walltime is gone (this actually
-#    happened: ~8500 retries and a 207 MiB stderr file).
-MAX_TRY = 3
+# -- How many times VASP may be run in the same run directory. 1 means no retry:
+#    the job stops as soon as one attempt fails.
+#    Retrying here cannot make progress. write_input() runs once, outside the loop,
+#    so a second attempt restarts the same POSCAR from ionic step 0 with the same
+#    INCAR -- nothing is carried over from the failed attempt except WAVECAR. In
+#    practice these failures come from a bad starting structure, and such a run
+#    never recovers, so retrying only burns walltime (this actually happened with
+#    an unbounded loop: ~8500 retries and a 207 MiB stderr file).
+#    Raise this only if transient cluster faults turn out to be worth re-running for.
+MAX_TRY = 1
 
 heating_nsw = 2000
 nsw = 1000
@@ -102,6 +108,15 @@ def run_vasp():
     with open("vasp.out", "w") as fo:
         return subprocess.call("%s %s < /dev/null" % (mpi_run, vasp),
                                shell=True, stdout=fo, stderr=subprocess.STDOUT)
+
+
+def last_ionic_step():
+    # -- Last ionic step recorded in OSZICAR, or None when it cannot be read.
+    try:
+        tail = os.popen("tail OSZICAR | grep T=").readlines()
+        return int(tail[-1].split()[0])
+    except Exception:
+        return None
 
 
 def abort(msg):
@@ -225,7 +240,11 @@ def running(temp, pre, crt):
             properly_terminated = True
             break
     if not properly_terminated:
-        abort("VASP failed %d times in %s" % (MAX_TRY, crt_dir))
+        reached = last_ionic_step()
+        abort("VASP ran but did not complete %d ionic steps in %s "
+              "(exit %d, reached step %s, %d attempt(s)). "
+              "Check the starting structure and %s/vasp.out."
+              % (crt_nsw, crt_dir, rc, reached, MAX_TRY, crt_dir))
     os.system("touch vasp.done")
     os.chdir("../")
     # -- remove files in previous directory to reduce stroage
