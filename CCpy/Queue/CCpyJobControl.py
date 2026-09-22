@@ -92,11 +92,19 @@ class JobSubmit:
         self.queue_name = "#$ -q %s" % self.q if self.q else ""
         self.node_assign = ""
      
-        if self.n_of_cpu > 48:
-            use_node = int(self.n_of_cpu / 48)
-            self.node_assign = "#SBATCH -N %d #node" % use_node
-        else:
-            self.node_assign = "#SBATCH -N 1"
+        # -- Always ask for a single node.
+        #    Leaving -N out lets SLURM spread the ranks over whatever slots are free,
+        #    which makes VASP noticeably slower (inter-node communication). Pinning the
+        #    job to one node trades a longer queue wait for predictable performance.
+        #    The previous code computed the node count as int(n_of_cpu / 48), i.e. it
+        #    assumed 48 cores per node. That is node99's main partition size; cms2 has
+        #    8 / 72 / 128 core nodes and no 48 core node at all, so the number came out
+        #    wrong there -- cms2 had already been patched locally to emit "-N 1"
+        #    unconditionally. This makes that the behaviour everywhere.
+        #    Requesting more cores than one node has now fails at submit time instead of
+        #    silently producing a contradictory -N. Supporting multi-node jobs properly
+        #    needs the per-partition core count in CCpy/Queue/server_profile.py.
+        self.node_assign = "#SBATCH -N 1"
 
         # -- 서버별 노드/파티션 프로파일 (CCpy/Queue/server_profile.py)
         #    cms2 와 node99 는 노드 이름과 파티션 구성이 서로 다르다.
