@@ -51,7 +51,11 @@ try:
 except Exception as e:
     print("Error: cannot read vasp_path from %s (%s)" % (_queue_config_path, e))
     sys.exit(1)
-NCORE = 16
+# -- NCORE must divide the number of MPI ranks, otherwise VASP prints a warning
+#    and silently falls back to NCORE = 1 (which it calls "grossly inefficient").
+#    4 matches the CCpy VASP default (CCpy/VASP/vasp_default.yaml) and divides
+#    every core count used here, so the AIMD run keeps the band parallelisation.
+NCORE = 4
 #user_incar = {"NCORE": NCORE, "ENCUT": 400, "LREAL": "Auto", "PREC": "Normal", "ALGO": "Fast", "EDIFF": 1E-05, "ICHARG": 0, "IALGO": 48}
 #user_incar = {"NCORE": NCORE, "PREC": "Normal", "ALGO": "Fast", "ICHARG": 0}
 #user_incar = {"NCORE": NCORE, "ICHARG": 0, "EDIFF": 1E-05, "ISIF": 2, "MDALGO": 3, "LANGEVIN_GAMMA": [10] * structure.ntypesp, "LANGEVIN_GAMMA_L": 1}   # Langevin NVT
