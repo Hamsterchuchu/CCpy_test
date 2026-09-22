@@ -123,7 +123,7 @@ def Analyze_VASP_MD(args):
 
     # In analyzing Arrhenius relationship, it is required to provide charged specie. To keep consistent, I also
     # require charged specie, even it is not necessary
-    specie = Specie.from_string(args.specie)
+    specie = Specie.from_str(args.specie)
     if args.siesta:
         from CCpy.SIESTA.SIESTAio import SIESTAOutput
         structures = []

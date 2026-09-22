@@ -218,11 +218,11 @@ class DiffusivityAnalyzer(MSONable):
               }
         oxi = False
         if oxidized_specie:
-            df_sp = Specie.from_string(oxidized_specie)
+            df_sp = Specie.from_str(oxidized_specie)
             oxi = True
         else:
             try:
-                df_sp = Specie.from_string(self.specie)
+                df_sp = Specie.from_str(self.specie)
                 oxi = True
             except:
                 pass
@@ -636,7 +636,7 @@ def get_conversion_factor(structure, specie, temperature):
         df_sp = specie
     else:
         try:
-            df_sp = Specie.from_string(specie)
+            df_sp = Specie.from_str(specie)
         except:
             raise Exception("Please provide oxidation decorated specie, like Li+, O2-")
     z = df_sp.oxi_state
