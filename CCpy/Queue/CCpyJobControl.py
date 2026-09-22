@@ -633,25 +633,26 @@ export I_MPI_PMI_LIBRARY=/usr/lib64/libpmi.so      # Do not change here!!
             runs += "%s %s %s %s %s %s %s \n\n" % (self.python_path, script_filename, structure_filename, temp, specie, screen, max_step)
             runs += "cd %s \n" % pwd
 
-        mpi = '''#!/bin/csh
-# Job name 
-#$ -N %s
-
-# pe request
+        # -- SLURM script, same shape as AIMD_NVT_Loop() above. This used to be an
+        #    SGE script (#!/bin/csh with #$ directives) while self.pe_request /
+        #    self.node_assign already emitted #SBATCH lines, so the two were mixed
+        #    and the job did not run correctly under SLURM.
+        mpi = '''#!/bin/sh
+#SBATCH -J %s         # jobname
+#SBATCH -p %s     # partition name
+%s
+# n of nodes
+%s
+# n of cpu
 %s
 
-# queue name
-%s
+#SBATCH -o %%x.o%%j
+#SBATCH -e %%x.e%%j
 
-# node
-%s
-
-#$ -V
-#$ -cwd
-
+export I_MPI_PMI_LIBRARY=/usr/lib64/libpmi.so      # Do not change here!!
 
 %s
-''' % (jobname, self.pe_request, self.queue_name, self.node_assign, runs)
+''' % (jobname, self.partition_name, self.allot_node, self.pe_request, self.node_assign, runs)
 
         f = open("mpi.sh", "w")
         f.write(mpi)
