@@ -109,8 +109,19 @@ def scan_source(src, where, found):
                 if alias.name == "*":
                     continue
                 obj = getattr(module, alias.name, None)
-                if obj is not None:
-                    names[alias.asname or alias.name] = obj
+                if obj is None:
+                    # -- 이름이 통째로 사라진 경우. 시그니처 변경이 아니라서 예전에는
+                    #    조용히 넘어갔고, 그 사각지대로 실제 버그가 빠져나갔다.
+                    found.append({
+                        "where": where,
+                        "line": node.lineno,
+                        "label": "%s.%s" % (node.module, alias.name),
+                        "n_positional": 0,
+                        "keywords": [],
+                        "error": "import 대상이 없음 (이름이 바뀌었거나 삭제됨)",
+                    })
+                    continue
+                names[alias.asname or alias.name] = obj
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
@@ -121,7 +132,18 @@ def scan_source(src, where, found):
         elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) \
                 and func.value.id in names:
             obj = getattr(names[func.value.id], func.attr, None)
-            if obj is not None:
+            if obj is None:
+                # -- 속성이 통째로 사라진 경우. 예) Specie.from_string -> Specie.from_str
+                #    예전에는 여기서 조용히 넘어가서 검사를 통과했다.
+                found.append({
+                    "where": where,
+                    "line": node.lineno,
+                    "label": "%s.%s" % (func.value.id, func.attr),
+                    "n_positional": len(node.args),
+                    "keywords": [k.arg for k in node.keywords],
+                    "error": "속성이 없음 (이름이 바뀌었거나 삭제됨)",
+                })
+            else:
                 _check_call(obj, node, where,
                             "%s.%s" % (func.value.id, func.attr), found)
 
@@ -165,7 +187,7 @@ def main():
         n_scanned += 1
 
     print("검사한 파일/템플릿: %d개" % n_scanned)
-    print("시그니처 불일치: %d건" % len(found))
+    print("시그니처 불일치 / 사라진 API: %d건" % len(found))
     print()
     for item in found:
         print("  %s:%s" % (item["where"], item["line"]))
