@@ -40,6 +40,12 @@ def mkdir(dirname):
         os.mkdir(dirname)
 
 
+def abort(msg):
+    write_log("ABORT: " + msg)
+    print("ABORT: " + msg)
+    sys.exit(1)
+
+
 def write_log(msg):
     f = open("log", "a")
     f.write(msg + "\\n")
@@ -182,17 +188,23 @@ def write_data(crt):
 def write_diffusivity_data(crt, specie, specie_distance, temp):
     start_num = 1
     # -- Oxidation state string appended to the specie name when calling analyze_aimd.py
-    #    (it requires a charged specie, e.g. "Li+", "Mg2+"). Unknown species fall back
-    #    to "+" so that the job does not die with a KeyError; check the result when the
-    #    diffusing ion is not listed here.
+    #    (it requires a charged specie, e.g. "Li+", "Mg2+"). A specie that is not listed
+    #    stops the job instead of being guessed: the charge enters the conductivity
+    #    conversion factor as z**2, so assuming "+" for, say, Fe would silently report a
+    #    conductivity that is off by a factor of 4 or 9.
     chg_data = {"H": "+", "Li": "+", "Na": "+", "K": "+", "Rb": "+", "Cs": "+",
                 "Cu": "+", "Ag": "+",
                 "Mg": "2+", "Ca": "2+", "Sr": "2+", "Ba": "2+", "Zn": "2+", "Cd": "2+",
                 "Al": "3+", "Y": "3+", "La": "3+",
                 "F": "-", "Cl": "-", "Br": "-", "I": "-", "O": "2-"}
+    if specie not in chg_data:
+        abort("Unknown diffusing specie '%s'. Its oxidation state is not defined, so the "
+              "diffusivity-to-conductivity conversion factor cannot be computed. "
+              "Add it to chg_data in SIESTA_NVTLoopQueScript.py, or use one of: %s"
+              % (specie, ", ".join(sorted(chg_data))))
     if crt >= start_num:
         os.system("analyze_aimd.py diffusivity %s%s run 1 %d %.2f -T %d -msd msd_%dK.csv -siesta>> anal.log" % (
-        specie, chg_data.get(specie, "+"), crt, specie_distance, temp, temp))
+        specie, chg_data[specie], crt, specie_distance, temp, temp))
     datafilename = "Mo_%dK_data.csv" % temp
     bjunfilename = "bj_%dK_data.csv" % temp
     if datafilename not in os.listdir("./"):
