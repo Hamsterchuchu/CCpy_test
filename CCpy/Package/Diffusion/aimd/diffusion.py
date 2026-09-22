@@ -615,42 +615,16 @@ def get_conversion_factor(structure, species, temperature):
         z = df_sp.full_electronic_structure[-1][2]
 
     n = structure.composition[species]
+    # -- A structure parsed from an MD run carries no oxidation states, so its
+    #    Composition is keyed by Element. Looking it up with a charged Species
+    #    ("Li+") returns 0 and the whole factor collapses to 0, which is why the
+    #    conductivity column of analyze_aimd.py was always 0.0. The charge is
+    #    already taken from the Species above; only the count has to come from the
+    #    bare element.
+    if n == 0:
+        n = structure.composition[df_sp.element]
 
     vol = structure.volume * 1e-24  # units cm^3
     return 1000 * n / (vol * const.N_A) * z ** 2 * (const.N_A * const.e) ** 2 \
         / (const.R * temperature)
 
-'''
-def get_conversion_factor(structure, specie, temperature):
-    """
-    Conversion factor to convert between cm^2/s diffusivity measurements and
-    mS/cm conductivity measurements based on number of atoms of diffusing
-    species.
-    :param structure (Structure): Input structure.
-    :param specie (string/specie): Diffusing species string, must contain oxidation state.
-    :param temperature (float): Temperature of the diffusion run in Kelvin.
-    :return: Conversion factor.
-        Conductivity (in mS/cm) = Conversion Factor * Diffusivity (in cm^2/s)
-    """
-    if type(specie) is Specie:
-        df_sp = specie
-    else:
-        try:
-            df_sp = Specie.from_str(specie)
-        except:
-            raise Exception("Please provide oxidation decorated specie, like Li+, O2-")
-    z = df_sp.oxi_state
-    el, occu = structure.composition.items()[0]
-    if isinstance(el, Specie):  # oxidation decorated structure
-        n = structure.composition[specie]
-    else:
-        n = structure.composition[str(df_sp.element)]
-    if n == 0:
-        raise Exception("No specie {} in the structure composition: {}".format(specie, structure.composition))
-    vol = structure.volume * 1e-24  # units cm^3
-    N_A = 6.022140857e+23
-    e = 1.6021766208e-19
-    R = 8.3144598
-    return 1000 * n / (vol * N_A) * z ** 2 * (N_A * e) ** 2 \
-           / (R * temperature)
-'''
