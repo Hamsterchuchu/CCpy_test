@@ -174,10 +174,18 @@ def write_data(crt):
 
 def write_diffusivity_data(crt, specie, specie_distance, temp):
     start_num = 1
-    chg_data = {"Li": "+", "Na": "+", "K": "+", "Cu": "+"}
+    # -- Oxidation state string appended to the specie name when calling analyze_aimd.py
+    #    (it requires a charged specie, e.g. "Li+", "Mg2+"). Unknown species fall back
+    #    to "+" so that the job does not die with a KeyError; check the result when the
+    #    diffusing ion is not listed here.
+    chg_data = {"H": "+", "Li": "+", "Na": "+", "K": "+", "Rb": "+", "Cs": "+",
+                "Cu": "+", "Ag": "+",
+                "Mg": "2+", "Ca": "2+", "Sr": "2+", "Ba": "2+", "Zn": "2+", "Cd": "2+",
+                "Al": "3+", "Y": "3+", "La": "3+",
+                "F": "-", "Cl": "-", "Br": "-", "I": "-", "O": "2-"}
     if crt >= start_num:
         os.system("analyze_aimd.py diffusivity %s%s run 1 %d %.2f -T %d -msd msd_%dK.csv -siesta>> anal.log" % (
-        specie, chg_data[specie], crt, specie_distance, temp, temp))
+        specie, chg_data.get(specie, "+"), crt, specie_distance, temp, temp))
     datafilename = "Mo_%dK_data.csv" % temp
     bjunfilename = "bj_%dK_data.csv" % temp
     if datafilename not in os.listdir("./"):
