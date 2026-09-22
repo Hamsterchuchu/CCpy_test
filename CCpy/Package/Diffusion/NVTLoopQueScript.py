@@ -13,6 +13,7 @@ import os, sys
 import re
 import time
 import pickle
+import subprocess
 import yaml
 import numpy as np
 import pandas as pd
@@ -61,6 +62,11 @@ NCORE = 4
 #user_incar = {"NCORE": NCORE, "ICHARG": 0, "EDIFF": 1E-05, "ISIF": 2, "MDALGO": 3, "LANGEVIN_GAMMA": [10] * structure.ntypesp, "LANGEVIN_GAMMA_L": 1}   # Langevin NVT
 user_incar = {"NCORE": NCORE, "ICHARG": 0, "PREC": "Normal"}
 
+# -- Upper bound for re-running VASP in the same run directory. Without a bound a
+#    VASP that dies in seconds is retried until the walltime is gone (this actually
+#    happened: ~8500 retries and a 207 MiB stderr file).
+MAX_TRY = 3
+
 heating_nsw = 2000
 nsw = 1000
 min_step = 50
@@ -88,6 +94,20 @@ if screen == 'screen':
 #             'SMASS': 0, 'POTIM': time_step, 'PREC': 'Low',
 #             'ISPIN': 2 if spin_polarized else 1,
 #             "LDAU": False}
+
+
+def run_vasp():
+    # -- os.system() throws the exit code away, so a failed VASP looks exactly like
+    #    a successful one. Use subprocess.call() and return the exit code.
+    with open("vasp.out", "w") as fo:
+        return subprocess.call("%s %s < /dev/null" % (mpi_run, vasp),
+                               shell=True, stdout=fo, stderr=subprocess.STDOUT)
+
+
+def abort(msg):
+    write_log("ABORT: " + msg)
+    print("ABORT: " + msg)
+    sys.exit(1)
 
 
 def mkdir(dirname):
@@ -158,7 +178,6 @@ def prev_check():
 def running(temp, pre, crt):
     # -- Run AIMD at (run00, run01, ...)
     # -- First step is heat-up.
-    total_try = 1
     #pre_dir = ("run%2d" % pre).replace(" ", "0")
     #crt_dir = ("run%2d" % crt).replace(" ", "0")
     pre_dir = ("run%03d" % pre)
@@ -183,22 +202,31 @@ def running(temp, pre, crt):
         #inputset = MPMDSet(structure, start_temp=float(temp), end_temp=float(temp), nsteps=int(nsw / 4), user_incar_settings=user_incar)
         inputset.write_input(crt_dir)
         os.system("cp %s/WAVECAR %s" % (pre_dir, crt_dir))
-    os.chdir(crt_dir)    
-    os.system("rm -rf vasprun.xml vasprun.xml.gz")
-    os.system("%s %s < /dev/null > vasp.out" % (mpi_run, vasp))
-    time.sleep(5)
-    os.system("gzip vasprun.xml")
-    write_log("try: %d" % total_try)
-    properly_terminated = terminated_check(crt_nsw)
-    while not properly_terminated:
-        total_try += 1
-        os.system("rm -rf vasprun.xml vasprun.xml.gz")
-        os.system("%s %s < /dev/null > vasp.out" % (mpi_run, vasp))
+    os.chdir(crt_dir)
+    properly_terminated = False
+    for total_try in range(1, MAX_TRY + 1):
+        # -- OSZICAR is removed as well so that a leftover file from an interrupted
+        #    previous run cannot be mistaken for "VASP started this time".
+        os.system("rm -rf vasprun.xml vasprun.xml.gz OSZICAR")
+        rc = run_vasp()
+
+        # -- A failure that retrying cannot fix: VASP did not even reach its first
+        #    electronic step, so the inputs or the binary are wrong. Stop now.
+        if not os.path.exists("OSZICAR"):
+            abort("VASP did not start in %s (exit %d). Check INCAR / POTCAR / vasp_path." % (crt_dir, rc))
+
         time.sleep(5)
+        if not os.path.exists("vasprun.xml"):
+            write_log("try %d: exit %d, no vasprun.xml" % (total_try, rc))
+            continue
         os.system("gzip vasprun.xml")
-        write_log("try: %d" % total_try)
-        properly_terminated = terminated_check(crt_nsw)        
-    os.system("touch vasp.done")    
+        write_log("try %d: exit %d" % (total_try, rc))
+        if terminated_check(crt_nsw):
+            properly_terminated = True
+            break
+    if not properly_terminated:
+        abort("VASP failed %d times in %s" % (MAX_TRY, crt_dir))
+    os.system("touch vasp.done")
     os.chdir("../")
     # -- remove files in previous directory to reduce stroage
     rms = ['DOSCAR', 'XDATCAR', 'CHG', 'CHGCAR', 'WAVECAR', 'OUTCAR', 'vasp.out', 'EIGENVAL', 'PROCAR', 'XDATCAR', 'IBZKPT', 'PCDAT'
