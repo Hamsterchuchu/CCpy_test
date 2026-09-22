@@ -22,6 +22,11 @@ specie = sys.argv[3]
 potential_dirpath = '/home/shared/SIESTA_POT'
 heating_timestep = 2000
 timestep = 1000
+# -- MD time step in fs. SIESTAMDset(..., timestep=2) is used below, so the
+#    trajectory advances 2 fs per recorded structure.
+md_time_step = 2
+# -- structure_parser() returns every MD step, so no structure is skipped.
+md_step_skip = 1
 min_step = 50
 min_RSD = 0.25
 min_ASD = 3
@@ -137,14 +142,16 @@ def write_data(crt):
             dirname = "run%03d" % i
             siesta_out = SIESTAOutput("%s/siesta.out.gz" % dirname)
             sts = siesta_out.structure_parser()
-            structures.append(sts)
+            structures += sts
 
         # -- collect all smoothing modes of analyzer
         analyzers = {}
         for mode in [False, 'constant', 'max']:
             try:
-                analyzers[mode] = DiffusionAnalyzer.from_structures(structures, specie=specie, smoothed=mode,
-                                                                    min_obs=60)
+                analyzers[mode] = DiffusionAnalyzer.from_structures(
+                    structures, specie=specie, temperature=float(temp),
+                    time_step=md_time_step, step_skip=md_step_skip,
+                    smoothed=mode, min_obs=60)
             except:
                 analyzers[mode] = None
 
