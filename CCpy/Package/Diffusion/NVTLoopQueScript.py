@@ -111,9 +111,15 @@ def run_vasp():
 
 
 def last_ionic_step():
-    # -- Last ionic step recorded in OSZICAR, or None when it cannot be read.
+    # -- Last ionic step recorded in OSZICAR.
+    #      n > 0 : that many ionic steps finished
+    #      0     : the file exists but holds no "T=" line yet, i.e. VASP died during
+    #              the electronic minimisation of the very first ionic step
+    #      None  : OSZICAR could not be read at all
     try:
         tail = os.popen("tail OSZICAR | grep T=").readlines()
+        if not tail:
+            return 0
         return int(tail[-1].split()[0])
     except Exception:
         return None
@@ -228,7 +234,9 @@ def running(temp, pre, crt):
         # -- A failure that retrying cannot fix: VASP did not even reach its first
         #    electronic step, so the inputs or the binary are wrong. Stop now.
         if not os.path.exists("OSZICAR"):
-            abort("VASP did not start in %s (exit %d). Check INCAR / POTCAR / vasp_path." % (crt_dir, rc))
+            abort("VASP did not start in %s (exit %d): no OSZICAR was written. "
+                  "Check the starting structure, INCAR / POTCAR and vasp_path."
+                  % (crt_dir, rc))
 
         time.sleep(5)
         if not os.path.exists("vasprun.xml"):
@@ -241,10 +249,16 @@ def running(temp, pre, crt):
             break
     if not properly_terminated:
         reached = last_ionic_step()
+        if reached is None:
+            progress = "OSZICAR could not be read"
+        elif reached == 0:
+            progress = "no ionic step completed -- VASP died during the electronic minimisation"
+        else:
+            progress = "reached ionic step %d" % reached
         abort("VASP ran but did not complete %d ionic steps in %s "
-              "(exit %d, reached step %s, %d attempt(s)). "
-              "Check the starting structure and %s/vasp.out."
-              % (crt_nsw, crt_dir, rc, reached, MAX_TRY, crt_dir))
+              "(exit %d, %s, %d attempt(s)). "
+              "Check the starting structure -- are any atoms too close? -- and %s/vasp.out."
+              % (crt_nsw, crt_dir, rc, progress, MAX_TRY, crt_dir))
     os.system("touch vasp.done")
     os.chdir("../")
     # -- remove files in previous directory to reduce stroage
