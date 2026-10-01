@@ -263,13 +263,13 @@ class JobInitiator:
         myJS = JS(inputs[0], self.queue, self.n_of_cpu, node=self.node)
         myJS.AIMD_NVT_Loop(structure_filename=inputs[0], temp=temp, specie=specie, screen=screen, max_step=max_step)
 
-    def AIMD_NVT_Loop_batch(self, temp=None, specie="Li", screen="no_screen", max_step=250):
+    def AIMD_NVT_Loop_batch(self, temps=None, specie="Li", screen="no_screen", max_step=250):
         # --- COLLECT INPUT FILES
         input_marker = [".cif", "POSCAR", "CONTCAR"]
         inputs = selectInputs(input_marker, "./", ask=ask)
 
         myJS = JS(inputs, self.queue, self.n_of_cpu, node=self.node)
-        myJS.AIMD_NVT_Loop_batch(structure_files = inputs, temp=temp, specie=specie, screen=screen, max_step=max_step)
+        myJS.AIMD_NVT_Loop_batch(structure_files = inputs, temps=temps, specie=specie, screen=screen, max_step=max_step)
 
     def casm_run(self):
         # --- SUBMIT QUEUE
@@ -377,6 +377,9 @@ if __name__ == "__main__":
 
     -T              : Assign temperature when NVT MD simulation in VASP
                       ex) CCpyJobSubmit.py 9 I5 -n=24 -T=1000
+                      With -batch, a comma separated list runs every selected
+                      structure at every temperature, sequentially in one job.
+                      ex) CCpyJobSubmit.py 9 I5 -n=24 -T=600,700,800 -batch
     
     -specie=        : Assign diffusion element when NVT MD simulation in VASP (optional, default: Li)
                       ex) CCpyJobSubmit.py 9 I5 -n=24 -T=1000 -specie=Na
@@ -429,6 +432,7 @@ Please check the example of scheduler config file at https://github.com/91bsjun/
     n_of_cpu = None
     atk_version = 'atk2017'
     temp = None
+    temps = []
     sub = False
     loop = False
     node = None
@@ -451,7 +455,23 @@ Please check the example of scheduler config file at https://github.com/91bsjun/
         if '-atk2019.12' in s:
             atk_version = 'atk2019.12'
         if '-T=' in s:
-            temp = int(s.split("=")[1])
+            # Accept a single temperature (-T=600) or a comma separated list
+            # (-T=600,700,800). The list form is only meaningful with -batch.
+            raw = s.split("=")[1]
+            try:
+                temps = [int(t) for t in raw.split(",") if t.strip() != ""]
+            except ValueError:
+                print("Invalid temperature: %s (ex: -T=600 or -T=600,700,800)" % raw)
+                quit()
+            if not temps:
+                print("Invalid temperature: %s (ex: -T=600 or -T=600,700,800)" % raw)
+                quit()
+            seen = []
+            for t in temps:
+                if t not in seen:
+                    seen.append(t)
+            temps = seen
+            temp = temps[0]
         if '-sub' in s:
             sub = True
         if '-loop' in s:
@@ -517,8 +537,12 @@ Please check the example of scheduler config file at https://github.com/91bsjun/
             print("Temperature must be assigned. (ex: -T=1000)")
             quit()
         if "-batch" in sys.argv:
-            job_init.AIMD_NVT_Loop_batch(temp=temp, specie=specie, screen=screen, max_step=max_step)
+            job_init.AIMD_NVT_Loop_batch(temps=temps, specie=specie, screen=screen, max_step=max_step)
         else:
+            if len(temps) > 1:
+                print("Multiple temperatures (-T=%s) are only supported with -batch." % ",".join([str(t) for t in temps]))
+                print("ex) CCpyJobSubmit.py 9 %s -n=24 -T=%s -batch" % (queue, ",".join([str(t) for t in temps])))
+                quit()
             job_init.AIMD_NVT_Loop(temp=temp, specie=specie, screen=screen, max_step=max_step)
 
     ## ------ VASP NVT LOOP
@@ -533,6 +557,9 @@ Please check the example of scheduler config file at https://github.com/91bsjun/
     elif sys.argv[1] == "12":
         if not temp:
             print("Temperature must be assigned. (ex: -T=1000)")
+            quit()
+        if len(temps) > 1:
+            print("Multiple temperatures are not supported for SIESTA NVT MD.")
             quit()
         job_init.siesta_AIMD_NVT_Loop(temp=temp, specie=specie)
 

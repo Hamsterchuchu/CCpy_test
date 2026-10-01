@@ -620,7 +620,7 @@ export I_MPI_PMI_LIBRARY=/usr/lib64/libpmi.so      # Do not change here!!
         shl(self.qsub + " mpi.sh", shell=True)
 #        shl("rm -rf ./mpi.sh", shell=True)
 
-    def AIMD_NVT_Loop_batch(self, structure_files=None, temp=None, specie="Li", screen='no_screen', max_step=250):
+    def AIMD_NVT_Loop_batch(self, structure_files=None, temps=None, specie="Li", screen='no_screen', max_step=250):
         # -- load loop queue script
         from CCpy.Package.Diffusion.NVTLoopQueScript import NVTLoopQueScriptString
         script_string = NVTLoopQueScriptString()
@@ -631,15 +631,32 @@ export I_MPI_PMI_LIBRARY=/usr/lib64/libpmi.so      # Do not change here!!
 
         jobname = input("Job name: ")
 
+        # -- -T= may carry several temperatures (-T=600,700,800). Every selected
+        #    structure is run at every temperature, all sequentially inside this
+        #    single job, so the requested walltime must cover
+        #    (n of structures) x (n of temperatures) AIMD runs.
+        if temps is None:
+            temps = []
+        elif not isinstance(temps, (list, tuple)):
+            temps = [temps]
+        if not temps:
+            print("Temperature must be assigned. (ex: -T=1000)")
+            quit()
+
         runs = ""
         pwd = os.getcwd()
         if 'structures' not in os.listdir('./'):
             os.mkdir('structures')
         for structure_filename in structure_files:
             dirname = structure_filename.replace(".cif", "")
-            runs += "cp %s structures; mkdir %s; mv %s %s; cp %s %s; cd %s\n" % (structure_filename, dirname, structure_filename, dirname, script_filename, dirname, dirname)
-            runs += "%s %s %s %s %s %s %s \n\n" % (self.python_path, script_filename, structure_filename, temp, specie, screen, max_step)
-            runs += "cd %s \n" % pwd
+            # The structure file is moved into its own directory once; each
+            # temperature then gets its own <T>K/ subdirectory created by
+            # .AIMDLoop.py inside that directory.
+            runs += "cp %s structures; mkdir %s; mv %s %s; cp %s %s\n" % (structure_filename, dirname, structure_filename, dirname, script_filename, dirname)
+            for temp in temps:
+                runs += "cd %s\n" % dirname
+                runs += "%s %s %s %s %s %s %s \n" % (self.python_path, script_filename, structure_filename, temp, specie, screen, max_step)
+                runs += "cd %s \n\n" % pwd
 
         # -- SLURM script, same shape as AIMD_NVT_Loop() above. This used to be an
         #    SGE script (#!/bin/csh with #$ directives) while self.pe_request /
