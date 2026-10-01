@@ -584,7 +584,8 @@ cd $SLURM_SUBMIT_DIR
         shl(self.qsub + " mpi.sh", shell=True)
         shl("rm -rf ./mpi.sh", shell=True)
 
-    def AIMD_NVT_Loop(self, structure_filename=None, temp=None, specie="Li", screen='no_screen', max_step=250):
+    def AIMD_NVT_Loop(self, structure_filename=None, temp=None, specie="Li", screen='no_screen', max_step=250,
+                      incar_file=None):
         # -- load loop queue script
         from CCpy.Package.Diffusion.NVTLoopQueScript import NVTLoopQueScriptString
         script_string = NVTLoopQueScriptString()
@@ -609,9 +610,10 @@ cd $SLURM_SUBMIT_DIR
 
 export I_MPI_PMI_LIBRARY=/usr/lib64/libpmi.so      # Do not change here!!
 
-%s %s %s %s %s %s %s
+%s %s %s %s %s %s %s %s
 ''' % (jobname, self.partition_name, self.allot_node, self.pe_request, self.node_assign, self.python_path,
-       script_filename, structure_filename, temp, specie, screen, max_step)
+       script_filename, structure_filename, temp, specie, screen, max_step,
+       incar_file if incar_file else "")
 
         f = open("mpi.sh", "w")
         f.write(mpi)
@@ -620,7 +622,8 @@ export I_MPI_PMI_LIBRARY=/usr/lib64/libpmi.so      # Do not change here!!
         shl(self.qsub + " mpi.sh", shell=True)
 #        shl("rm -rf ./mpi.sh", shell=True)
 
-    def AIMD_NVT_Loop_batch(self, structure_files=None, temps=None, specie="Li", screen='no_screen', max_step=250):
+    def AIMD_NVT_Loop_batch(self, structure_files=None, temps=None, specie="Li", screen='no_screen', max_step=250,
+                            incar_file=None):
         # -- load loop queue script
         from CCpy.Package.Diffusion.NVTLoopQueScript import NVTLoopQueScriptString
         script_string = NVTLoopQueScriptString()
@@ -653,9 +656,13 @@ export I_MPI_PMI_LIBRARY=/usr/lib64/libpmi.so      # Do not change here!!
             # temperature then gets its own <T>K/ subdirectory created by
             # .AIMDLoop.py inside that directory.
             runs += "cp %s structures; mkdir %s; mv %s %s; cp %s %s\n" % (structure_filename, dirname, structure_filename, dirname, script_filename, dirname)
+            # -- One sheet of -incar settings is filled in for the whole batch,
+            #    so the same override file is copied into every structure folder.
+            if incar_file:
+                runs += "cp %s %s\n" % (incar_file, dirname)
             for temp in temps:
                 runs += "cd %s\n" % dirname
-                runs += "%s %s %s %s %s %s %s \n" % (self.python_path, script_filename, structure_filename, temp, specie, screen, max_step)
+                runs += "%s %s %s %s %s %s %s %s \n" % (self.python_path, script_filename, structure_filename, temp, specie, screen, max_step, incar_file if incar_file else "")
                 runs += "cd %s \n\n" % pwd
 
         # -- SLURM script, same shape as AIMD_NVT_Loop() above. This used to be an

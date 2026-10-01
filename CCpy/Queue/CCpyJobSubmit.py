@@ -252,7 +252,7 @@ class JobInitiator:
             myJS = JS(each_input, self.queue, self.n_of_cpu, node=self.node)
             myJS.pbs_runner()
 
-    def AIMD_NVT_Loop(self, temp=None, specie="Li", screen="no_screen", max_step=250):
+    def AIMD_NVT_Loop(self, temp=None, specie="Li", screen="no_screen", max_step=250, incar=False):
         # --- COLLECT INPUT FILES
         input_marker = [".cif", "POSCAR", "CONTCAR"]
         inputs = selectInputs(input_marker, "./", ask=ask)
@@ -260,16 +260,34 @@ class JobInitiator:
             print("Only single file available.")
             quit()
 
-        myJS = JS(inputs[0], self.queue, self.n_of_cpu, node=self.node)
-        myJS.AIMD_NVT_Loop(structure_filename=inputs[0], temp=temp, specie=specie, screen=screen, max_step=max_step)
+        incar_file = None
+        if incar:
+            incar_file = run_incar_sheet(inputs[0], temp, screen=screen)
+            if incar_file is None:
+                quit()
 
-    def AIMD_NVT_Loop_batch(self, temps=None, specie="Li", screen="no_screen", max_step=250):
+        myJS = JS(inputs[0], self.queue, self.n_of_cpu, node=self.node)
+        myJS.AIMD_NVT_Loop(structure_filename=inputs[0], temp=temp, specie=specie, screen=screen,
+                           max_step=max_step, incar_file=incar_file)
+
+    def AIMD_NVT_Loop_batch(self, temps=None, specie="Li", screen="no_screen", max_step=250, incar=False):
         # --- COLLECT INPUT FILES
         input_marker = [".cif", "POSCAR", "CONTCAR"]
         inputs = selectInputs(input_marker, "./", ask=ask)
 
+        incar_file = None
+        if incar:
+            # -- One sheet for the whole batch: the first selected structure is
+            #    the reference the INCAR is built from, and the resulting
+            #    overrides go to every structure and every temperature.
+            ref_temp = temps[0] if temps else None
+            incar_file = run_incar_sheet(inputs[0], ref_temp, screen=screen, structure_files=inputs)
+            if incar_file is None:
+                quit()
+
         myJS = JS(inputs, self.queue, self.n_of_cpu, node=self.node)
-        myJS.AIMD_NVT_Loop_batch(structure_files = inputs, temps=temps, specie=specie, screen=screen, max_step=max_step)
+        myJS.AIMD_NVT_Loop_batch(structure_files = inputs, temps=temps, specie=specie, screen=screen,
+                                 max_step=max_step, incar_file=incar_file)
 
     def casm_run(self):
         # --- SUBMIT QUEUE
@@ -303,6 +321,23 @@ class JobInitiator:
 
         myJS = JS(inputs[0], self.queue, self.n_of_cpu, node=self.node)
         myJS.siesta_AIMD_NVT_Loop(structure_filename=inputs[0], temp=temp, specie=specie)
+
+def run_incar_sheet(structure_file, temp, screen="no_screen", structure_files=None):
+    """
+    Open the -incar settings sheet and write the override file next to the job.
+
+    Returns the override file name, or None when the user cancelled.
+    """
+    from CCpy.Package.Diffusion.AIMDIncar import run_incar_wizard, write_overrides, OVERRIDE_FILENAME
+    overrides = run_incar_wizard(structure_file, temp,
+                                 screen=(screen == "screen"),
+                                 structure_files=structure_files)
+    if overrides is None:
+        return None
+    write_overrides(overrides, OVERRIDE_FILENAME)
+    print("INCAR overrides written to %s" % OVERRIDE_FILENAME)
+    return OVERRIDE_FILENAME
+
 
 class bcolors:
     HEADER = '\033[95m'
@@ -384,6 +419,17 @@ if __name__ == "__main__":
     -specie=        : Assign diffusion element when NVT MD simulation in VASP (optional, default: Li)
                       ex) CCpyJobSubmit.py 9 I5 -n=24 -T=1000 -specie=Na
 
+    -incar          : Edit the INCAR before submitting an NVT MD job.
+                      Opens a settings sheet showing the INCAR that would be
+                      generated for the chosen structure; edit it with
+                      KEY=value ("#KEY=" drops a tag), then "n" to submit.
+                      Without this option the job is submitted exactly as before.
+                      TEBEG / TEEND / NSW / SMASS are set per stage by the NVT
+                      loop and cannot be edited here.
+                      With -batch one sheet applies to every structure and
+                      every temperature.
+                      ex) CCpyJobSubmit.py 9 I5 -n=24 -T=1000 -incar
+
     -loop           : run VASP jobs until converged. (error will be handled using custodian library in pymatgen)
                       ex) CCpyJobSubmit.py 2 I5 -loop
                       *** very careful when use this option ***
@@ -441,6 +487,7 @@ Please check the example of scheduler config file at https://github.com/91bsjun/
     max_step = 250              # AIMD option
     additional_dir = None       # additional calc for VASP
     series = False              # series batch job submit
+    incar = False               # AIMD option: open the INCAR settings sheet
     for s in sys.argv:
         if "-n=" in s:
             n_of_cpu = int(s.split("=")[1])
@@ -488,6 +535,8 @@ Please check the example of scheduler config file at https://github.com/91bsjun/
             max_step = s.split("=")[1]
         if '-series' in s:
             series = True
+        if s == '-incar':
+            incar = True
 
     job_init = JobInitiator(queue=queue, node=node, n_of_cpu=n_of_cpu)
 
@@ -537,13 +586,13 @@ Please check the example of scheduler config file at https://github.com/91bsjun/
             print("Temperature must be assigned. (ex: -T=1000)")
             quit()
         if "-batch" in sys.argv:
-            job_init.AIMD_NVT_Loop_batch(temps=temps, specie=specie, screen=screen, max_step=max_step)
+            job_init.AIMD_NVT_Loop_batch(temps=temps, specie=specie, screen=screen, max_step=max_step, incar=incar)
         else:
             if len(temps) > 1:
                 print("Multiple temperatures (-T=%s) are only supported with -batch." % ",".join([str(t) for t in temps]))
                 print("ex) CCpyJobSubmit.py 9 %s -n=24 -T=%s -batch" % (queue, ",".join([str(t) for t in temps])))
                 quit()
-            job_init.AIMD_NVT_Loop(temp=temp, specie=specie, screen=screen, max_step=max_step)
+            job_init.AIMD_NVT_Loop(temp=temp, specie=specie, screen=screen, max_step=max_step, incar=incar)
 
     ## ------ VASP NVT LOOP
     elif sys.argv[1] == "10":

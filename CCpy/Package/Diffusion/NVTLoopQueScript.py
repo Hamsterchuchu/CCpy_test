@@ -31,6 +31,10 @@ temp = int(sys.argv[2])
 specie = sys.argv[3]
 screen = sys.argv[4]
 max_step = int(sys.argv[5])
+# -- Optional 6th argument: a YAML file of INCAR overrides written by
+#    `CCpyJobSubmit.py 9 ... -incar` at submit time. Without it the hardcoded
+#    user_incar below is used, exactly as before.
+incar_override_file = sys.argv[6] if len(sys.argv) > 6 else None
 
 # -- The executable path is read from queue_config.yaml.
 #    The vasp binary differs from server to server, so it must not be hard-coded here.
@@ -86,6 +90,27 @@ if screen == 'screen':
     min_RSD = 1
     min_ASD = 50
     user_incar = {"NCORE": NCORE, "ICHARG": 0, "PREC": "Normal", "NELM": 60}
+
+# -- Merge the -incar overrides last, so they win over both branches above.
+#    TEBEG / TEEND / NSW / SMASS are stripped here as well as in the sheet:
+#    they are rewritten per stage below (heating uses SMASS=-1 and ramps
+#    100K -> temp, the production run uses SMASS=0 at a fixed temp), so an
+#    override would either be thrown away or break the convergence logic.
+if incar_override_file:
+    if not os.path.isfile(incar_override_file):
+        print("Error: INCAR override file not found: %s" % incar_override_file)
+        sys.exit(1)
+    try:
+        _overrides = yaml.load(open(incar_override_file, "r"), Loader=yaml.FullLoader) or {}
+    except Exception as e:
+        print("Error: cannot read INCAR override file %s (%s)" % (incar_override_file, e))
+        sys.exit(1)
+    for _key in ("TEBEG", "TEEND", "NSW", "SMASS"):
+        _overrides.pop(_key, None)
+    user_incar.update(_overrides)
+    print("Applied INCAR overrides from %s" % incar_override_file)
+    for _key in sorted(_overrides):
+        print("  %-16s = %s" % (_key, _overrides[_key]))
 
 # -------------------------------------- #
 
