@@ -1403,9 +1403,54 @@ def _read_out_snippet(path: Path, head_bytes: int = _STATUS_HEAD_BYTES, tail_byt
 # SIESTA writes the final coordinates as "outcoor: Relaxed atomic coordinates" only when the
 # geometry actually converged ("outcoor: Atomic coordinates" otherwise), so that phrase decides.
 _RELAXED_RE = re.compile(r"outcoor:\s*Relaxed atomic coordinates", re.IGNORECASE)
-_MOVE_RE = re.compile(r"Begin\s+(?:CG|Broyden_opt\.|Broyden|FIRE|Zmatrix)\s+move\s*=\s*(\d+)",
-                      re.IGNORECASE)
 _RELAX_RUN_TYPES = {"cg", "broyden", "fire", "lbfgs"}   # MD.TypeOfRun values that relax geometry
+
+# The 200KB tail of _read_out_snippet is NOT enough to find the "Relaxed" block: SIESTA prints a
+# final analysis (Mulliken populations etc.) after it whose size grows with the atom count, so on a
+# ~1000-atom job the block sits several MB from the end and converged jobs came out "Unconverged".
+# Hence a separate backward scan for this one phrase: chunks from the end, stopping as soon as it
+# is found, so a converged job reads only a few MB and the whole file is never loaded.
+_RELAX_SCAN_CHUNK = 4_000_000
+_RELAX_SCAN_LIMIT = 24_000_000
+
+
+def _has_relaxed_block(path: Path) -> bool:
+    """Search the end of a .out file backwards for 'outcoor: Relaxed atomic coordinates'."""
+    try:
+        size = path.stat().st_size
+        with path.open("rb") as f:
+            pos = size
+            scanned = 0
+            overlap = b""
+            while pos > 0 and scanned < _RELAX_SCAN_LIMIT:
+                step = min(_RELAX_SCAN_CHUNK, pos)
+                pos -= step
+                scanned += step
+                f.seek(pos)
+                chunk = f.read(step) + overlap
+                if _RELAXED_RE.search(chunk.decode(errors="ignore")):
+                    return True
+                overlap = chunk[:64]     # in case the phrase straddles a chunk boundary
+    except Exception:
+        return False
+    return False
+
+
+def _last_mde_step(d: Path, base: Optional[str]) -> Optional[int]:
+    """Last ionic step number from <base>.MDE (one short line per step), if available."""
+    candidates = [d / f"{base}.MDE"] if base else []
+    candidates += sorted(d.glob("*.MDE"))
+    for mde in candidates:
+        if not mde.exists():
+            continue
+        try:
+            for ln in reversed(mde.read_text(errors="ignore").splitlines()):
+                toks = ln.split()
+                if toks and not ln.lstrip().startswith("#"):
+                    return int(float(toks[0]))
+        except Exception:
+            continue
+    return None
 
 
 def _fdf_md_options(fdf_path: Optional[Path]) -> Tuple[str, int]:
@@ -1431,7 +1476,8 @@ def _fdf_md_options(fdf_path: Optional[Path]) -> Tuple[str, int]:
     return run_type, num_cg
 
 
-def _judge_finished_run(text: str, fdf_path: Optional[Path]) -> Tuple[str, Optional[str]]:
+def _judge_finished_run(d: Path, out_path: Path, base: Optional[str],
+                       fdf_path: Optional[Path]) -> Tuple[str, Optional[str]]:
     """
     Status of a run that reached ">> End of run:" with no error pattern, by run type:
     relaxation -> "Converged" / "Unconverged" (+ step count), single-shot SCF ->
@@ -1443,11 +1489,11 @@ def _judge_finished_run(text: str, fdf_path: Optional[Path]) -> Tuple[str, Optio
         return "Done (MD)", None
     if num_cg <= 0:
         return "Converged (SCF)", None
-    if _RELAXED_RE.search(text):
+    if _has_relaxed_block(out_path):
         return "Converged", None
 
-    moves = [int(m) for m in _MOVE_RE.findall(text)]
-    return "Unconverged", (f"step {max(moves)}/{num_cg}" if moves else f"MD.NumCGsteps={num_cg}")
+    step = _last_mde_step(d, base)
+    return "Unconverged", (f"step {step}/{num_cg}" if step is not None else None)
 
 
 def get_siesta_status(d) -> Dict[str, Optional[str]]:
@@ -1495,7 +1541,7 @@ def get_siesta_status(d) -> Dict[str, Optional[str]]:
         detail = f"{out_path.name} ({err_match.group(0)})"
     elif has_end:
         fdf_path = (d / f"{base}.fdf") if base and (d / f"{base}.fdf").exists() else (fdfs[0] if fdfs else None)
-        status, note = _judge_finished_run(text, fdf_path)
+        status, note = _judge_finished_run(d, out_path, base, fdf_path)
         detail = f"{out_path.name} ({note})" if note else out_path.name
     else:
         age = time.time() - out_path.stat().st_mtime
