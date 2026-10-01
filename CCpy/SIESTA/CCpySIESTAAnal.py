@@ -1396,12 +1396,67 @@ def _read_out_snippet(path: Path, head_bytes: int = _STATUS_HEAD_BYTES, tail_byt
     return (head + b"\n...[truncated - only head/tail scanned]...\n" + tail).decode(errors="ignore")
 
 
+# -- Ionic (geometry) convergence of a relaxation run -------------------------------
+# ">> End of run:" only means SIESTA exited normally: a CG/Broyden/FIRE relaxation that uses up
+# MD.NumCGsteps also exits normally, so judging by that alone reported those as Converged.
+# (SIESTA counterpart of VASP's 'max_ionic' in VASPio.vasp_status.)
+# SIESTA writes the final coordinates as "outcoor: Relaxed atomic coordinates" only when the
+# geometry actually converged ("outcoor: Atomic coordinates" otherwise), so that phrase decides.
+_RELAXED_RE = re.compile(r"outcoor:\s*Relaxed atomic coordinates", re.IGNORECASE)
+_MOVE_RE = re.compile(r"Begin\s+(?:CG|Broyden_opt\.|Broyden|FIRE|Zmatrix)\s+move\s*=\s*(\d+)",
+                      re.IGNORECASE)
+_RELAX_RUN_TYPES = {"cg", "broyden", "fire", "lbfgs"}   # MD.TypeOfRun values that relax geometry
+
+
+def _fdf_md_options(fdf_path: Optional[Path]) -> Tuple[str, int]:
+    """(MD.TypeOfRun, MD.NumCGsteps) from a .fdf, falling back to the SIESTA defaults."""
+    run_type, num_cg = "cg", 0
+    try:
+        lines = fdf_path.read_text(errors="ignore").splitlines()
+    except Exception:
+        return run_type, num_cg
+
+    for ln in lines:
+        toks = ln.split("#", 1)[0].replace(":", " ").split()
+        if len(toks) < 2:
+            continue
+        key = re.sub(r"[^a-z.]", "", toks[0].lower())
+        if key == "md.typeofrun":
+            run_type = re.sub(r"[^a-z]", "", toks[1].lower())
+        elif key == "md.numcgsteps":
+            try:
+                num_cg = int(float(toks[1]))
+            except ValueError:
+                pass
+    return run_type, num_cg
+
+
+def _judge_finished_run(text: str, fdf_path: Optional[Path]) -> Tuple[str, Optional[str]]:
+    """
+    Status of a run that reached ">> End of run:" with no error pattern, by run type:
+    relaxation -> "Converged" / "Unconverged" (+ step count), single-shot SCF ->
+    "Converged (SCF)", molecular dynamics -> "Done (MD)" (no convergence criterion).
+    """
+    run_type, num_cg = _fdf_md_options(fdf_path)
+
+    if run_type not in _RELAX_RUN_TYPES:
+        return "Done (MD)", None
+    if num_cg <= 0:
+        return "Converged (SCF)", None
+    if _RELAXED_RE.search(text):
+        return "Converged", None
+
+    moves = [int(m) for m in _MOVE_RE.findall(text)]
+    return "Unconverged", (f"step {max(moves)}/{num_cg}" if moves else f"MD.NumCGsteps={num_cg}")
+
+
 def get_siesta_status(d) -> Dict[str, Optional[str]]:
     """
     Roughly determine the SIESTA job status of a single directory.
     - If there is no .out file: "Not started"
     - If any of _ERROR_PATTERNS is present: "Error" (takes priority regardless of ">> End of run:")
-    - If ">> End of run:" is present and no error pattern: "Converged" (normal exit)
+    - If ">> End of run:" is present and no error pattern: the run type decides - see
+      _judge_finished_run ("Converged" / "Unconverged" / "Converged (SCF)" / "Done (MD)")
     - Otherwise: if the file was updated recently, "Running/Incomplete",
                  if it has not been updated for a while (default 10 min), "Incomplete (stalled/crashed?)"
     - Warning phrases such as "Atoms .. too close" / "Bad DM normalization" are
@@ -1439,8 +1494,9 @@ def get_siesta_status(d) -> Dict[str, Optional[str]]:
         status = "Error"
         detail = f"{out_path.name} ({err_match.group(0)})"
     elif has_end:
-        status = "Converged"
-        detail = out_path.name
+        fdf_path = (d / f"{base}.fdf") if base and (d / f"{base}.fdf").exists() else (fdfs[0] if fdfs else None)
+        status, note = _judge_finished_run(text, fdf_path)
+        detail = f"{out_path.name} ({note})" if note else out_path.name
     else:
         age = time.time() - out_path.stat().st_mtime
         if age > _STALE_SECONDS:
@@ -1500,7 +1556,8 @@ How to use : CCpySIESTAAnal.py [option] [sub_option1] [sub_option2..]
 -d : Clear SIESTA output files (except of *.fdf, *.psf, *.vps, *.ion)
     ex) CCpySIESTAAnal.py -d
 
- 0 : Check SIESTA job status (Converged / Running-Incomplete / Error / Not started)
+ 0 : Check SIESTA job status (Converged / Unconverged / Converged (SCF) /
+     Done (MD) / Running-Incomplete / Error / Not started)
      -> saves 00_job_status.txt / 00_job_status.csv
     ex) CCpySIESTAAnal.py 0
     ex) CCpySIESTAAnal.py 0 -sub
