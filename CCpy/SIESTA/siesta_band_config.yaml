@@ -14,9 +14,14 @@
 # "steps:" key here is ignored (with a warning). Use -steps=... on the
 # command line if you need to override a mode's default step list.
 
-# Materials Studio .car file used to build BandLines (relative to this
-# system directory, or absolute)
-car: CAR_POSCAR/SWNT7-6W.car
+# Materials Studio .car file (relative to this system directory, or absolute).
+# NOT needed for normal use: BandLines are built from the lattice read directly
+# out of the system's own base fdf. A .car file is only required for
+# `bandpath: seekpath` with seekpath symmetry detection (--use-seekpath), which
+# needs full atomic positions. Leave this commented out unless that is your case
+# - setting it here would apply to EVERY system and break the ones without that
+# exact file.
+# car: CAR_POSCAR/SWNT7-6W.car
 
 # k-path generation
 bandpath: 1d      # seekpath | 1d | hex | manual
@@ -34,10 +39,13 @@ extra_bands: 50
 element: true
 
 # Moiety-decomposed fatbands: NAME:ATOM_INDEX_SELECTION (1-based, inclusive
-# ranges allowed, e.g. "1-508"). Leave empty ([]) to skip moiety decomposition.
-moiety:
-  - "Tube:1-508"
-  - "Ads:700-786"
+# ranges allowed, e.g. "1-508"). Atom indices are system-specific, so this is
+# commented out here: set it in a per-system siesta_band_config.yaml (or with
+# -moiety= on the command line), not in this shared file. Default is [] (no
+# moiety decomposition).
+# moiety:
+#   - "Tube:1-508"
+#   - "Ads:700-786"
 
 # DOS calculation window
 dos_emin: -25.0
