@@ -1824,33 +1824,60 @@ def ticks_from_bandlines(bandline_pts, kgrid):
 def compute_bandgap(energies, kgrid=None, tol: float = 1e-6):
     """
     Compute fundamental bandgap from energies referenced to E_F=0.
+
+    The classification is done PER BAND, not per sampled point: a band that has
+    points both below and above E_F crosses the Fermi level, so the system is
+    metallic. Doing it per point instead (vbm = max of all points <= 0,
+    cbm = min of all points >= 0) silently turns a crossing band into a fake
+    tiny gap equal to the k-spacing of the crossing - e.g. a band sampled at
+    -0.0033 eV and +0.0033 eV around the crossing was reported as
+    "Eg = 0.0066 eV (indirect)" on an obviously metallic band structure.
+
+    energies is (nbands, nk), referenced to E_F = 0.
+
     Returns dict with: vbm, cbm, gap, vbm_k, cbm_k, is_metal, is_direct
     """
-    E = np.array(energies, float)
-    below_mask = E <= tol
-    above_mask = E >= -tol
+    E = np.atleast_2d(np.array(energies, float))
 
-    if not np.any(below_mask) or not np.any(above_mask):
-        return {"vbm": np.nan, "cbm": np.nan, "gap": np.nan,
-                "vbm_k": None, "cbm_k": None, "is_metal": False, "is_direct": False}
+    nan_result = {"vbm": np.nan, "cbm": np.nan, "gap": np.nan,
+                  "vbm_k": None, "cbm_k": None, "is_metal": False, "is_direct": False}
+    if E.size == 0 or np.all(np.isnan(E)):
+        return nan_result
 
-    vbm = float(np.nanmax(np.where(below_mask, E, -np.inf)))
-    cbm = float(np.nanmin(np.where(above_mask, E, np.inf)))
+    with np.errstate(invalid="ignore"):
+        band_min = np.nanmin(E, axis=1)
+        band_max = np.nanmax(E, axis=1)
+
+    # A band reaching at/below E_F AND at/above E_F crosses (or touches) it.
+    crossing = (band_min <= tol) & (band_max >= -tol)
+    if np.any(crossing):
+        return {"vbm": np.nan, "cbm": np.nan, "gap": 0.0,
+                "vbm_k": None, "cbm_k": None, "is_metal": True, "is_direct": False}
+
+    valence = band_max < -tol      # entirely below E_F
+    conduction = band_min > tol    # entirely above E_F
+    if not np.any(valence) or not np.any(conduction):
+        # Only one side is present in the plotted window - can't define a gap.
+        return nan_result
+
+    v_rows = np.where(valence)[0]
+    c_rows = np.where(conduction)[0]
+
+    v_local = np.unravel_index(np.nanargmax(E[v_rows]), E[v_rows].shape)
+    c_local = np.unravel_index(np.nanargmin(E[c_rows]), E[c_rows].shape)
+
+    vbm = float(E[v_rows[v_local[0]], v_local[1]])
+    cbm = float(E[c_rows[c_local[0]], c_local[1]])
     gap = cbm - vbm
 
-    v_idx = np.unravel_index(np.nanargmax(np.where(below_mask, E, -np.inf)), E.shape)
-    c_idx = np.unravel_index(np.nanargmin(np.where(above_mask, E, np.inf)), E.shape)
-    v_k_idx = int(v_idx[1])
-    c_k_idx = int(c_idx[1])
-
+    v_k_idx = int(v_local[1])
+    c_k_idx = int(c_local[1])
     v_k = float(kgrid[v_k_idx]) if kgrid is not None else v_k_idx
     c_k = float(kgrid[c_k_idx]) if kgrid is not None else c_k_idx
 
-    is_metal = gap <= 1e-3
-    is_direct = (v_k_idx == c_k_idx)
-
     return {"vbm": vbm, "cbm": cbm, "gap": gap,
-            "vbm_k": v_k, "cbm_k": c_k, "is_metal": is_metal, "is_direct": is_direct}
+            "vbm_k": v_k, "cbm_k": c_k,
+            "is_metal": gap <= tol, "is_direct": (v_k_idx == c_k_idx)}
 
 
 # =============================================================================
