@@ -386,20 +386,26 @@ def ensure_pdos_block(lines: List[str], enable: bool, emin: float, emax: float, 
 
 
 def find_existing_outfile(basename: str, rootdir: Path) -> Path:
-    candidates = [
-        rootdir / f"{basename}.out",
-        rootdir / basename / f"{basename}.out",
-        Path.cwd() / f"{basename}.out",
-        Path.cwd() / basename / f"{basename}.out",
-    ]
-    outfile = next((p for p in candidates if p.exists()), None)
+    """Locate the SCF/OPT output of the system (used only to read Nelec).
+
+    CCpyJobSubmit (CCpyJobControl.siesta / siesta_batch) always writes the
+    SIESTA output as 'siesta.out', for SCF and OPT alike, so that is looked
+    up first. '<basename>.out' is kept as a fallback for outputs produced
+    outside CCpyJobSubmit (e.g. the old WorkFlow_FatBandDOS.sh).
+    """
+    dirs = []
+    for d in (rootdir, rootdir / basename, Path.cwd(), Path.cwd() / basename):
+        if d not in dirs:
+            dirs.append(d)
+    candidates = [d / name for name in ("siesta.out", f"{basename}.out") for d in dirs]
+    outfile = next((p for p in candidates if p.is_file()), None)
     if outfile is None:
         tried = "\n".join(str(x) for x in candidates)
         raise FileNotFoundError(
             f"Cannot find an existing SIESTA .out for '{basename}' (needed to read Nelec for "
             f"fatbands/NumberOfBands auto-setup).\nTried:\n{tried}\n"
-            f"Run a plain SCF calculation for this system first (producing {basename}.out "
-            f"directly in the system's top-level directory), then re-run.")
+            f"Run an SCF (or OPT) calculation for this system first with CCpyJobSubmit "
+            f"(producing siesta.out in the system's top-level directory), then re-run.")
     return outfile
 
 
@@ -844,6 +850,7 @@ def make_mode(top: Path, label: str, base_fdf: Path, mode: str, args, parent: Op
         try:
             outfile = find_existing_outfile(label, top)
             nelec = read_nelec_from_out(outfile)
+            print(f"[info] Nelec = {nelec:g} (from {outfile})")
             nbands = get_number_of_bands_from_out(label, top, args.extra_bands)
             if mode != "bands":
                 upsert_key(lines, "NumberOfBands", f"NumberOfBands = {nbands}")
@@ -859,7 +866,7 @@ def make_mode(top: Path, label: str, base_fdf: Path, mode: str, args, parent: Op
         if args.fatbands:
             if nelec is None:
                 try:
-                    nelec = read_nelec_from_out(top / f"{label}.out")
+                    nelec = read_nelec_from_out(find_existing_outfile(label, top))
                 except Exception as e:
                     if args.strict:
                         raise
@@ -2762,7 +2769,7 @@ def cmd_pipeline(args):
     if "genfdf" in steps:
         def _genfdf():
             # --strict: fatbands (Wfs.band.min/max, Save-HS, WFS.Write.For.Bands)
-            # need Nelec from an EXISTING plain-SCF <label>.out in the system's
+            # need Nelec from an EXISTING SCF/OPT siesta.out (or legacy <label>.out) in the system's
             # top-level directory (one level above Band-DOS/) - this is the
             # same precondition the original siesta_Band-DOS_lineband_fat.py /
             # WorkFlow_FatBandDOS.sh always had. Without --strict, a missing
