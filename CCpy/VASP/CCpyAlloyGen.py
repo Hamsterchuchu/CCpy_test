@@ -30,6 +30,7 @@ if len(sys.argv) <= 1 or sys.argv[1] in ("-h", "--help", "help", "-help"):
 3 : layered    (layer-ordered parent -> disorder controlled by target Q)
 4 : cluster    (2x2x2 regions; -shape= plane(old 2D) | block(3D lumps))
 5 : exhaustive (enumerate all symmetry-unique configurations)
+6 : reuse      (copy the arrangement of an existing AlloyGen output, ID by ID)
 w : wizard     (settings sheet with no mode preset -- same as '1')
 
 (no option) : print this help.  -h does the same.
@@ -139,6 +140,25 @@ ex) CCpyAlloyGen.py 1 -i=Pt32.cif -re=Pt -comp=Fe4,Co4,Ni4,Cu4 -n=500 -vasp -pre
     -order=[Q,..]  : target order parameters Q     (mode 3/4, DEFAULT : 1,0.75,0.5,0.25,0)
     -children=#    : structures per parent & Q     (mode 3/4, DEFAULT : inferred from -n)
     -limit=#       : exhaustive enumeration safety limit (mode 5, DEFAULT : 2000000)
+    -ref=[DIR]     : (mode 6) an existing AlloyGen output folder. Every S###### of
+                     it is rebuilt on the -i= structure with the SAME element
+                     arrangement and the SAME ID, e.g. to put another adsorbate on
+                     the slabs of a finished run and compare site by site.
+                     Sites are matched by position (in-plane fractional, along the
+                     slab normal in A; rigid shift along the normal removed;
+                     one-to-one assignment), so a relaxed reference, a slightly
+                     different cell or a different vacuum thickness still works.
+                     Use the POSCARs of the reference (default); CONTCAR only when
+                     they are gone. -comp/-n are not
+                     used: the composition and the IDs come from the reference.
+                     ex) CCpyAlloyGen.py 6 -i=Pt80_toluene.vasp -re=Pt -ref=FeCoNiCuPt -surface=C,H
+    -ref_file=[F]  : (mode 6) file read inside each S folder: POSCAR | CONTCAR (DEFAULT : POSCAR)
+    -ref_tol=#     : (mode 6) largest site displacement accepted, in A    (DEFAULT : 0.8)
+                     A site further than this from every reference atom stops
+                     the run. Displacements above 0.3 A are listed as a notice
+                     and every match is written to [DIR]/reuse_map.csv.
+    -ref_re=[EL,..]: (mode 6) substrate elements of the reference (DEFAULT : auto,
+                     everything except its adsorbate)
 
     < ADVANCED Q / SRO (mode 3/4) >
     -order_tol=#   : |Q_target - Q| tolerance      (DEFAULT : 0.05)
@@ -188,9 +208,9 @@ ex) CCpyAlloyGen.py 1 -i=Pt32.cif -re=Pt -comp=Fe4,Co4,Ni4,Cu4 -n=500 -vasp -pre
 
 option = sys.argv[1]
 mode_map = {"1": "random", "2": "spread", "3": "layered", "4": "cluster", "5": "exhaustive",
-            "w": "wizard", "wizard": "wizard"}
+            "6": "reuse", "w": "wizard", "wizard": "wizard"}
 if option not in mode_map:
-    print("Unknown option: %s  (use 1-5 or w; run without arguments for help)" % option)
+    print("Unknown option: %s  (use 1-6 or w; run without arguments for help)" % option)
     quit()
 
 # ---------------------------------------------------------------------------
@@ -241,6 +261,11 @@ functional = "PBE_54"
 pseudo = None
 batch = False
 reuse_inputs = True
+
+ref_dir = None
+ref_file = None
+ref_tol = 0.8
+ref_pool = None
 
 template_dir = None
 generate_potcar = False
@@ -380,6 +405,18 @@ for arg in sys.argv[2:]:
     elif arg.startswith("-pseudo="):
         pseudo = arg.split("=", 1)[1].split(",")
         given["pseudo"] = arg.split("=", 1)[1]
+    elif arg.startswith("-ref_file="):
+        ref_file = arg.split("=", 1)[1]
+        given["ref_file"] = arg.split("=", 1)[1]
+    elif arg.startswith("-ref_tol="):
+        ref_tol = float(arg.split("=", 1)[1])
+        given["ref_tol"] = arg.split("=", 1)[1]
+    elif arg.startswith("-ref_re="):
+        ref_pool = arg.split("=", 1)[1]
+        given["ref_re"] = arg.split("=", 1)[1]
+    elif arg.startswith("-ref="):
+        ref_dir = arg.split("=", 1)[1]
+        given["ref"] = arg.split("=", 1)[1]
     elif arg.startswith("-template="):
         template_dir = arg.split("=", 1)[1]
         given["template"] = arg.split("=", 1)[1]
@@ -420,6 +457,7 @@ from CCpy.VASP.AlloyGen import (
     interactive_select_surface_elements,
     interactive_select_redox_atoms,
     select_structure_file_interactively,
+    load_reference_decorations,
     _read_structure_file,
     _suggest_output_dir,
 )
@@ -445,13 +483,33 @@ if replace_element is None or composition_str is None:
         replace_element = ",".join(substrate)
         note = "  (adsorbate: %s)" % ",".join(adsorbate) if adsorbate else ""
         print("* Replacement pool (auto): %s%s" % (replace_element, note))
-    if composition_str is None:
+    if composition_str is None and mode != "reuse":
         pool = set(parse_element_list(replace_element))
         counts = Counter(str(sym) for sym in seed_parent.get_chemical_symbols() if str(sym) in pool)
         composition_str = ",".join("%s%d" % (el, counts[el]) for el in sorted(counts))
         print("* Target composition (auto, = current): %s" % composition_str)
 
-composition = None if keep_composition else parse_composition(composition_str)
+if mode == "reuse":
+    if not ref_dir:
+        print("Mode 6 (reuse) needs the reference AlloyGen output folder: -ref=[DIR]")
+        quit()
+    # Read the reference once here so a wrong folder fails before anything is
+    # written, and so the output name can carry the reference composition.
+    _parent = _read_structure_file(input_file)
+    _pool = set(parse_element_list(replace_element))
+    _sites = [i for i, sym in enumerate(_parent.get_chemical_symbols()) if sym in _pool]
+    try:
+        _entries, composition, _info = load_reference_decorations(
+            _parent, _sites, ref_dir, ref_file=ref_file, ref_pool=ref_pool, tol=ref_tol)
+    except Exception as exc:
+        print("reuse: %s" % exc)
+        quit()
+    print("* Composition (from the reference): %s" % composition)
+    if composition_str is not None and not keep_composition:
+        print("* -comp is ignored in mode 6; the reference decides the composition.")
+    keep_composition = False
+else:
+    composition = None if keep_composition else parse_composition(composition_str)
 
 # -- bare -surface / -redox : pick interactively before touching anything
 if surface == ASK or redox == ASK:
@@ -500,8 +558,8 @@ result = generate_structures(
     composition=composition,
     keep_composition=keep_composition,
     mode=mode,
-    target=target if mode != "exhaustive" else 0,
-    max_attempts=max_attempts if mode != "exhaustive" else 0,
+    target=target if mode not in ("exhaustive", "reuse") else 0,
+    max_attempts=max_attempts if mode not in ("exhaustive", "reuse") else 0,
     symprec=symprec,
     seed=seed,
     output_format=output_format,
@@ -527,6 +585,10 @@ result = generate_structures(
     adsorbate_elements=surface,
     redox_remove=redox,
     redox_max_sets=redox_max_sets,
+    ref_dir=ref_dir if mode == "reuse" else None,
+    ref_file=ref_file,
+    ref_tol=ref_tol,
+    ref_pool=ref_pool,
 )
 
 if ccpy_vasp:

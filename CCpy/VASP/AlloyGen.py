@@ -2299,6 +2299,256 @@ def write_structure_with_twins(
 
 
 # -----------------------------------------------------------------------------
+# reuse mode: copy the element arrangement of an existing AlloyGen output
+# -----------------------------------------------------------------------------
+#
+# A finished AlloyGen run fixes, for every structure ID, which element sits on
+# which substrate site. `reuse` puts exactly that arrangement on a NEW input
+# structure -- typically the same slab carrying a different adsorbate -- and
+# keeps the structure IDs, so S000123 of the new set has the same metal
+# arrangement as S000123 of the reference set. Adsorption energies of
+# different adsorbates can then be compared site by site, which re-running the
+# random generator (a fresh arrangement per run) cannot give.
+#
+# The arrangement is read from the reference structures by position, not by
+# atom index: write_structure() sorts atoms by element, and the reference may
+# be a relaxed CONTCAR whose metal atoms moved a little or whose cell changed.
+# In-plane positions are compared in fractional coordinates (so a uniformly
+# strained cell still lines up); along the slab normal (the vacuum axis) they
+# are compared in Angstrom, so a reference with a different vacuum thickness
+# is still the same slab. A rigid translation of the slab along its normal
+# (e.g. a re-centred slab) is removed, and the one-to-one site
+# assignment is solved with the Hungarian method. Any site further than `tol`
+# from its match stops the run instead of guessing.
+#
+# An in-plane rigid shift is deliberately NOT removed: a slab slid sideways by
+# about one interatomic distance lines up almost perfectly with itself, one
+# site over, so "removing" it would silently hand every site its neighbour's
+# element. Left in place, such a shift shows up as a large displacement and
+# stops the run. Relaxations with a fixed bottom do not slide the slab.
+
+REF_TOL_DEFAULT = 0.8    # Angstrom; max allowed site displacement when matching
+REF_WARN_DEV = 0.3       # Angstrom; above this the match is reported as loose
+
+
+def _reference_structure_paths(ref_dir, ref_file=None):
+    """
+    Return [(index, path)] for every structure of an AlloyGen output folder,
+    sorted by structure index. Accepts both layouts AlloyGen writes:
+    S000001/POSCAR folders (ref_file picks POSCAR or CONTCAR inside them) and
+    flat S000001.cif / S000001.vasp files.
+    """
+    if not os.path.isdir(ref_dir):
+        raise FileNotFoundError(f"reference folder not found: {ref_dir}")
+    names = ["POSCAR"] if not ref_file else [ref_file]
+    found, missing = [], []
+    for name in sorted(os.listdir(ref_dir)):
+        m = re.fullmatch(r"S(\d+)(\.cif|\.vasp)?", name)
+        if not m:
+            continue
+        full = os.path.join(ref_dir, name)
+        index = int(m.group(1))
+        if m.group(2):
+            if os.path.isfile(full):
+                found.append((index, full))
+            continue
+        if not os.path.isdir(full):
+            continue
+        for candidate in names:
+            path = os.path.join(full, candidate)
+            if os.path.isfile(path) and os.path.getsize(path) > 0:
+                found.append((index, path))
+                break
+        else:
+            missing.append(name)
+    if missing:
+        raise FileNotFoundError(
+            f"{len(missing)} structure folder(s) in {ref_dir} have no "
+            f"{' / '.join(names)}: {', '.join(missing[:10])}"
+            + (" ..." if len(missing) > 10 else "")
+        )
+    if not found:
+        raise FileNotFoundError(
+            f"no AlloyGen structures (S000001/POSCAR, S000001.cif, ...) in {ref_dir}"
+        )
+    seen = Counter(i for i, _ in found)
+    dup = sorted(i for i, c in seen.items() if c > 1)
+    if dup:
+        raise ValueError(f"structure ID(s) appear twice in {ref_dir}: {dup[:10]}")
+    return sorted(found)
+
+
+def _normal_height(cell, axis):
+    """Height of the cell along the normal of the plane spanned by the other two vectors."""
+    cell = np.asarray(cell)
+    a, b = np.delete(cell, axis, axis=0)
+    return abs(np.linalg.det(cell)) / np.linalg.norm(np.cross(a, b))
+
+
+def match_reference_sites(parent, replace_sites, ref_atoms, ref_pool_elements):
+    """
+    Assign every replacement site of `parent` to one pool atom of `ref_atoms`.
+
+    Returns (symbols, deviations, shift_cart): the reference element for each
+    site in replace_sites order, the matched distance of each site (Angstrom,
+    measured in parent's cell), and the rigid translation along the slab
+    normal that was removed (zero vector for a bulk cell).
+    """
+    from scipy.optimize import linear_sum_assignment
+
+    ref_symbols = ref_atoms.get_chemical_symbols()
+    ref_idx = [i for i, sym in enumerate(ref_symbols) if sym in ref_pool_elements]
+    if len(ref_idx) != len(replace_sites):
+        raise ValueError(
+            f"the reference has {len(ref_idx)} atoms of {sorted(ref_pool_elements)} but the "
+            f"input has {len(replace_sites)} replacement sites -- not the same substrate"
+        )
+    cell = np.asarray(parent.cell)
+    site_frac = parent.get_scaled_positions(wrap=True)[replace_sites]
+    ref_frac = ref_atoms.get_scaled_positions(wrap=True)[ref_idx]
+
+    def distances(shift):
+        d = ref_frac[None, :, :] + shift - site_frac[:, None, :]
+        d -= np.round(d)
+        return np.linalg.norm(d @ cell, axis=-1)
+
+    shift = np.zeros(3)
+    ref_offset = 0.0     # fractional z (input cell) where the reference's unwrapped z = 0 sits
+    axis, gap, origin = _largest_vacuum_axis(parent)
+    if gap >= VACUUM_MIN_GAP:
+        # Along the slab normal compare real distances, not fractions of the
+        # cell: the same slab with more or less vacuum has a different cell
+        # height, and fractional z would stretch the slab with it. The
+        # reference is unwrapped from its own vacuum gap and expressed in the
+        # input's cell height; in-plane coordinates stay fractional.
+        ref_axis, ref_gap, ref_origin = _largest_vacuum_axis(ref_atoms)
+        if ref_axis == axis and ref_gap >= VACUUM_MIN_GAP:
+            ratio = _normal_height(ref_atoms.cell, axis) / _normal_height(cell, axis)
+            ref_frac[:, axis] = ((ref_frac[:, axis] - ref_origin) % 1.0) * ratio
+            ref_offset = ref_origin * ratio
+        # Start from the rigid offset of the two (one-to-one) site sets along
+        # the normal, then refine it on the actual assignment.
+        site_z = (site_frac[:, axis] - origin) % 1.0 + origin
+        shift[axis] = site_z.mean() - ref_frac[:, axis].mean()
+        for _ in range(3):
+            cost = distances(shift)
+            rows, cols = linear_sum_assignment(cost)
+            d = ref_frac[cols] + shift - site_frac[rows]
+            d -= np.round(d)
+            step = np.zeros(3)
+            step[axis] = d[:, axis].mean()     # along the slab normal only
+            shift = shift - step
+            if abs(step[axis]) * parent.cell.lengths()[axis] < 1e-6:
+                break
+    cost = distances(shift)
+    rows, cols = linear_sum_assignment(cost)
+    symbols = [None] * len(replace_sites)
+    deviations = np.zeros(len(replace_sites))
+    for r, c in zip(rows, cols):
+        symbols[r] = ref_symbols[ref_idx[c]]
+        deviations[r] = cost[r, c]
+    # report the slab's actual movement, not the shift from its unwrapped copy
+    moved = shift.copy()
+    moved[axis] -= ref_offset
+    shift_frac = moved - np.round(moved)
+    return symbols, deviations, shift_frac @ cell
+
+
+def load_reference_decorations(parent, replace_sites, ref_dir, ref_file=None,
+                               ref_pool=None, tol=REF_TOL_DEFAULT):
+    """
+    Read every structure of an AlloyGen output folder and map its arrangement
+    onto parent's replacement sites (see match_reference_sites).
+
+    ref_pool: elements of the reference that form its substrate. Default: the
+    substrate guessed from the first reference structure, i.e. everything but
+    its adsorbate (the reference may carry a different adsorbate than parent).
+
+    Returns (entries, composition, info). entries: list of dicts with index,
+    path, symbols, max_dev, mean_dev, shift. composition: the element counts on
+    the pool, identical for every reference structure (checked).
+    """
+    paths = _reference_structure_paths(ref_dir, ref_file)
+    first = _read_structure_file(paths[0][1])
+    if ref_pool:
+        pool = set(parse_element_list(ref_pool) if isinstance(ref_pool, str) else ref_pool)
+    else:
+        substrate, adsorbate, _is_slab = guess_substrate_elements(first)
+        pool = set(substrate)
+    cell_ratio = first.cell.lengths() / parent.cell.lengths()
+    angle_diff = np.abs(first.cell.angles() - parent.cell.angles())
+
+    entries, composition = [], None
+    for index, path in paths:
+        ref_atoms = _read_structure_file(path)
+        try:
+            symbols, dev, shift = match_reference_sites(parent, replace_sites, ref_atoms, pool)
+        except ValueError as exc:
+            raise ValueError(f"{path}: {exc}") from None
+        if dev.max() > tol:
+            worst = int(np.argmax(dev))
+            raise ValueError(
+                f"{path}: site #{replace_sites[worst] + 1} of the input is {dev.max():.3f} A "
+                f"from its nearest reference atom (limit {tol} A). The reference is not the "
+                "same slab, or moved too much -- check it, or raise the limit (-ref_tol=)."
+            )
+        comp = Counter(symbols)
+        if composition is None:
+            composition = comp
+        elif comp != composition:
+            raise ValueError(
+                f"{path}: composition {dict(sorted(comp.items()))} differs from the rest of "
+                f"the reference set {dict(sorted(composition.items()))}; reuse one composition "
+                "per run."
+            )
+        entries.append({
+            "index": index,
+            "path": path,
+            "symbols": symbols,
+            "max_dev": float(dev.max()),
+            "mean_dev": float(dev.mean()),
+            "shift": float(np.linalg.norm(shift)),
+        })
+    info = {
+        "ref_dir": ref_dir,
+        "ref_file": ref_file or "POSCAR",
+        "ref_pool": sorted(pool),
+        "n": len(entries),
+        "max_dev": max(e["max_dev"] for e in entries),
+        "n_loose": sum(e["max_dev"] > REF_WARN_DEV for e in entries),
+        "cell_ratio": [float(x) for x in cell_ratio],
+        "angle_diff": float(angle_diff.max()),
+    }
+    ordered = {el: composition[el] for el in sorted(composition)}
+    return entries, ordered, info
+
+
+def print_reference_summary(info, tol):
+    print(f"Reference set: {info['ref_dir']}  ({info['n']} structures, file {info['ref_file']})")
+    print(f"Reference substrate elements: {info['ref_pool']}")
+    ratio = ", ".join(f"{x:.4f}" for x in info["cell_ratio"])
+    print(f"Cell length ratio reference/input: {ratio}  (max angle diff {info['angle_diff']:.3f} deg)")
+    if max(abs(x - 1.0) for x in info["cell_ratio"]) > 0.02 or info["angle_diff"] > 1.0:
+        print("[notice] the reference cell differs from the input by more than 2% / 1 deg; "
+              "sites were matched in-plane in fractional coordinates, along the slab normal in A.")
+    print(f"Largest site displacement: {info['max_dev']:.3f} A (limit {tol} A)")
+    if info["n_loose"]:
+        print(f"[notice] {info['n_loose']} structure(s) matched with a site displaced more "
+              f"than {REF_WARN_DEV} A (relaxed reference?) -- see reuse_map.csv.")
+
+
+def write_reuse_map(output_dir, entries):
+    path = os.path.join(output_dir, "reuse_map.csv")
+    with open(path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["structure_id", "reference", "max_dev_A", "mean_dev_A", "normal_shift_A"])
+        for e in entries:
+            writer.writerow([f"S{e['index']:06d}", e["path"], f"{e['max_dev']:.4f}",
+                             f"{e['mean_dev']:.4f}", f"{e['shift']:.4f}"])
+    return path
+
+
+# -----------------------------------------------------------------------------
 # POTCAR auto-generation (potpaw_PBE-style library)
 # -----------------------------------------------------------------------------
 
@@ -2781,6 +3031,10 @@ def generate_structures(
     redox_remove=None,
     redox_max_sets=50,
     domain_pattern=None,
+    ref_dir=None,
+    ref_file=None,
+    ref_tol=REF_TOL_DEFAULT,
+    ref_pool=None,
 ):
     # `domain` was renamed to `cluster` (the 2x2 / quincunx template carves out
     # spatial regions, which reads as clusters rather than crystallographic
@@ -2793,9 +3047,11 @@ def generate_structures(
     cluster_shape = str(cluster_shape or "octant").strip().lower()
     if cluster_shape not in {"octant", "plane", "block"}:
         raise ValueError("cluster_shape must be 'octant', 'plane' or 'block'.")
-    if mode not in {"random", "spread", "layered", "cluster", "exhaustive"}:
+    if mode not in {"random", "spread", "layered", "cluster", "exhaustive", "reuse"}:
         raise ValueError(f"Unknown mode: {mode}")
-    if mode != "exhaustive" and (target <= 0 or max_attempts <= 0):
+    if mode == "reuse" and not ref_dir:
+        raise ValueError("reuse mode needs the reference AlloyGen output folder (ref_dir).")
+    if mode not in {"exhaustive", "reuse"} and (target <= 0 or max_attempts <= 0):
         raise ValueError("target and max_attempts must be positive in sampling modes.")
     if mode in {"layered", "cluster"}:
         if not np.isfinite(order_tolerance) or order_tolerance <= 0:
@@ -2849,6 +3105,27 @@ def generate_structures(
 
     replace_sites = [i for i, s in enumerate(symbols) if s in replace_element_set]
 
+    reuse_entries = None
+    reuse_info = None
+    if mode == "reuse":
+        if not replace_sites:
+            raise ValueError(
+                "No sites were found for the requested replacement element pool: "
+                f"{replace_elements}."
+            )
+        reuse_entries, ref_composition, reuse_info = load_reference_decorations(
+            parent, replace_sites, ref_dir, ref_file=ref_file, ref_pool=ref_pool, tol=ref_tol
+        )
+        if composition is not None and not keep_composition:
+            if Counter(dict(composition)) != Counter(ref_composition):
+                raise ValueError(
+                    f"composition {dict(composition)} differs from the reference set "
+                    f"{ref_composition}. In reuse mode the composition comes from the "
+                    "reference; leave it empty."
+                )
+        composition = dict(ref_composition)
+        keep_composition = False
+
     if composition is None:
         if not keep_composition:
             raise ValueError(
@@ -2899,6 +3176,8 @@ def generate_structures(
         else:
             print(f"Cluster mode: along {view_axis}-axis ({_cluster_n}-element composition; only 4 or 5 are supported)")
     print(f"Random seed: {actual_seed}")
+    if mode == "reuse":
+        print_reference_summary(reuse_info, ref_tol)
 
     perms, failed = precompute_symmetry_permutations(parent, symprec=symprec)
     print(f"Symmetry permutations: {len(perms)} (failed mappings: {failed})")
@@ -3209,6 +3488,11 @@ def generate_structures(
         "redox_candidate_atoms": [i + 1 for i in redox_pool] if redox_pool else None,
         "redox_remove_count": redox_choose,
         "redox_sets": [[i + 1 for i in s_] for s_ in redox_index_sets] or None,
+        "reuse_ref_dir": reuse_info["ref_dir"] if reuse_info else None,
+        "reuse_ref_file": reuse_info["ref_file"] if reuse_info else None,
+        "reuse_ref_pool": reuse_info["ref_pool"] if reuse_info else None,
+        "reuse_tol": ref_tol if reuse_info else None,
+        "reuse_max_dev": reuse_info["max_dev"] if reuse_info else None,
         "symprec": symprec,
         "seed_requested": seed,
         "seed_used": actual_seed,
@@ -3275,6 +3559,33 @@ def generate_structures(
                 )
         print(f"All assignments tried: {attempts}")
         print(f"Symmetry-unique structures saved: {kept}")
+
+    elif mode == "reuse":
+        # Same arrangement, same structure ID as the reference. No symmetry
+        # de-duplication: the reference set already defines the structures.
+        for entry in reuse_entries:
+            attempts += 1
+            atoms = parent.copy()
+            for idx, el in zip(replace_sites, entry["symbols"]):
+                atoms[idx].symbol = el
+            kept += 1
+            write_structure_with_twins(
+                atoms, output_dir, entry["index"], output_format, vasp_folder,
+                potcar_source=potcar_source_path,
+                bare_output_dir=bare_output_dir,
+                bare_potcar_source=bare_potcar_source_path,
+                redox_output_dirs=redox_output_dirs,
+                redox_index_sets=redox_index_sets,
+                redox_potcar_sources=redox_potcar_source_paths,
+                adsorbate_elements=adsorbate_elements_set,
+                metadata=manifest_metadata(
+                    mode="reuse",
+                    **sro_metadata(atoms),
+                ),
+            )
+        map_path = write_reuse_map(output_dir, reuse_entries)
+        print(f"Structures written with the reference arrangement: {kept}")
+        print(f"Reference map written: {map_path}")
 
     else:
         order_levels = _parse_order_levels(order_levels)
@@ -5541,6 +5852,7 @@ def run_wizard(initial=None):
         "shape": "octant",
         "pattern": "",
         "order": "1,0.75,0.5,0.25,0",
+        "ref": "",
         # CCpy VASP input generation (visible)
         "vasp": "y",
         "preset": "",
@@ -5570,6 +5882,9 @@ def run_wizard(initial=None):
         "gen_potcar": "n",
         "potcar_lib": "",
         "potcar_var": "",
+        "ref_file": "POSCAR",
+        "ref_tol": str(REF_TOL_DEFAULT),
+        "ref_re": "",
     }
 
     # ---------------------- structure files & defaults ----------------------
@@ -5667,8 +5982,10 @@ def run_wizard(initial=None):
         print("=" * 74)
         _row("input", "# structure file ('input=?' to pick again from the list)")
         _row("replace", "# substituted pool (default = substrate minus adsorbate)")
-        _row("comp", "# target composition (default = current) / 'keep'=reshuffle")
-        _row("mode", "# random/spread/layered/cluster/exhaustive")
+        _row("comp", "# not used in reuse mode: the composition comes from ref"
+             if s["mode"].strip().lower() == "reuse"
+             else "# target composition (default = current) / 'keep'=reshuffle")
+        _row("mode", "# random/spread/layered/cluster/exhaustive/reuse")
         _row("n", "# max number of structures (stops early if fewer exist; ignored for exhaustive)")
         _row("seed", "# empty = auto-generated, then recorded in metadata.txt")
         _row("fmt", "# cif/vasp/folder" + ("  (vasp=y, so the final output is a VASP input folder)"
@@ -5684,6 +6001,8 @@ def run_wizard(initial=None):
         _row("shape", "# octant = 2x2x2 boxes / plane = 2x2 prisms (old) / block = 3D lumps")
         _row("pattern", "# cluster pattern (ex: Co,Fe/Ni,Cu / empty = auto all)")
         _row("order", "# target order parameter Q level")
+        print("  --- reuse " + "-" * 63)
+        _row("ref", "# AlloyGen output folder whose arrangement (per S ID) is copied")
         print("  --- CCpy VASP inputs " + "-" * 51)
         _row("vasp", "# y = auto-generate INCAR/KPOINTS/POTCAR (same as CCpyVASPInputGen)")
         _row("preset", "# %s*.yaml name (empty = default)" % vasp_preset_dir_label())
@@ -5693,7 +6012,9 @@ def run_wizard(initial=None):
         print("  order_tol, order_steps, sro_cutoff, sro_tol, sro_weight, bucket, redox_max, batch,")
         print("  reuse (n = build INCAR/KPOINTS/POTCAR fresh per structure),")
         print("  sp, isif, spin, mag, ldau, vdw, pot, pseudo, template, gen_potcar,")
-        print("  potcar_lib, potcar_var")
+        print("  potcar_lib, potcar_var,")
+        print("  ref_file (POSCAR/CONTCAR), ref_tol (A, default %s), ref_re (reference substrate)"
+              % REF_TOL_DEFAULT)
 
     def _validate_and_run():
         """Validate the sheet; run on success. Returns True when executed."""
@@ -5705,8 +6026,8 @@ def run_wizard(initial=None):
         mode = s["mode"].strip().lower()
         if mode == "domain":
             mode = "cluster"          # old spelling, still accepted
-        if mode not in ("random", "spread", "layered", "cluster", "exhaustive"):
-            print("[Validation failed] mode must be one of random/spread/layered/cluster/exhaustive: %r" % s["mode"])
+        if mode not in ("random", "spread", "layered", "cluster", "exhaustive", "reuse"):
+            print("[Validation failed] mode must be one of random/spread/layered/cluster/exhaustive/reuse: %r" % s["mode"])
             return False
 
         try:
@@ -5717,7 +6038,28 @@ def run_wizard(initial=None):
 
         keep_composition = s["comp"].strip().lower() == "keep"
         composition = None
-        if not keep_composition:
+        ref_tol = REF_TOL_DEFAULT
+        if mode == "reuse":
+            # The composition comes from the reference set; whatever the sheet
+            # pre-filled from the input structure (e.g. Pt80) does not apply.
+            keep_composition = False
+            ref_dir = s["ref"].strip()
+            if not ref_dir:
+                print("[Validation failed] mode=reuse needs ref= (the AlloyGen output folder to copy).")
+                return False
+            try:
+                ref_tol = float(s["ref_tol"])
+                _parent = _read_structure_file(input_file)
+                _sites = [i for i, sym in enumerate(_parent.get_chemical_symbols())
+                          if sym in set(replace_elements)]
+                _entries, composition, _info = load_reference_decorations(
+                    _parent, _sites, ref_dir, ref_file=s["ref_file"].strip() or None,
+                    ref_pool=s["ref_re"].strip() or None, tol=ref_tol)
+            except Exception as exc:
+                print("[Validation failed] ref: %s" % exc)
+                return False
+            print_reference_summary(_info, ref_tol)
+        elif not keep_composition:
             try:
                 composition = parse_composition(s["comp"])
             except Exception as exc:
@@ -5874,6 +6216,9 @@ def run_wizard(initial=None):
             print("  axis=%s  order=%s" % (s["axis"], s["order"]))
         if mode == "cluster":
             print("  view=%s  pattern=%s  order=%s" % (s["view"], pattern, s["order"]))
+        if mode == "reuse":
+            print("  ref=%s  ref_file=%s  ref_tol=%s A  (n is ignored: one structure per reference ID)"
+                  % (s["ref"], s["ref_file"], ref_tol))
         if surface:
             print("  surface=%s  ->  %s_surface" % (surface, str(output_dir).rstrip("/\\")))
         if redox_spec:
@@ -5889,8 +6234,8 @@ def run_wizard(initial=None):
             composition=composition,
             keep_composition=keep_composition,
             mode=mode,
-            target=target if mode != "exhaustive" else 0,
-            max_attempts=max_attempts if mode != "exhaustive" else 0,
+            target=target if mode not in ("exhaustive", "reuse") else 0,
+            max_attempts=max_attempts if mode not in ("exhaustive", "reuse") else 0,
             symprec=symprec,
             seed=seed,
             output_format=output_format,
@@ -5916,6 +6261,10 @@ def run_wizard(initial=None):
             adsorbate_elements=surface,
             redox_remove=redox_spec,
             redox_max_sets=int(s["redox_max"] or 50),
+            ref_dir=(s["ref"].strip() or None) if mode == "reuse" else None,
+            ref_file=s["ref_file"].strip() or None,
+            ref_tol=ref_tol,
+            ref_pool=s["ref_re"].strip() or None,
         )
 
         if ccpy_vasp:
@@ -6056,7 +6405,7 @@ def build_argparser():
     )
     p.add_argument(
         "--mode",
-        choices=["random", "spread", "layered", "cluster", "exhaustive", "domain"],
+        choices=["random", "spread", "layered", "cluster", "exhaustive", "domain", "reuse"],
         default="random",
         help="Generation mode",
     )
@@ -6237,6 +6586,14 @@ def build_argparser():
             "created, so raise this deliberately."
         ),
     )
+    p.add_argument("--ref-dir", default=None,
+                   help="reuse mode: AlloyGen output folder whose per-ID arrangement is copied")
+    p.add_argument("--ref-file", default=None,
+                   help="reuse mode: file read inside each S folder (POSCAR or CONTCAR, default POSCAR)")
+    p.add_argument("--ref-tol", type=float, default=REF_TOL_DEFAULT,
+                   help="reuse mode: max site displacement (A) accepted when matching")
+    p.add_argument("--ref-pool", default=None,
+                   help="reuse mode: substrate elements of the reference (default: auto)")
     p.add_argument("--wizard", action="store_true", help="Start interactive question-answer mode")
     return p
 
@@ -6253,7 +6610,10 @@ def main():
     if args.input is None or args.output is None:
         raise SystemExit("--input and --output are required in command-line mode. Use --wizard for interactive mode.")
 
-    composition = None if args.keep_composition else parse_composition(args.composition)
+    if args.keep_composition or args.mode == "reuse":
+        composition = None          # reuse: the composition comes from --ref-dir
+    else:
+        composition = parse_composition(args.composition)
     generate_structures(
         input_file=args.input,
         output_dir=args.output,
@@ -6288,6 +6648,10 @@ def main():
         adsorbate_elements=args.adsorbate_elements,
         redox_remove=args.redox_remove,
         redox_max_sets=args.redox_max_sets,
+        ref_dir=args.ref_dir,
+        ref_file=args.ref_file,
+        ref_tol=args.ref_tol,
+        ref_pool=args.ref_pool,
     )
 
 
