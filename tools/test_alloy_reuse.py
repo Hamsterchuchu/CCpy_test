@@ -25,6 +25,9 @@ Checks
      told apart -- that limitation is documented, not tested)
   6. a missing atom / mixed compositions in the reference are refused
   7. flat S000001.cif references work, and the _surface twin is written
+  8. the [Reference set] panel lists the sets found nearby (with and without
+     metadata.txt), marks one with a different site count as unusable and
+     refuses it, and returns the chosen folder
 """
 import os
 import sys
@@ -40,7 +43,13 @@ from ase import Atoms
 from ase.build import fcc111, add_adsorbate, molecule
 from ase.io import read, write
 
-from CCpy.VASP.AlloyGen import generate_structures, guess_substrate_elements
+from CCpy.VASP.AlloyGen import (
+    generate_structures,
+    guess_substrate_elements,
+    find_reference_sets,
+    describe_reference_set,
+    select_reference_set_interactively,
+)
 
 PASS, FAIL = 0, 0
 
@@ -235,6 +244,35 @@ with tempfile.TemporaryDirectory() as tmp:
         for sid in ref_ids
     )
     check("7  flat S######.cif reference", same)
+
+    # 8. reference panel --------------------------------------------------------
+    os.makedirs("small/S000001")
+    small = fcc111("Pt", (4, 4, 4), a=3.64, vacuum=8.0)
+    write("small/S000001/POSCAR", small, format="vasp", direct=True, sort=True, vasp5=True)
+    sets = find_reference_sets(".")
+    check("8a panel finds generated and hand-copied sets",
+          {"out", "out_surface", "ref", "small"} <= set(sets), str(sets))
+    row = describe_reference_set("out", 80)
+    check("8b composition from metadata, fits 80 sites",
+          row["n_pool"] == 80 and row["match"] is True and row["n"] == 3, str(row))
+    row = describe_reference_set("ref", 80)
+    check("8c composition without metadata (from the first structure)",
+          row["n_pool"] == 80 and row["composition"] == {el: 16 for el in METALS}, str(row))
+    row = describe_reference_set("out_surface", 80)
+    check("8d surface twin is labelled", row["kind"] == "surface twin")
+    import builtins
+    import contextlib
+    import io
+    answers = iter([str(sets.index("small") + 1), str(sets.index("out") + 1)])
+    real_input = builtins.input
+    builtins.input = lambda prompt="": next(answers)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()) as shown:
+            chosen = select_reference_set_interactively("new.vasp", ["Pt"])
+    finally:
+        builtins.input = real_input
+    check("8e 64-site set refused, then the chosen 80-site set returned",
+          chosen == "out" and "not the same slab" in shown.getvalue(), chosen)
     os.chdir("/")
 
 print(f"\n{PASS} PASS / {FAIL} FAIL")

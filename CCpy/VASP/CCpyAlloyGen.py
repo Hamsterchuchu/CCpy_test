@@ -140,7 +140,10 @@ ex) CCpyAlloyGen.py 1 -i=Pt32.cif -re=Pt -comp=Fe4,Co4,Ni4,Cu4 -n=500 -vasp -pre
     -order=[Q,..]  : target order parameters Q     (mode 3/4, DEFAULT : 1,0.75,0.5,0.25,0)
     -children=#    : structures per parent & Q     (mode 3/4, DEFAULT : inferred from -n)
     -limit=#       : exhaustive enumeration safety limit (mode 5, DEFAULT : 2000000)
-    -ref=[DIR]     : (mode 6) an existing AlloyGen output folder. Every S###### of
+    -ref=[DIR]     : (mode 6) an existing AlloyGen output folder. Leave it out and
+                     a [Reference set] panel lists the AlloyGen outputs found here
+                     (up to 2 levels down) with their size, composition and whether
+                     they fit the input, to pick by number. Every S###### of
                      it is rebuilt on the -i= structure with the SAME element
                      arrangement and the SAME ID, e.g. to put another adsorbate on
                      the slabs of a finished run and compare site by site.
@@ -491,7 +494,8 @@ if replace_element is None or composition_str is None:
 
 if mode == "reuse":
     if not ref_dir:
-        print("Mode 6 (reuse) needs the reference AlloyGen output folder: -ref=[DIR]")
+        print("Mode 6 (reuse) with -batch needs the reference AlloyGen output folder: -ref=[DIR]")
+        print("(drop -batch to pick it from the [Reference set] panel)")
         quit()
     # Read the reference once here so a wrong folder fails before anything is
     # written, and so the output name can carry the reference composition.

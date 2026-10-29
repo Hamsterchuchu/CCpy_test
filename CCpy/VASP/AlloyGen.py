@@ -2523,6 +2523,168 @@ def load_reference_decorations(parent, replace_sites, ref_dir, ref_file=None,
     return entries, ordered, info
 
 
+# -- choosing the reference set ------------------------------------------------
+#
+# The reference set is not "a structure to work on" but the run whose
+# arrangements get copied, so it gets its own panel instead of the structure
+# file list: every AlloyGen output folder found nearby, with its size,
+# composition and whether its site count fits the input structure.
+
+_STRUCTURE_ID_RE = re.compile(r"S\d+(\.cif|\.vasp)?")
+
+
+def _read_metadata_txt(folder):
+    """metadata.txt written by write_metadata() -> {key: raw string value}."""
+    values = {}
+    try:
+        with open(os.path.join(folder, "metadata.txt"), encoding="utf-8") as handle:
+            for line in handle:
+                if " = " in line:
+                    key, value = line.split(" = ", 1)
+                    values[key.strip()] = value.strip()
+    except OSError:
+        pass
+    return values
+
+
+def _count_structure_ids(folder):
+    try:
+        return sum(1 for name in os.listdir(folder) if _STRUCTURE_ID_RE.fullmatch(name))
+    except OSError:
+        return 0
+
+
+def find_reference_sets(start_dir=".", max_depth=2):
+    """
+    AlloyGen-style output folders under start_dir (itself included, max_depth
+    levels down): a folder holding at least one S###### entry (S000001/ or
+    S000001.cif/.vasp). metadata.txt is used when present but not required, so
+    a set copied without it still shows up. Structure folders themselves and
+    hidden folders are not descended into.
+    """
+    found = []
+
+    def visit(folder, depth):
+        if _count_structure_ids(folder):
+            found.append(os.path.normpath(folder))
+        if depth >= max_depth:
+            return
+        try:
+            entries = sorted(os.scandir(folder), key=lambda e: e.name)
+        except OSError:
+            return
+        for entry in entries:
+            if (entry.is_dir(follow_symlinks=False) and not entry.name.startswith(".")
+                    and not _STRUCTURE_ID_RE.fullmatch(entry.name)):
+                visit(entry.path, depth + 1)
+
+    visit(start_dir, 0)
+    return found
+
+
+def describe_reference_set(folder, n_sites=None):
+    """
+    Summary row for the reference panel. The composition comes from
+    metadata.txt, or -- without one -- from the substrate of the first
+    structure (guess_substrate_elements).
+    """
+    meta = _read_metadata_txt(folder)
+    comp = None
+    try:
+        import ast
+        raw = ast.literal_eval(meta.get("composition", ""))
+        if isinstance(raw, dict) and raw:
+            comp = {str(k): int(v) for k, v in raw.items()}
+    except (ValueError, SyntaxError):
+        comp = None
+    if comp is None:
+        try:
+            first = _read_structure_file(_reference_structure_paths(folder)[0][1])
+            substrate, _ads, _slab = guess_substrate_elements(first)
+            comp = dict(Counter(sym for sym in first.get_chemical_symbols() if sym in substrate))
+        except Exception:
+            comp = None
+    if meta.get("is_surface_twin_of", "None") not in ("", "None"):
+        kind = "surface twin"
+    elif meta.get("is_redox_twin_of", "None") not in ("", "None"):
+        kind = "redox twin"
+    else:
+        kind = meta.get("mode", "?")
+    n_pool = sum(comp.values()) if comp else None
+    if n_sites is None or n_pool is None:
+        match = None
+    else:
+        match = n_pool == n_sites
+    return {
+        "path": folder,
+        "n": _count_structure_ids(folder),
+        "composition": comp,
+        "n_pool": n_pool,
+        "kind": kind,
+        "match": match,
+    }
+
+
+def select_reference_set_interactively(input_file, replace_elements, start_dir="."):
+    """
+    Panel for picking the reference set of reuse mode. Returns the folder, or
+    None when cancelled. A set whose site count does not fit the input is shown
+    but cannot be picked (the run would stop on it anyway).
+    """
+    try:
+        parent = _read_structure_file(input_file)
+        pool = set(replace_elements)
+        n_sites = sum(1 for sym in parent.get_chemical_symbols() if sym in pool)
+    except Exception:
+        n_sites = None
+    rows = [describe_reference_set(f, n_sites) for f in find_reference_sets(start_dir)]
+
+    bar = "-" * 74
+    print("\n" + bar)
+    print(" [Reference set]  arrangement of each S###### is copied to the same ID")
+    print(bar)
+    print(f"  Input structure  : {input_file}")
+    print(f"  Substituted pool : {','.join(replace_elements)}"
+          + (f"  ({n_sites} sites)" if n_sites is not None else ""))
+    if not rows:
+        print("\n  No AlloyGen output folder (S###### structures) found here or "
+              f"up to 2 levels below {os.path.abspath(start_dir)}.")
+        print("  Type its path instead: ref=<folder>")
+        print(bar)
+        return None
+    print()
+    print("   No.  %-30s %7s  %-26s %5s  %s" % ("Folder", "Structs", "Pool composition", "Sites", "Fit"))
+    for n, row in enumerate(rows, start=1):
+        comp = " ".join(f"{el}{c}" for el, c in sorted(row["composition"].items())) if row["composition"] else "?"
+        sites = "?" if row["n_pool"] is None else str(row["n_pool"])
+        fit = {True: "OK", False: "--", None: "?"}[row["match"]]
+        kind = f"  ({row['kind']})" if row["kind"] in ("surface twin", "redox twin") else ""
+        name = row["path"] if len(row["path"]) <= 30 else "..." + row["path"][-27:]
+        print("  [%2d]  %-30s %7d  %-26s %5s  %s%s" % (n, name, row["n"], comp[:26], sites, fit, kind))
+    print()
+    print("  Fit: OK = same number of sites as the input / -- = cannot be used / ? = check on run")
+    print(bar)
+
+    while True:
+        try:
+            answer = input("Choose reference set (number / q = cancel) : ").strip()
+        except EOFError:
+            print("\nNo input, cancelled.")
+            return None
+        if answer.lower() in ("q", "quit", "0", ""):
+            return None
+        if answer.isdigit() and 1 <= int(answer) <= len(rows):
+            row = rows[int(answer) - 1]
+            if row["match"] is False:
+                print(f"[Input error] {row['path']} has {row['n_pool']} sites, the input has "
+                      f"{n_sites}: not the same slab.")
+                continue
+            return row["path"]
+        if os.path.isdir(answer):
+            return answer
+        print("Enter a number from the list, a folder path, or q.")
+
+
 def print_reference_summary(info, tol):
     print(f"Reference set: {info['ref_dir']}  ({info['n']} structures, file {info['ref_file']})")
     print(f"Reference substrate elements: {info['ref_pool']}")
@@ -6002,7 +6164,7 @@ def run_wizard(initial=None):
         _row("pattern", "# cluster pattern (ex: Co,Fe/Ni,Cu / empty = auto all)")
         _row("order", "# target order parameter Q level")
         print("  --- reuse " + "-" * 63)
-        _row("ref", "# AlloyGen output folder whose arrangement (per S ID) is copied")
+        _row("ref", "# AlloyGen output folder copied per S ID (empty or '?' = pick from a list)")
         print("  --- CCpy VASP inputs " + "-" * 51)
         _row("vasp", "# y = auto-generate INCAR/KPOINTS/POTCAR (same as CCpyVASPInputGen)")
         _row("preset", "# %s*.yaml name (empty = default)" % vasp_preset_dir_label())
@@ -6044,9 +6206,12 @@ def run_wizard(initial=None):
             # pre-filled from the input structure (e.g. Pt80) does not apply.
             keep_composition = False
             ref_dir = s["ref"].strip()
-            if not ref_dir:
-                print("[Validation failed] mode=reuse needs ref= (the AlloyGen output folder to copy).")
-                return False
+            if not ref_dir or ref_dir in ("?", "list"):
+                ref_dir = select_reference_set_interactively(input_file, replace_elements)
+                if not ref_dir:
+                    print("[Validation failed] mode=reuse needs a reference set (ref=<folder> or ref=?).")
+                    return False
+                s["ref"] = ref_dir
             try:
                 ref_tol = float(s["ref_tol"])
                 _parent = _read_structure_file(input_file)
@@ -6365,6 +6530,19 @@ def run_wizard(initial=None):
                 # A different structure means different sensible defaults.
                 _apply_structure_defaults()
                 continue
+            if key == "ref" and value in ("?", "list"):
+                try:
+                    _pool = parse_element_list(s["replace"])
+                except Exception:
+                    _pool = []
+                chosen = select_reference_set_interactively(s["input"], _pool)
+                if not chosen:
+                    continue
+                value = chosen
+                if s["mode"].strip().lower() != "reuse":
+                    s["mode"] = "reuse"
+                    user_set.add("mode")
+                    print("* ref chosen, so mode is set to reuse.")
             s[key] = value
             user_set.add(key)
             if key == "fmt":
