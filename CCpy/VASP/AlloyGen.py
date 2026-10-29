@@ -4122,6 +4122,9 @@ def generate_structures(
 VACUUM_MIN_GAP = 4.0     # Angstrom
 # Slack when deciding whether an atom sits outside the substrate slab.
 ADSORBATE_Z_TOL = 0.5    # Angstrom
+# Atoms this close to the lowest atom along the vacuum axis form the bottom
+# layer; every element found there is taken as substrate.
+SUBSTRATE_BOTTOM_TOL = 1.0   # Angstrom
 
 
 def _largest_vacuum_axis(atoms):
@@ -4197,19 +4200,30 @@ def select_structure_file_interactively(prompt="Choose file : "):
 
 
 def guess_substrate_elements(parent, vacuum_min_gap=VACUUM_MIN_GAP,
-                             z_tol=ADSORBATE_Z_TOL):
+                             z_tol=ADSORBATE_Z_TOL,
+                             bottom_tol=SUBSTRATE_BOTTOM_TOL):
     """
     Guess which elements form the substrate, *without* being told the
     replacement pool first. Used to seed the settings sheet, so a Pt-free
     CONTCAR never shows "replace = Pt".
 
-    An element is called an adsorbate only when both signals agree:
+    The backbone is every element that has an atom in the bottom layer of the
+    slab (within SUBSTRATE_BOTTOM_TOL of the lowest atom along the vacuum
+    axis). Those are substrate by definition. Any other element is called an
+    adsorbate only when both signals agree:
 
-      few    -- it has at most half as many atoms as the most abundant element
+      few    -- it has at most half as many atoms as the backbone as a whole
                 (an adsorbate is a small cluster; an alloy component is not), and
-      on top -- every one of its atoms sits above the top of the most abundant
-                element's span (a substitutional dopant sits inside it, so it
-                stays in the substrate).
+      on top -- every one of its atoms sits above the top of the backbone's
+                span (a substitutional dopant sits inside it, so it stays in
+                the substrate).
+
+    The backbone used to be the single most abundant element. On a mixed
+    (HEA) slab every metal is a minority, so an organic adsorbate could
+    outnumber them: CHP (C9H18O) on a 5-element 4x4x5 slab has 18 H against
+    16 of each metal, H became the "backbone", and H, C and O all landed in the
+    replacement pool. Taking the bottom layer instead does not depend on how
+    the substrate is split between elements.
 
     Without a vacuum gap there is no free surface at all, so everything counts
     as substrate. Requiring both signals keeps ordered/layered alloys intact:
@@ -4234,13 +4248,18 @@ def guess_substrate_elements(parent, vacuum_min_gap=VACUUM_MIN_GAP,
     coord = ((frac[:, axis] - origin) % 1.0) * lengths[axis]
 
     counts = Counter(symbols)
-    max_count = max(counts.values())
-    few_threshold = max(1, max_count // 2)
-    backbone = sorted(all_elements, key=lambda el: (-counts[el], el))[0]
-    backbone_top = max(coord[i] for i, sym in enumerate(symbols) if sym == backbone)
+    lowest = float(coord.min())
+    backbone = {sym for i, sym in enumerate(symbols)
+                if coord[i] <= lowest + bottom_tol}
+    backbone_idx = [i for i, sym in enumerate(symbols) if sym in backbone]
+    few_threshold = max(1, len(backbone_idx) // 2)
+    backbone_top = max(coord[i] for i in backbone_idx)
 
     substrate, adsorbate = [], []
     for element in all_elements:
+        if element in backbone:
+            substrate.append(element)
+            continue
         idx = [i for i, sym in enumerate(symbols) if sym == element]
         few = counts[element] <= few_threshold
         on_top = min(coord[i] for i in idx) > backbone_top - z_tol
