@@ -275,6 +275,30 @@ def selectInputs(marker, directory_path, ask=True):
     return inputs
 
     
+def _incar_has_kspacing(directory):
+    """
+    True if <directory>/INCAR sets KSPACING (comments after # or ! ignored).
+    VASP builds the k-mesh from KSPACING when no KPOINTS file is present.
+    """
+    incar = os.path.join(directory, "INCAR")
+    if not os.path.isfile(incar):
+        return False
+    try:
+        with open(incar, "r") as f:
+            lines = f.readlines()
+    except (IOError, OSError):
+        return False
+    for line in lines:
+        line = re.split(r"[#!]", line, 1)[0]
+        for tag in line.split(";"):
+            if "=" not in tag:
+                continue
+            key, value = tag.split("=", 1)
+            if key.strip().upper() == "KSPACING" and value.strip():
+                return True
+    return False
+
+
 def selectVASPInputs(directory_path, dir_list=None, ask=True, sub=False, additional_dir=None):
     """
     Needs edition -> pick <INCAR POSCAR KPOINTS POTCAR> included directories
@@ -288,7 +312,8 @@ def selectVASPInputs(directory_path, dir_list=None, ask=True, sub=False, additio
                len(glob.glob(os.path.join(parent, "vasprun.xml*"))) > 0 or (
                len(glob.glob(os.path.join(parent, "POSCAR*"))) > 0 and
                len(glob.glob(os.path.join(parent, "INCAR*"))) > 0 and
-               len(glob.glob(os.path.join(parent, "KPOINTS*"))) > 0 and
+               (len(glob.glob(os.path.join(parent, "KPOINTS*"))) > 0 or
+                _incar_has_kspacing(parent)) and
                len(glob.glob(os.path.join(parent, "POTCAR*"))) > 0)
            ):
                 return [parent]
@@ -307,7 +332,9 @@ def selectVASPInputs(directory_path, dir_list=None, ask=True, sub=False, additio
             if additional_dir in files:
                 all_inputs.append(each_dir)
         else:
-            if "POSCAR" in files and "POTCAR" in files and "KPOINTS" in files and "INCAR" in files:
+            # KPOINTS may be omitted when INCAR sets KSPACING
+            if "POSCAR" in files and "POTCAR" in files and "INCAR" in files and \
+               ("KPOINTS" in files or _incar_has_kspacing(each_dir)):
                 all_inputs.append(each_dir)
     
     if ask == True:
