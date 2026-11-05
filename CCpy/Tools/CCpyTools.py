@@ -284,8 +284,11 @@ def _incar_has_kspacing(directory):
     if not os.path.isfile(incar):
         return False
     try:
-        with open(incar, "r") as f:
-            lines = f.readlines()
+        # Read bytes and decode leniently: an INCAR whose comments are saved in a
+        # different encoding than the locale (e.g. a cp949 comment on a UTF-8 server)
+        # must not abort the whole directory listing.
+        with open(incar, "rb") as f:
+            lines = f.read().decode("utf-8", "replace").splitlines()
     except (IOError, OSError):
         return False
     for line in lines:
